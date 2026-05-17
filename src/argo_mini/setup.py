@@ -1,40 +1,35 @@
 from setuptools import setup
-import os
+from glob import glob
 
 package_name = 'argo_mini'
 
-data_files = [
-    ('share/ament_index/resource_index/packages',
-     ['resource/' + package_name]),
-    ('share/' + package_name, ['package.xml']),
-    ('share/' + package_name + '/launch',
-     ['launch/slam.launch.py', 'launch/nav.launch.py']),
-    ('share/' + package_name + '/config',
-     ['config/slam_toolbox.yaml', 'config/nav2.yaml']),
-    ('share/' + package_name + '/config/bt',
-     ['config/bt/navigate_to_pose.xml']),
-]
-
-if os.path.exists('maps/indoor_map.yaml'):
-    data_files.append(
-        ('share/' + package_name + '/maps',
-         ['maps/indoor_map.yaml', 'maps/indoor_map.pgm']))
-
-if os.path.exists('waypoints/waypoints.json'):
-    data_files.append(
-        ('share/' + package_name + '/waypoints',
-         ['waypoints/waypoints.json']))
-
 setup(
     name=package_name,
-    version='1.0.0',
+    version='0.0.1',
     packages=[package_name],
-    data_files=data_files,
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/maps', glob('maps/*.pgm') + glob('maps/*.yaml')),
+        ('share/' + package_name + '/config/bt', glob('config/bt/*.xml')),
+    ],
     install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='argo',
+    maintainer_email='argo@example.com',
+    description='Argo Mini autonomous delivery robot',
+    license='Apache License 2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'serial_bridge    = argo_mini.serial_bridge:main',
-            'waypoint_manager = argo_mini.waypoint_manager:main',
+            'serial_bridge=argo_mini.serial_bridge:main',
+            'scan_relay=argo_mini.scan_relay:main',
+            'dashboard=argo_mini.dashboard:main',
+            'waypoint_ui=argo_mini.waypoint_ui:main',
+            'waypoint_manager=argo_mini.waypoint_ui:main',
+            'pose_setter=argo_mini.pose_setter:main',
         ],
     },
 )
