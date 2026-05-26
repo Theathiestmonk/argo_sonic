@@ -85,11 +85,11 @@ class SerialBridge(Node):
             dac_l, dac_r = DAC_STOP, DAC_STOP
 
         elif abs(lin) < 0.01:
-            # Pure in-place rotation (tank turn)
-            if ang > 0:  # CCW: left back, right forward
-                dac_l, dac_r = -DAC_SPD,  DAC_SPD
-            else:        # CW: left forward, right back
-                dac_l, dac_r =  DAC_SPD, -DAC_SPD
+            # Pivot turn: inner wheel stops, outer runs forward — no reverse
+            if ang > 0:  # CCW: left stops, right forward
+                dac_l, dac_r =  DAC_STOP, DAC_SPD
+            else:        # CW: left forward, right stops
+                dac_l, dac_r =  DAC_SPD,  DAC_STOP
 
         elif lin > 0:
             # Forward
