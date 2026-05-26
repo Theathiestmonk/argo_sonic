@@ -215,16 +215,9 @@ def generate_launch_description():
         ),
 
         # ── 13. Camera static TF bridge ──────────────────────────────────────
-        # The EAI SDK may publish the point cloud with a frame_id that is
-        # different from the URDF's "camera_depth_optical_frame".
-        # This publisher creates an identity transform so TF is satisfied.
-        #
-        # HOW TO FIX if you see TF lookup errors in depth_safety_shield:
-        #   1. Run: ros2 topic echo /ascamera_hp60c/.../depth0/points --once | grep frame_id
-        #   2. Replace the SECOND frame argument below with that actual frame_id.
-        #      e.g. if the SDK uses "hp60c_depth_optical_frame":
-        #        arguments=['0','0','0','0','0','0',
-        #                   'camera_depth_optical_frame', 'hp60c_depth_optical_frame']
+        # HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_color_0
+        # Our URDF defines camera_depth_optical_frame at the same physical location.
+        # Identity transform bridges the two so TF lookups succeed.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -232,8 +225,8 @@ def generate_launch_description():
             output='screen',
             arguments=[
                 '0', '0', '0', '0', '0', '0',
-                'camera_depth_optical_frame',   # parent (defined in URDF)
-                'camera_depth_optical_frame',   # child  (SDK frame_id — update if different)
+                'camera_depth_optical_frame',   # parent — in URDF, child of camera_link
+                'ascamera_hp60c_color_0',        # child  — frame_id published by SDK
             ],
         ),
 

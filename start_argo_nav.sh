@@ -159,16 +159,29 @@ sleep 1
 
 # ── 12. HP60C Depth camera (optional) ────────────────────────────────────
 CAM_PID=""
+CAM_TF_PID=""
 if [ "$NO_CAM" = false ]; then
   echo "[argo] Starting HP60C camera..."
-  # Source the SDK environment and launch in a subshell so it doesn't
-  # pollute this script's environment.
+  # Must cd into the SDK directory — the node looks for
+  # ./ascamera/configurationfiles relative to its working directory.
   (
-    source $CAMERA_SDK_PATH/install/setup.bash
+    cd $CAMERA_SDK_PATH
+    source install/setup.bash
     ros2 launch ascamera hp60c.launch.py
   ) &
   CAM_PID=$!
   sleep 5
+
+  # Bridge the SDK's frame_id to our URDF camera frame.
+  # The HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_color_0
+  # Our URDF defines camera_depth_optical_frame at the same physical location.
+  ros2 run tf2_ros static_transform_publisher \
+    --x 0.0 --y 0.0 --z 0.0 \
+    --roll 0.0 --pitch 0.0 --yaw 0.0 \
+    --frame-id camera_depth_optical_frame \
+    --child-frame-id ascamera_hp60c_color_0 &
+  CAM_TF_PID=$!
+  sleep 1
 else
   echo "[argo] Camera skipped (--no-cam)"
 fi
@@ -216,7 +229,7 @@ trap '
   kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID $TF_PID \
        $MAP_PID $AMCL_PID $PLANNER_PID $CONTROLLER_PID \
        $SMOOTHER_PID $BT_PID $SHIELD_PID $RVIZ_PID \
-       ${CAM_PID:-} 2>/dev/null || true
+       ${CAM_PID:-} ${CAM_TF_PID:-} 2>/dev/null || true
   sleep 2
   pkill -9 -f ros2 2>/dev/null || true
   exit 0
