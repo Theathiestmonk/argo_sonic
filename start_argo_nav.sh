@@ -73,7 +73,7 @@ ros2 run rplidar_ros rplidar_composition --ros-args \
   -p serial_baudrate:=115200 \
   -p frame_id:=laser \
   -p angle_compensate:=true \
-  -p scan_mode:=Standard &
+  -p scan_mode:=Boost &
 LIDAR_PID=$!
 sleep 3
 
