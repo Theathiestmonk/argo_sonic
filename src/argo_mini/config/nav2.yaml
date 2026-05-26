@@ -197,8 +197,11 @@ local_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        # LiDAR scan + depth camera PointCloud2 for richer obstacle mapping
-        observation_sources: scan depth_camera
+        # LiDAR only for costmap-based planning.
+        # Depth camera handles emergency stop via depth_safety_shield node,
+        # not via costmap (shield publishes obstacle-only cloud with no
+        # raytrace clearing, which causes ghost obstacles and lethal-space errors).
+        observation_sources: scan
         scan:
           topic: /scan
           max_obstacle_height: 2.0
@@ -209,20 +212,6 @@ local_costmap:
           raytrace_min_range: 0.35
           obstacle_max_range: 5.0
           obstacle_min_range: 0.35
-        # depth_filtered is the safety-shield's re-published cloud in base_link frame.
-        # The raw HP60C topic also works here — use whichever the camera SDK provides.
-        depth_camera:
-          topic: /depth_filtered
-          data_type: "PointCloud2"
-          marking: true
-          clearing: true
-          min_obstacle_height: 0.05   # ignore floor reflections
-          max_obstacle_height: 1.60   # ignore overhead structure
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.10
-          obstacle_max_range: 3.0
-          obstacle_min_range: 0.10
-          observation_persistence: 0.5  # s — clear old depth marks quickly
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
