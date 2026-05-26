@@ -13,11 +13,8 @@ POLE_PAIRS      = 15
 TICKS_PER_REV   = POLE_PAIRS * 6   # CHANGE mode: both edges × 3 phases = 90/rev
 METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
-DAC_STOP       = 0
-DAC_LEFT_FWD   = 107
-DAC_RIGHT_FWD  = 106
-DAC_LEFT_TURN  = 105
-DAC_RIGHT_TURN = 105
+DAC_STOP = 0
+DAC_SPD  = 107   # single speed for all directions and turns
 
 
 class SerialBridge(Node):
@@ -88,29 +85,29 @@ class SerialBridge(Node):
             dac_l, dac_r = DAC_STOP, DAC_STOP
 
         elif abs(lin) < 0.01:
-            # Pure in-place rotation — proper tank turn using direction pins
-            if ang > 0:  # counter-clockwise (left): left back, right forward
-                dac_l, dac_r = -DAC_LEFT_TURN,  DAC_RIGHT_TURN
-            else:        # clockwise (right): left forward, right back
-                dac_l, dac_r =  DAC_LEFT_TURN, -DAC_RIGHT_TURN
+            # Pure in-place rotation (tank turn)
+            if ang > 0:  # CCW: left back, right forward
+                dac_l, dac_r = -DAC_SPD,  DAC_SPD
+            else:        # CW: left forward, right back
+                dac_l, dac_r =  DAC_SPD, -DAC_SPD
 
         elif lin > 0:
             # Forward
             if abs(ang) < 0.01:
-                dac_l, dac_r = DAC_LEFT_FWD, DAC_RIGHT_FWD
+                dac_l, dac_r =  DAC_SPD,  DAC_SPD
             elif ang > 0:   # forward-left: slow left, fast right
-                dac_l, dac_r = DAC_LEFT_TURN, DAC_RIGHT_FWD
+                dac_l, dac_r =  DAC_STOP, DAC_SPD
             else:            # forward-right: fast left, slow right
-                dac_l, dac_r = DAC_LEFT_FWD, DAC_RIGHT_TURN
+                dac_l, dac_r =  DAC_SPD,  DAC_STOP
 
         else:
             # Reverse (lin < 0)
             if abs(ang) < 0.01:
-                dac_l, dac_r = -DAC_LEFT_FWD, -DAC_RIGHT_FWD
-            elif ang > 0:   # reverse-left: slow left, fast right (both negative)
-                dac_l, dac_r = -DAC_LEFT_TURN, -DAC_RIGHT_FWD
-            else:            # reverse-right: fast left, slow right (both negative)
-                dac_l, dac_r = -DAC_LEFT_FWD, -DAC_RIGHT_TURN
+                dac_l, dac_r = -DAC_SPD, -DAC_SPD
+            elif ang > 0:   # reverse-left
+                dac_l, dac_r =  DAC_STOP, -DAC_SPD
+            else:            # reverse-right
+                dac_l, dac_r = -DAC_SPD,  DAC_STOP
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
