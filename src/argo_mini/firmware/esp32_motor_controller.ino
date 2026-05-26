@@ -14,45 +14,74 @@
 #define THROTTLE_L DAC_CHANNEL_1   // GPIO25
 #define THROTTLE_R DAC_CHANNEL_2   // GPIO26
 
+// ── Direction pins ─────────────────────────────────────────────────────────
+// HIGH = reverse, LOW = forward  (controller reverse-enable pin)
+#define DIR_L 2    // GPIO2 → left motor controller reverse pin
+#define DIR_R 4    // GPIO4 → right motor controller reverse pin
+
 // ── DAC range (hub-motor ESC throttle) ─────────────────────────────────────
-// 104 ≈ neutral/stop, 100 = min reverse, 120 = max forward
+// 104 ≈ neutral/stop, 100 = min speed, 120 = max speed
+// Sign of the command determines direction via DIR_L / DIR_R.
 #define DAC_MIN    100
 #define DAC_MAX    120
 #define POLE_PAIRS 15
 
 // ── Ramp parameters ────────────────────────────────────────────────────────
 #define RAMP_STEP  1    // 1 DAC unit per cycle
-#define RAMP_MS    20   // 20 ms → smooth 200 ms ramp from 100 to 120
+#define RAMP_MS    20   // 20 ms → ~200 ms ramp from stop to full speed
 
-// ── Odometry counters ──────────────────────────────────────────────────────
+// ── Odometry counters (signed: + forward, − reverse) ──────────────────────
 volatile long     leftTicks   = 0;
 volatile long     rightTicks  = 0;
-volatile uint32_t leftPulses  = 0;
+volatile uint32_t leftPulses  = 0;   // magnitude only, for RPM
 volatile uint32_t rightPulses = 0;
 
-void IRAM_ATTR leftISR()  { leftTicks++;  leftPulses++;  }
-void IRAM_ATTR rightISR() { rightTicks++; rightPulses++; }
+// Direction flags updated in setDAC(); read inside ISRs
+volatile bool leftReverse  = false;
+volatile bool rightReverse = false;
+
+void IRAM_ATTR leftISR() {
+  if (leftReverse) leftTicks--; else leftTicks++;
+  leftPulses++;
+}
+void IRAM_ATTR rightISR() {
+  if (rightReverse) rightTicks--; else rightTicks++;
+  rightPulses++;
+}
 
 int      targetL  = 0, targetR  = 0;
 int      currentL = 0, currentR = 0;
 uint32_t lastRamp  = 0;
 uint32_t lastPrint = 0;
 
-// ── DAC output ─────────────────────────────────────────────────────────────
-// value = 0   → motor off (DAC outputs 0 V)
-// value ≠ 0   → constrain to [DAC_MIN, DAC_MAX]
+// ── DAC + direction output ─────────────────────────────────────────────────
+// value < 0  → reverse (DIR HIGH), throttle = abs(value)
+// value = 0  → coast/stop (DAC = 0, direction LOW)
+// value > 0  → forward (DIR LOW), throttle = value
 void setDAC(int l, int r) {
+  // Update direction flags (read by ISRs)
+  leftReverse  = (l < 0);
+  rightReverse = (r < 0);
+
+  digitalWrite(DIR_L, leftReverse  ? HIGH : LOW);
+  digitalWrite(DIR_R, rightReverse ? HIGH : LOW);
+
   if (l == 0) dac_output_voltage(THROTTLE_L, 0);
-  else        dac_output_voltage(THROTTLE_L, constrain(l, DAC_MIN, DAC_MAX));
+  else        dac_output_voltage(THROTTLE_L, constrain(abs(l), DAC_MIN, DAC_MAX));
 
   if (r == 0) dac_output_voltage(THROTTLE_R, 0);
-  else        dac_output_voltage(THROTTLE_R, constrain(r, DAC_MIN, DAC_MAX));
+  else        dac_output_voltage(THROTTLE_R, constrain(abs(r), DAC_MIN, DAC_MAX));
 }
 
 // ── Smooth ramp ─────────────────────────────────────────────────────────────
+// Signed: positive = forward DAC, negative = reverse DAC.
+// Passes through 0 when crossing zero (natural motor stop before direction flip).
 int rampToward(int current, int target) {
-  if (target == 0)               return 0;        // stop immediately, safety
-  if (current == 0 && target > 0) return DAC_MIN; // jump-start from rest
+  if (target == 0) return 0;                          // stop immediately
+
+  if (current == 0 && target > 0) return  DAC_MIN;   // jump-start forward
+  if (current == 0 && target < 0) return -DAC_MIN;   // jump-start reverse
+
   if (current < target) return min(current + RAMP_STEP, target);
   if (current > target) return max(current - RAMP_STEP, target);
   return current;
@@ -66,13 +95,17 @@ void setup() {
   pinMode(HALL_LA, INPUT); pinMode(HALL_LB, INPUT); pinMode(HALL_LC, INPUT);
   pinMode(HALL_RA, INPUT); pinMode(HALL_RB, INPUT); pinMode(HALL_RC, INPUT);
 
-  // 3 hall phases × RISING per wheel
+  // RISING interrupt per phase per wheel (3 phases × RISING = 45 ticks/rev)
   attachInterrupt(digitalPinToInterrupt(HALL_LA), leftISR,  RISING);
   attachInterrupt(digitalPinToInterrupt(HALL_LB), leftISR,  RISING);
   attachInterrupt(digitalPinToInterrupt(HALL_LC), leftISR,  RISING);
   attachInterrupt(digitalPinToInterrupt(HALL_RA), rightISR, RISING);
   attachInterrupt(digitalPinToInterrupt(HALL_RB), rightISR, RISING);
   attachInterrupt(digitalPinToInterrupt(HALL_RC), rightISR, RISING);
+
+  // Direction pins — default forward
+  pinMode(DIR_L, OUTPUT); digitalWrite(DIR_L, LOW);
+  pinMode(DIR_R, OUTPUT); digitalWrite(DIR_R, LOW);
 
   dac_output_enable(THROTTLE_L);
   dac_output_enable(THROTTLE_R);
@@ -85,6 +118,8 @@ void loop() {
   uint32_t now = millis();
 
   // ── Serial command parser ─────────────────────────────────────────────────
+  // "V <left> <right>"  — signed DAC values; negative = reverse
+  // "S"                 — emergency stop
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     line.trim();
@@ -125,6 +160,7 @@ void loop() {
     float lRPM = (lp / elapsed) * 60.0f / (POLE_PAIRS * 3);
     float rRPM = (rp / elapsed) * 60.0f / (POLE_PAIRS * 3);
 
+    // Signed ticks: positive = forward, negative = reverse
     Serial.printf("O %ld %ld\n", lt, rt);
 
     if (now % 500 < 50) {

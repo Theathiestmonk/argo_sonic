@@ -77,19 +77,33 @@ class SerialBridge(Node):
         ang = msg.angular.z
 
         if abs(lin) < 0.01 and abs(ang) < 0.01:
+            # Stop
             dac_l, dac_r = DAC_STOP, DAC_STOP
-        elif abs(ang) > 0.01 and abs(lin) < 0.01:
-            if ang > 0:
-                dac_l, dac_r = DAC_STOP, DAC_RIGHT_TURN
-            else:
-                dac_l, dac_r = DAC_LEFT_TURN, DAC_STOP
-        elif abs(lin) > 0.01 and abs(ang) > 0.01:
-            if ang > 0:
+
+        elif abs(lin) < 0.01:
+            # Pure in-place rotation — proper tank turn using direction pins
+            if ang > 0:  # counter-clockwise (left): left back, right forward
+                dac_l, dac_r = -DAC_LEFT_TURN,  DAC_RIGHT_TURN
+            else:        # clockwise (right): left forward, right back
+                dac_l, dac_r =  DAC_LEFT_TURN, -DAC_RIGHT_TURN
+
+        elif lin > 0:
+            # Forward
+            if abs(ang) < 0.01:
+                dac_l, dac_r = DAC_LEFT_FWD, DAC_RIGHT_FWD
+            elif ang > 0:   # forward-left: slow left, fast right
                 dac_l, dac_r = DAC_LEFT_TURN, DAC_RIGHT_FWD
-            else:
+            else:            # forward-right: fast left, slow right
                 dac_l, dac_r = DAC_LEFT_FWD, DAC_RIGHT_TURN
+
         else:
-            dac_l, dac_r = DAC_LEFT_FWD, DAC_RIGHT_FWD
+            # Reverse (lin < 0)
+            if abs(ang) < 0.01:
+                dac_l, dac_r = -DAC_LEFT_FWD, -DAC_RIGHT_FWD
+            elif ang > 0:   # reverse-left: slow left, fast right (both negative)
+                dac_l, dac_r = -DAC_LEFT_TURN, -DAC_RIGHT_FWD
+            else:            # reverse-right: fast left, slow right (both negative)
+                dac_l, dac_r = -DAC_LEFT_FWD, -DAC_RIGHT_TURN
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
