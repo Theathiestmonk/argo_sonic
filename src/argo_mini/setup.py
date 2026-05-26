@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/maps', glob('maps/*.pgm') + glob('maps/*.yaml')),
         ('share/' + package_name + '/config/bt', glob('config/bt/*.xml')),
+        ('share/' + package_name + '/urdf', glob('urdf/*.urdf')),
+        ('share/' + package_name + '/launch', glob('launch/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -26,6 +28,7 @@ setup(
         'console_scripts': [
             'serial_bridge=argo_mini.serial_bridge:main',
             'scan_relay=argo_mini.scan_relay:main',
+            'depth_safety_shield=argo_mini.depth_safety_shield:main',
             'dashboard=argo_mini.dashboard:main',
             'waypoint_ui=argo_mini.waypoint_ui:main',
             'waypoint_manager=argo_mini.waypoint_ui:main',

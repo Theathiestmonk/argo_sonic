@@ -1,0 +1,149 @@
+<?xml version="1.0"?>
+<robot name="argo_mini">
+
+  <!-- ═══════════════════════════════════════════════
+       BASE LINK  (geometric centre, floor level)
+       53 cm L × 45 cm W × 16 cm H
+  ═══════════════════════════════════════════════ -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.08" rpy="0 0 0"/>
+      <geometry><box size="0.53 0.45 0.16"/></geometry>
+      <material name="grey"><color rgba="0.5 0.5 0.5 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.08" rpy="0 0 0"/>
+      <geometry><box size="0.53 0.45 0.16"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="12.0"/>
+      <inertia ixx="0.15" ixy="0.0" ixz="0.0"
+               iyy="0.20" iyz="0.0"
+               izz="0.25"/>
+    </inertial>
+  </link>
+
+  <!-- ═══════════════════════════════════════════════
+       LEFT WHEEL  — wheel_separation/2 = 0.225 m
+       wheel_radius = 0.0762 m
+  ═══════════════════════════════════════════════ -->
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child  link="left_wheel"/>
+    <!-- Y+ is left; joint axis aligned with Y after -90° roll -->
+    <origin xyz="0.0 0.225 0.0" rpy="-1.5708 0.0 0.0"/>
+    <axis   xyz="0 0 1"/>
+  </joint>
+
+  <link name="left_wheel">
+    <visual>
+      <geometry><cylinder radius="0.0762" length="0.05"/></geometry>
+      <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.0762" length="0.05"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="1.5"/>
+      <inertia ixx="0.003" ixy="0.0" ixz="0.0"
+               iyy="0.003" iyz="0.0"
+               izz="0.004"/>
+    </inertial>
+  </link>
+
+  <!-- ═══════════════════════════════════════════════
+       RIGHT WHEEL — Y- side
+  ═══════════════════════════════════════════════ -->
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child  link="right_wheel"/>
+    <origin xyz="0.0 -0.225 0.0" rpy="-1.5708 0.0 0.0"/>
+    <axis   xyz="0 0 1"/>
+  </joint>
+
+  <link name="right_wheel">
+    <visual>
+      <geometry><cylinder radius="0.0762" length="0.05"/></geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.0762" length="0.05"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="1.5"/>
+      <inertia ixx="0.003" ixy="0.0" ixz="0.0"
+               iyy="0.003" iyz="0.0"
+               izz="0.004"/>
+    </inertial>
+  </link>
+
+  <!-- ═══════════════════════════════════════════════
+       RPLIDAR A1  — x=0.08 m forward, z=0.15 m up
+       frame_id published by rplidar_ros: "laser"
+  ═══════════════════════════════════════════════ -->
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="laser"/>
+    <!-- Rotated 180° yaw because the A1 connector faces rear -->
+    <origin xyz="0.08 0.0 0.15" rpy="0.0 0.0 3.14159"/>
+  </joint>
+
+  <link name="laser">
+    <visual>
+      <geometry><cylinder radius="0.04" length="0.06"/></geometry>
+      <material name="blue"><color rgba="0.0 0.2 0.8 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.04" length="0.06"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.18"/>
+      <inertia ixx="0.0001" ixy="0.0" ixz="0.0"
+               iyy="0.0001" iyz="0.0"
+               izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- ═══════════════════════════════════════════════
+       HP60C DEPTH CAMERA — camera_link
+       Mounted at front-centre: x=0.22 m, z=0.15 m
+       Tilt: 0° (horizontal); adjust rpy pitch if tilted down
+  ═══════════════════════════════════════════════ -->
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="camera_link"/>
+    <origin xyz="0.22 0.0 0.15" rpy="0.0 0.0 0.0"/>
+  </joint>
+
+  <link name="camera_link">
+    <visual>
+      <!-- Approximate HP60C bar shape -->
+      <geometry><box size="0.04 0.12 0.03"/></geometry>
+      <material name="silver"><color rgba="0.75 0.75 0.75 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><box size="0.04 0.12 0.03"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.10"/>
+      <inertia ixx="0.00005" ixy="0.0" ixz="0.0"
+               iyy="0.00005" iyz="0.0"
+               izz="0.00005"/>
+    </inertial>
+  </link>
+
+  <!-- ═══════════════════════════════════════════════
+       CAMERA DEPTH OPTICAL FRAME
+       ROS optical convention: Z forward, X right, Y down
+       Transform from camera_link (Z up, X forward):
+         roll=-90°, yaw=-90°  →  rpy="-1.5708 0 -1.5708"
+  ═══════════════════════════════════════════════ -->
+  <joint name="camera_depth_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child  link="camera_depth_optical_frame"/>
+    <origin xyz="0.0 0.0 0.0" rpy="-1.5708 0.0 -1.5708"/>
+  </joint>
+
+  <link name="camera_depth_optical_frame"/>
+
+</robot>
