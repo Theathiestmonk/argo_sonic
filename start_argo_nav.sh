@@ -2,16 +2,14 @@
 # Argo Mini — full nav stack with depth camera safety shield
 #
 # cmd_vel pipeline:
-#   controller_server → /cmd_vel_nav
-#   velocity_smoother → /cmd_vel_nav → /cmd_vel_smoothed
-#   depth_safety_shield → /cmd_vel_smoothed → /cmd_vel
-#   serial_bridge → /cmd_vel → ESP32
+#   controller_server  →  /cmd_vel_nav
+#   velocity_smoother  →  /cmd_vel_smoothed
+#   depth_safety_shield→  /cmd_vel
+#   serial_bridge      →  ESP32
 #
 # Usage:
 #   ./start_argo_nav.sh           # with camera + RViz
-#   ./start_argo_nav.sh --no-cam  # skip camera (lidar-only obstacle avoidance)
-
-set -e  # stop on any unexpected error
+#   ./start_argo_nav.sh --no-cam  # skip camera (lidar-only)
 
 NO_CAM=false
 for arg in "$@"; do
@@ -23,36 +21,39 @@ source /opt/ros/humble/setup.bash
 source ~/argo_mini_ws/install/setup.bash
 
 CAMERA_SDK_PATH=~/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2
-
-# Fix camera SDK shared library path.
-# If you see "libAngstrongCameraSdk.so: cannot open shared object file",
-# run:  find ~/EaiCameraSdk* -name "libAngstrongCameraSdk.so"
-# and update the path below to the directory containing that file.
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CAMERA_SDK_PATH/ascamera/libs/lib/aarch64-linux-gnu
 
 NAV_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/nav2.yaml
 MAP_FILE=~/argo_mini_ws/src/argo_mini/maps/indoor_map.yaml
 
+# ── USB permissions (no password needed with udev rule)
+# One-time setup: echo 'SUBSYSTEM=="tty",ATTRS{idVendor}=="10c4",MODE="0666"' | sudo tee /etc/udev/rules.d/99-esp32.rules && sudo udevadm control --reload
+chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
+  sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true
+
 # ── cleanup previous run ───────────────────────────────────────────────────
 echo "[argo] Killing previous processes..."
-pkill -9 -f slam_toolbox       2>/dev/null || true
-pkill -9 -f serial_bridge      2>/dev/null || true
-pkill -9 -f rplidar            2>/dev/null || true
-pkill -9 -f rviz2              2>/dev/null || true
-pkill -9 -f amcl               2>/dev/null || true
-pkill -9 -f planner_server     2>/dev/null || true
-pkill -9 -f controller_server  2>/dev/null || true
-pkill -9 -f bt_navigator       2>/dev/null || true
-pkill -9 -f velocity_smoother  2>/dev/null || true
-pkill -9 -f scan_relay         2>/dev/null || true
-pkill -9 -f robot_state_pub    2>/dev/null || true
-pkill -9 -f depth_safety_shield 2>/dev/null || true
-pkill -9 -f ascamera           2>/dev/null || true
+for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
+            map_server amcl planner_server controller_server \
+            bt_navigator velocity_smoother scan_relay \
+            robot_state_publisher depth_safety_shield ascamera_node; do
+  pkill -9 -f "$proc" 2>/dev/null || true
+done
 sleep 3
 
-sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true
+# ── lifecycle helper: configure then activate a nav2 node ─────────────────
+# Usage: lc_node <node_name>
+lc_node() {
+  local node=$1
+  echo "[argo]   lifecycle configure $node..."
+  ros2 lifecycle set "$node" configure 2>&1 | tail -1
+  sleep 1
+  echo "[argo]   lifecycle activate  $node..."
+  ros2 lifecycle set "$node" activate  2>&1 | tail -1
+  sleep 1
+}
 
-# ── 1. Robot state publisher (URDF → TF) ──────────────────────────────────
+# ── 1. Robot state publisher ───────────────────────────────────────────────
 echo "[argo] Starting robot_state_publisher..."
 ros2 launch argo_mini robot_state_publisher.launch.py &
 RSP_PID=$!
@@ -82,7 +83,7 @@ ros2 run argo_mini scan_relay &
 RELAY_PID=$!
 sleep 2
 
-# ── 5. Static TF: map → odom (initial pose before AMCL takes over) ────────
+# ── 5. Static TF: map → odom ──────────────────────────────────────────────
 echo "[argo] Starting static TFs..."
 ros2 run tf2_ros static_transform_publisher \
   --x 0.0 --y 0.0 --z 0.0 \
@@ -97,9 +98,7 @@ ros2 run nav2_map_server map_server --ros-args \
   -p yaml_filename:=$MAP_FILE -p use_sim_time:=false &
 MAP_PID=$!
 sleep 3
-ros2 lifecycle set /map_server configure && sleep 1
-ros2 lifecycle set /map_server activate
-sleep 1
+lc_node /map_server
 
 # ── 7. AMCL ───────────────────────────────────────────────────────────────
 echo "[argo] Starting AMCL..."
@@ -111,30 +110,23 @@ ros2 run nav2_amcl amcl --ros-args \
   -p scan_topic:=/scan_corrected &
 AMCL_PID=$!
 sleep 3
-ros2 lifecycle set /amcl configure && sleep 1
-ros2 lifecycle set /amcl activate
-sleep 1
+lc_node /amcl
 
 # ── 8. Planner server ─────────────────────────────────────────────────────
 echo "[argo] Starting planner_server..."
 ros2 run nav2_planner planner_server --ros-args --params-file $NAV_CONFIG &
 PLANNER_PID=$!
 sleep 3
-ros2 lifecycle set /planner_server configure && sleep 1
-ros2 lifecycle set /planner_server activate
-sleep 1
+lc_node /planner_server
 
 # ── 9. Controller server → /cmd_vel_nav ───────────────────────────────────
-# Remapped so velocity_smoother sits between controller and motors.
 echo "[argo] Starting controller_server..."
 ros2 run nav2_controller controller_server --ros-args \
   --params-file $NAV_CONFIG \
   -r cmd_vel:=/cmd_vel_nav &
 CONTROLLER_PID=$!
 sleep 3
-ros2 lifecycle set /controller_server configure && sleep 1
-ros2 lifecycle set /controller_server activate
-sleep 1
+lc_node /controller_server
 
 # ── 10. Velocity smoother  /cmd_vel_nav → /cmd_vel_smoothed ───────────────
 echo "[argo] Starting velocity_smoother..."
@@ -144,26 +136,20 @@ ros2 run nav2_velocity_smoother velocity_smoother --ros-args \
   -r cmd_vel_smoothed:=/cmd_vel_smoothed &
 SMOOTHER_PID=$!
 sleep 3
-ros2 lifecycle set /velocity_smoother configure && sleep 1
-ros2 lifecycle set /velocity_smoother activate
-sleep 1
+lc_node /velocity_smoother
 
 # ── 11. BT Navigator ──────────────────────────────────────────────────────
 echo "[argo] Starting bt_navigator..."
 ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG &
 BT_PID=$!
 sleep 3
-ros2 lifecycle set /bt_navigator configure && sleep 2
-ros2 lifecycle set /bt_navigator activate
-sleep 1
+lc_node /bt_navigator
 
-# ── 12. HP60C Depth camera (optional) ────────────────────────────────────
+# ── 12. HP60C Depth camera (optional) ─────────────────────────────────────
 CAM_PID=""
 CAM_TF_PID=""
 if [ "$NO_CAM" = false ]; then
   echo "[argo] Starting HP60C camera..."
-  # Must cd into the SDK directory — the node looks for
-  # ./ascamera/configurationfiles relative to its working directory.
   (
     cd $CAMERA_SDK_PATH
     source install/setup.bash
@@ -172,9 +158,7 @@ if [ "$NO_CAM" = false ]; then
   CAM_PID=$!
   sleep 5
 
-  # Bridge the SDK's frame_id to our URDF camera frame.
-  # The HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_color_0
-  # Our URDF defines camera_depth_optical_frame at the same physical location.
+  # Bridge SDK frame_id (ascamera_hp60c_color_0) to URDF camera frame
   ros2 run tf2_ros static_transform_publisher \
     --x 0.0 --y 0.0 --z 0.0 \
     --roll 0.0 --pitch 0.0 --yaw 0.0 \
@@ -187,7 +171,6 @@ else
 fi
 
 # ── 13. Depth safety shield  /cmd_vel_smoothed → /cmd_vel ─────────────────
-# Runs in STALE (pass-through) mode when camera is off, so navigation still works.
 echo "[argo] Starting depth_safety_shield..."
 ros2 run argo_mini depth_safety_shield --ros-args \
   -p stop_distance:=0.35 \
@@ -214,14 +197,17 @@ echo ""
 echo "========================================="
 echo "  ARGO MINI — NAV2 + DEPTH SAFETY"
 echo "========================================="
-echo "  cmd_vel pipeline:"
-echo "    controller → /cmd_vel_nav"
-echo "    smoother   → /cmd_vel_smoothed"
-echo "    shield     → /cmd_vel  (STOP<0.35m, SLOW<0.65m)"
-echo ""
-echo "  Camera: $( [ '$NO_CAM' = false ] && echo 'enabled' || echo 'disabled' )"
-echo "  Press Ctrl+C to stop all"
+echo "  pipeline: controller→/cmd_vel_nav"
+echo "           smoother→/cmd_vel_smoothed"
+echo "           shield→/cmd_vel (STOP<0.35m)"
+echo "  camera: $([ "$NO_CAM" = false ] && echo 'enabled' || echo 'disabled (--no-cam)')"
+echo "  Press Ctrl+C to stop all nodes"
 echo "========================================="
+echo ""
+
+# ── One-time udev tip (run once, then sudo never needed again) ─────────────
+echo "  TIP: avoid sudo on USB — run once:"
+echo "  echo 'SUBSYSTEM==\"tty\",KERNEL==\"ttyUSB*\",MODE=\"0666\"' | sudo tee /etc/udev/rules.d/99-usb-serial.rules && sudo udevadm control --reload"
 echo ""
 
 trap '
