@@ -63,7 +63,8 @@ sleep 1
 # reverse so odom→base_link correctly moves the pose backward.
 echo "[slam] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
-  -p port:=/dev/ttyUSB1 -p baud:=115200 &
+  -p port:=/dev/ttyUSB1 -p baud:=115200 \
+  -p forward_only:=true &
 SERIAL_PID=$!
 sleep 3
 

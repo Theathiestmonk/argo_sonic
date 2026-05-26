@@ -26,8 +26,12 @@ class SerialBridge(Node):
 
         self.declare_parameter('port', '/dev/ttyUSB1')
         self.declare_parameter('baud', 115200)
+        self.declare_parameter('forward_only', False)
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
+        self.forward_only = self.get_parameter('forward_only').value
+        if self.forward_only:
+            self.get_logger().info('forward_only=true: reverse commands blocked')
 
         try:
             self.ser = serial.Serial(port, baud, timeout=0.01)
@@ -75,6 +79,9 @@ class SerialBridge(Node):
     def cmd_cb(self, msg: Twist):
         lin = msg.linear.x
         ang = msg.angular.z
+
+        if self.forward_only and lin < 0.0:
+            lin = 0.0
 
         if abs(lin) < 0.01 and abs(ang) < 0.01:
             # Stop
