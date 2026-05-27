@@ -97,33 +97,32 @@ class SerialBridge(Node):
             lin = 0.0
 
         if abs(lin) < 0.01 and abs(ang) < 0.01:
-            # Stop
             dac_l, dac_r = DAC_STOP, DAC_STOP
 
         elif abs(lin) < 0.01:
-            # Pivot turn: inner wheel stops, outer runs forward — no reverse
-            if ang > 0:  # CCW: left stops, right forward
-                dac_l, dac_r =  DAC_STOP, DAC_SPD
-            else:        # CW: left forward, right stops
-                dac_l, dac_r =  DAC_SPD,  DAC_STOP
-
-        elif lin > 0:
-            # Forward
-            if abs(ang) < 0.01:
-                dac_l, dac_r =  DAC_SPD,  DAC_SPD
-            elif ang > 0:   # forward-left: slow left, fast right
-                dac_l, dac_r =  DAC_STOP, DAC_SPD
-            else:            # forward-right: fast left, slow right
-                dac_l, dac_r =  DAC_SPD,  DAC_STOP
+            # Pure pivot: inner stops, outer runs
+            if ang > 0:
+                dac_l, dac_r = DAC_STOP, DAC_SPD
+            else:
+                dac_l, dac_r = DAC_SPD,  DAC_STOP
 
         else:
-            # Reverse (lin < 0)
-            if abs(ang) < 0.01:
-                dac_l, dac_r = -DAC_SPD, -DAC_SPD
-            elif ang > 0:   # reverse-left
-                dac_l, dac_r =  DAC_STOP, -DAC_SPD
-            else:            # reverse-right
-                dac_l, dac_r = -DAC_SPD,  DAC_STOP
+            # Mixed linear + angular: proportional differential.
+            # Nav2 MPPI sends continuous mixed commands — one wheel must
+            # never fully stop or the robot stutters along one tyre at a time.
+            # Normalise angular by max_wz (1.0 rad/s) → differential fraction.
+            diff  = min(abs(ang) / 1.0, 1.0)   # 0 = straight, 1 = sharp turn
+            inner = int(DAC_SPD * (1.0 - diff))  # slow inner wheel proportionally
+            sign  = 1 if lin > 0 else -1
+            if ang > 0:   # left turn: slow left, full right
+                dac_l = sign * max(inner, DAC_STOP)
+                dac_r = sign * DAC_SPD
+            elif ang < 0: # right turn: full left, slow right
+                dac_l = sign * DAC_SPD
+                dac_r = sign * max(inner, DAC_STOP)
+            else:         # straight
+                dac_l = sign * DAC_SPD
+                dac_r = sign * DAC_SPD
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
