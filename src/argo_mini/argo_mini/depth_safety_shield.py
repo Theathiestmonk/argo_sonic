@@ -46,10 +46,10 @@ class DepthSafetyShield(Node):
         super().__init__('depth_safety_shield')
 
         # ── parameters ───────────────────────────────────────────────────────
-        self.declare_parameter('stop_distance',       0.35)   # m — hard stop
-        self.declare_parameter('slow_distance',       0.65)   # m — begin scaling
+        self.declare_parameter('stop_distance',       0.70)   # m — hard stop
+        self.declare_parameter('slow_distance',       1.0)   # m — begin scaling
         self.declare_parameter('slow_factor',         0.40)   # fraction of linear.x
-        self.declare_parameter('lateral_margin',      0.28)   # m — half robot width + buffer
+        self.declare_parameter('lateral_margin',      0.40)   # m — half robot width + buffer
         self.declare_parameter('min_obstacle_height', 0.05)   # m — ignore floor reflections
         self.declare_parameter('max_obstacle_height', 1.60)   # m — ignore overhead structure
         self.declare_parameter('depth_timeout',       3.0)    # s — stale-data window
