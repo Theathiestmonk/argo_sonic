@@ -14,7 +14,8 @@ TICKS_PER_REV   = POLE_PAIRS * 6   # CHANGE mode: both edges × 3 phases = 90/re
 METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
 DAC_STOP = 0
-DAC_SPD  = 107   # single speed for all directions and turns
+DAC_MIN  = 100   # ESC minimum throttle that actually moves the wheel
+DAC_SPD  = 107   # normal running speed
 
 
 class SerialBridge(Node):
@@ -100,29 +101,27 @@ class SerialBridge(Node):
             dac_l, dac_r = DAC_STOP, DAC_STOP
 
         elif abs(lin) < 0.01:
-            # Pure pivot: inner stops, outer runs
+            # Pure in-place pivot: inner stops, outer runs
             if ang > 0:
                 dac_l, dac_r = DAC_STOP, DAC_SPD
             else:
                 dac_l, dac_r = DAC_SPD,  DAC_STOP
 
         else:
-            # Mixed linear + angular: proportional differential.
-            # Nav2 MPPI sends continuous mixed commands — one wheel must
-            # never fully stop or the robot stutters along one tyre at a time.
-            # Normalise angular by max_wz (1.0 rad/s) → differential fraction.
-            diff  = min(abs(ang) / 1.0, 1.0)   # 0 = straight, 1 = sharp turn
-            inner = int(DAC_SPD * (1.0 - diff))  # slow inner wheel proportionally
-            sign  = 1 if lin > 0 else -1
-            if ang > 0:   # left turn: slow left, full right
-                dac_l = sign * max(inner, DAC_STOP)
-                dac_r = sign * DAC_SPD
-            elif ang < 0: # right turn: full left, slow right
-                dac_l = sign * DAC_SPD
-                dac_r = sign * max(inner, DAC_STOP)
-            else:         # straight
+            # Forward / reverse with optional curve.
+            # Deadband: angular < 0.20 rad/s treated as straight — prevents
+            # MPPI's ±tiny corrections from alternating which wheel drives,
+            # which causes a walking-gait stutter on narrow-range DAC hardware.
+            sign = 1 if lin > 0 else -1
+            if abs(ang) < 0.20:
                 dac_l = sign * DAC_SPD
                 dac_r = sign * DAC_SPD
+            elif ang > 0:   # curve left: inner=left slows to DAC_MIN
+                dac_l = sign * DAC_MIN
+                dac_r = sign * DAC_SPD
+            else:            # curve right: inner=right slows to DAC_MIN
+                dac_l = sign * DAC_SPD
+                dac_r = sign * DAC_MIN
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
