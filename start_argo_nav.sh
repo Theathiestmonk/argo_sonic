@@ -152,6 +152,13 @@ BT_PID=$!
 sleep 3
 lc_node /bt_navigator
 
+# ── 11b. Behavior server (spin / backup / wait recoveries) ────────────────
+echo "[argo] Starting behavior_server..."
+ros2 run nav2_behaviors behavior_server --ros-args --params-file $NAV_CONFIG &
+BEHAVIOR_PID=$!
+sleep 3
+lc_node /behavior_server
+
 # ── 12. HP60C Depth camera (optional) ─────────────────────────────────────
 CAM_PID=""
 if [ "$NO_CAM" = false ]; then
@@ -212,7 +219,7 @@ trap '
   echo "[argo] Shutting down..."
   kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID $TF_PID \
        $MAP_PID $AMCL_PID $PLANNER_PID $CONTROLLER_PID \
-       $SMOOTHER_PID $BT_PID $SHIELD_PID $RVIZ_PID \
+       $SMOOTHER_PID $BT_PID $BEHAVIOR_PID $SHIELD_PID $RVIZ_PID \
        ${CAM_PID:-} $CAM_TF_PID 2>/dev/null || true
   sleep 2
   pkill -9 -f ros2 2>/dev/null || true
