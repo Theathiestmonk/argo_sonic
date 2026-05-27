@@ -177,7 +177,7 @@ planner_server:
       max_iterations: 1000000
       motion_model_for_search: "REEDS_SHEPP"
       angle_quantization_bins: 72
-      minimum_turning_radius: 0.20
+      minimum_turning_radius: 0.12
       smooth_path: true
 
 local_costmap:
@@ -197,10 +197,6 @@ local_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        # LiDAR only for costmap-based planning.
-        # Depth camera handles emergency stop via depth_safety_shield node,
-        # not via costmap (shield publishes obstacle-only cloud with no
-        # raytrace clearing, which causes ghost obstacles and lethal-space errors).
         observation_sources: scan
         scan:
           topic: /scan_corrected
@@ -215,8 +211,8 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.30
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.20
 
 global_costmap:
   global_costmap:
@@ -250,8 +246,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.30
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.20
 
 map_server:
   ros__parameters:
