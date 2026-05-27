@@ -109,11 +109,11 @@ class SerialBridge(Node):
 
         else:
             # Forward / reverse with optional curve.
-            # Deadband: angular < 0.20 rad/s treated as straight — prevents
+            # Deadband: angular < 0.10 rad/s treated as straight — prevents
             # MPPI's ±tiny corrections from alternating which wheel drives,
             # which causes a walking-gait stutter on narrow-range DAC hardware.
             sign = 1 if lin > 0 else -1
-            if abs(ang) < 0.20:
+            if abs(ang) < 0.10:
                 dac_l = sign * DAC_SPD
                 dac_r = sign * DAC_SPD
             elif ang > 0:   # curve left: inner=left slows to DAC_MIN

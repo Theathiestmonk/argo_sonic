@@ -60,7 +60,7 @@ echo "[slam] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
   -p port:=/dev/ttyUSB1 -p baud:=115200 \
   -p forward_only:=true \
-  -p left_tick_scale:=2.0 &
+  -p left_tick_scale:=2.031 &
 SERIAL_PID=$!
 sleep 3
 
