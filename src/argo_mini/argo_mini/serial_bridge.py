@@ -50,9 +50,11 @@ class SerialBridge(Node):
         self.prev_left  = None
         self.prev_right = None
         self.last_time  = self.get_clock().now()
+        self.last_cmd   = self.get_clock().now()
 
         self.create_timer(0.02, self.publish_tf)
         self.create_timer(0.01, self.read_serial)
+        self.create_timer(0.10, self.watchdog)
 
         self.get_logger().info('SerialBridge ready.')
 
@@ -73,7 +75,17 @@ class SerialBridge(Node):
         tf.transform.rotation.w    = qw
         self.tf_broadcaster.sendTransform(tf)
 
+    def watchdog(self):
+        elapsed = (self.get_clock().now() - self.last_cmd).nanoseconds / 1e9
+        if elapsed > 1.0:
+            try:
+                self.ser.write(b'S\n')
+                self.ser.flush()
+            except Exception:
+                pass
+
     def cmd_cb(self, msg: Twist):
+        self.last_cmd = self.get_clock().now()
         lin = msg.linear.x
         ang = msg.angular.z
 
@@ -120,7 +132,8 @@ class SerialBridge(Node):
             if self.ser.in_waiting > 400:
                 self.ser.reset_input_buffer()
                 return
-            while True:
+            # Only read when data is present — never block the event loop
+            while self.ser.in_waiting:
                 raw = self.ser.readline().decode(
                     'utf-8', errors='ignore').strip()
                 if not raw:
