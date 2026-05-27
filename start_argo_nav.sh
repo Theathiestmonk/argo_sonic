@@ -145,19 +145,19 @@ SMOOTHER_PID=$!
 sleep 3
 lc_node /velocity_smoother
 
-# ── 11. BT Navigator ──────────────────────────────────────────────────────
-echo "[argo] Starting bt_navigator..."
-ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG &
-BT_PID=$!
-sleep 3
-lc_node /bt_navigator
-
-# ── 11b. Behavior server (spin / backup / wait recoveries) ────────────────
+# ── 11. Behavior server (must be active before bt_navigator loads the BT) ──
 echo "[argo] Starting behavior_server..."
 ros2 run nav2_behaviors behavior_server --ros-args --params-file $NAV_CONFIG &
 BEHAVIOR_PID=$!
 sleep 3
 lc_node /behavior_server
+
+# ── 11b. BT Navigator (loads BT XML — spin/backup/wait must already exist) ─
+echo "[argo] Starting bt_navigator..."
+ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG &
+BT_PID=$!
+sleep 3
+lc_node /bt_navigator
 
 # ── 12. HP60C Depth camera (optional) ─────────────────────────────────────
 CAM_PID=""
