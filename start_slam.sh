@@ -46,17 +46,12 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
 done
 sleep 3
 
-# ── 1. Static TF: base_link → laser ───────────────────────────────────────
-# Matches the URDF laser_joint: x=0.08 z=0.15 yaw=π (connector faces rear).
-# Using static_transform_publisher directly avoids URDF shell-escaping issues
-# that break robot_state_publisher when launched from a bash script.
-echo "[slam] Starting static TF base_link→laser..."
-ros2 run tf2_ros static_transform_publisher \
-  --x 0.08 --y 0.0 --z 0.15 \
-  --roll 0.0 --pitch 0.0 --yaw 3.14159 \
-  --frame-id base_link --child-frame-id laser &
+# ── 1. Robot state publisher (URDF TF tree) ───────────────────────────────
+# Publishes: base_footprint→base_link, base_link→lidar_link, base_link→camera_link, etc.
+echo "[slam] Starting robot_state_publisher..."
+ros2 launch argo_mini robot_state_publisher.launch.py &
 RSP_PID=$!
-sleep 1
+sleep 2
 
 # ── 2. Serial bridge (ESP32: motors + signed wheel odometry) ──────────────
 # serial_bridge tracks signed hall-sensor ticks: ticks decrement during
@@ -76,7 +71,7 @@ echo "[slam] Starting rplidar (Boost mode)..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
   -p serial_port:=/dev/ttyUSB0 \
   -p serial_baudrate:=115200 \
-  -p frame_id:=laser \
+  -p frame_id:=lidar_link \
   -p angle_compensate:=true \
   -p scan_mode:=Boost &
 LIDAR_PID=$!

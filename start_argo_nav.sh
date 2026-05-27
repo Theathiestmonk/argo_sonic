@@ -59,6 +59,18 @@ ros2 launch argo_mini robot_state_publisher.launch.py &
 RSP_PID=$!
 sleep 2
 
+# ── 1b. Camera TF bridge (always publish, camera need not be running) ──────
+# Links SDK frame (ascamera_hp60c_color_0) to URDF's camera_depth_optical_frame.
+# Safe to run even without the camera — no cloud means no lookups happen.
+echo "[argo] Starting camera TF bridge (camera_depth_optical_frame → ascamera_hp60c_color_0)..."
+ros2 run tf2_ros static_transform_publisher \
+  --x 0.0 --y 0.0 --z 0.0 \
+  --roll 0.0 --pitch 0.0 --yaw 0.0 \
+  --frame-id depth_camera_optical_frame \
+  --child-frame-id ascamera_hp60c_color_0 &
+CAM_TF_PID=$!
+sleep 1
+
 # ── 2. Serial bridge (ESP32 motors + odometry) ────────────────────────────
 echo "[argo] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
@@ -72,7 +84,7 @@ echo "[argo] Starting rplidar..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
   -p serial_port:=/dev/ttyUSB0 \
   -p serial_baudrate:=115200 \
-  -p frame_id:=laser \
+  -p frame_id:=lidar_link \
   -p angle_compensate:=true \
   -p scan_mode:=Boost &
 LIDAR_PID=$!
@@ -142,7 +154,6 @@ lc_node /bt_navigator
 
 # ── 12. HP60C Depth camera (optional) ─────────────────────────────────────
 CAM_PID=""
-CAM_TF_PID=""
 if [ "$NO_CAM" = false ]; then
   echo "[argo] Starting HP60C camera..."
   (
@@ -153,14 +164,6 @@ if [ "$NO_CAM" = false ]; then
   CAM_PID=$!
   sleep 5
 
-  # Bridge SDK frame_id (ascamera_hp60c_color_0) to URDF camera frame
-  ros2 run tf2_ros static_transform_publisher \
-    --x 0.0 --y 0.0 --z 0.0 \
-    --roll 0.0 --pitch 0.0 --yaw 0.0 \
-    --frame-id camera_depth_optical_frame \
-    --child-frame-id ascamera_hp60c_color_0 &
-  CAM_TF_PID=$!
-  sleep 1
 else
   echo "[argo] Camera skipped (--no-cam)"
 fi
@@ -210,7 +213,7 @@ trap '
   kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID $TF_PID \
        $MAP_PID $AMCL_PID $PLANNER_PID $CONTROLLER_PID \
        $SMOOTHER_PID $BT_PID $SHIELD_PID $RVIZ_PID \
-       ${CAM_PID:-} ${CAM_TF_PID:-} 2>/dev/null || true
+       ${CAM_PID:-} $CAM_TF_PID 2>/dev/null || true
   sleep 2
   pkill -9 -f ros2 2>/dev/null || true
   exit 0
