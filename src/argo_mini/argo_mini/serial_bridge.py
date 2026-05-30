@@ -163,10 +163,10 @@ class SerialBridge(Node):
         self.prev_right = right_ticks
 
         # Firmware always increments ticks regardless of direction.
-        # Negate deltas when the last cmd_vel commanded reverse motion.
+        # During reverse, consume the ticks (prev updated above) but skip
+        # pose integration — incorrect sign would corrupt the costmap.
         if self.reversing:
-            dl = -dl
-            dr = -dr
+            return
 
         d_center = (dl + dr) / 2.0
         d_theta  = (dr - dl) / WHEEL_BASE
