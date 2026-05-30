@@ -3,16 +3,12 @@
   <BehaviorTree ID="MainTree">
 
     <!--
-      Persistent navigation: never gives up on a goal.
-      Recovery cycle (RoundRobin) runs in order on each failure:
-        1. Clear local + global costmaps
-        2. Spin 90°
-        3. Back up 25 cm
-        4. Wait 3 s
-      After each recovery step, replanning and path-following restart.
-      The only way this tree stops is:
-        - Goal reached (SUCCESS)
-        - Action preempted by a new goal from the user (external cancel)
+      Recovery priority (RoundRobin cycles in order per failure):
+        1. Clear costmaps + wait 3 s  — resolves most transient issues
+        2. Spin 45°                   — unstuck from tight spot
+        3. Back up 20 cm              — escape obstacle in front
+      Each recovery returns SUCCESS so RecoveryNode retries navigation.
+      Only stops when goal is reached or a new goal preempts.
     -->
 
     <RecoveryNode number_of_retries="1000000" name="NavigateRecovery">
@@ -26,18 +22,17 @@
 
       <RoundRobin name="RecoveryActions">
 
-        <Sequence name="ClearCostmaps">
+        <Sequence name="ClearAndWait">
           <ClearEntireCostmap name="ClearLocalCostmap"
             service_name="local_costmap/clear_entirely_local_costmap"/>
           <ClearEntireCostmap name="ClearGlobalCostmap"
             service_name="global_costmap/clear_entirely_global_costmap"/>
+          <Wait wait_duration="3.0"/>
         </Sequence>
 
-        <Spin spin_dist="1.57"/>
+        <Spin spin_dist="0.785"/>
 
-        <BackUp backup_dist="0.25" backup_speed="0.10"/>
-
-        <Wait wait_duration="3.0"/>
+        <BackUp backup_dist="0.20" backup_speed="0.10"/>
 
       </RoundRobin>
 
