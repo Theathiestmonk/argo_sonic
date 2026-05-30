@@ -178,14 +178,13 @@ fi
 # ── 13. Depth safety shield  /cmd_vel_smoothed → /cmd_vel ─────────────────
 echo "[argo] Starting depth_safety_shield..."
 ros2 run argo_mini depth_safety_shield --ros-args \
-  -p stop_distance:=0.35 \
-  -p slow_distance:=0.65 \
-  -p slow_factor:=0.40 \
-  -p lateral_margin:=0.28 \
-  -p min_obstacle_height:=0.05 \
+  -p stop_distance:=0.65 \
+  -p slow_distance:=1.10 \
+  -p lateral_margin:=0.35 \
+  -p min_obstacle_height:=0.03 \
   -p max_obstacle_height:=1.60 \
   -p depth_timeout:=3.0 \
-  -p downsample_stride:=4 \
+  -p downsample_stride:=2 \
   -p input_topic:=/cmd_vel_smoothed \
   -p output_topic:=/cmd_vel \
   -p depth_topic:=/ascamera_hp60c/camera_publisher/depth0/points &
@@ -204,7 +203,7 @@ echo "  ARGO MINI — NAV2 + DEPTH SAFETY"
 echo "========================================="
 echo "  pipeline: controller→/cmd_vel_nav"
 echo "           smoother→/cmd_vel_smoothed"
-echo "           shield→/cmd_vel (STOP<0.35m)"
+echo "           shield→/cmd_vel (SLOW<1.10m, STOP<0.65m)"
 echo "  camera: $([ "$NO_CAM" = false ] && echo 'enabled' || echo 'disabled (--no-cam)')"
 echo "  Press Ctrl+C to stop all nodes"
 echo "========================================="
