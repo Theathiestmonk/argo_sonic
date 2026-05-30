@@ -13,9 +13,14 @@ POLE_PAIRS      = 15
 TICKS_PER_REV   = POLE_PAIRS * 6   # CHANGE mode: both edges × 3 phases = 90/rev
 METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
+# ESC DAC range
 DAC_STOP = 0
-DAC_MIN  = 100   # ESC minimum throttle that actually moves the wheel
-DAC_SPD  = 107   # normal running speed
+DAC_MIN  = 100   # minimum DAC that overcomes ESC deadzone and spins the wheel
+DAC_MAX  = 120   # maximum ESC DAC (full hardware range = 21 levels)
+
+# Speed mapping — must match nav2 vx_max
+VMAX   = 0.40    # m/s: cmd_vel at which DAC_MAX is sent
+V_DEAD = 0.04    # m/s: below this the wheel stops (avoids stall zone)
 
 
 class SerialBridge(Node):
@@ -90,6 +95,19 @@ class SerialBridge(Node):
             except Exception:
                 pass
 
+    def _v_to_dac(self, v: float) -> int:
+        """Map a wheel speed (m/s) to an integer DAC value.
+
+        Dead zone  : |v| < V_DEAD  →  DAC_STOP (0)
+        Active zone: |v| in [V_DEAD, VMAX]  →  DAC [DAC_MIN, DAC_MAX]
+        Sign of v  sets direction (positive = forward, negative = reverse).
+        """
+        if abs(v) < V_DEAD:
+            return DAC_STOP
+        ratio = min(1.0, (abs(v) - V_DEAD) / (VMAX - V_DEAD))
+        dac = round(DAC_MIN + ratio * (DAC_MAX - DAC_MIN))
+        return dac if v > 0 else -dac
+
     def cmd_cb(self, msg: Twist):
         self.last_cmd = self.get_clock().now()
         lin = msg.linear.x
@@ -102,29 +120,21 @@ class SerialBridge(Node):
 
         if abs(lin) < 0.01 and abs(ang) < 0.01:
             dac_l, dac_r = DAC_STOP, DAC_STOP
-
-        elif abs(lin) < 0.01:
-            # Pure in-place pivot: inner stops, outer runs
-            if ang > 0:
-                dac_l, dac_r = DAC_STOP, DAC_SPD
-            else:
-                dac_l, dac_r = DAC_SPD,  DAC_STOP
-
         else:
-            # Forward / reverse with optional curve.
-            # Deadband: angular < 0.10 rad/s treated as straight — prevents
-            # MPPI's ±tiny corrections from alternating which wheel drives,
-            # which causes a walking-gait stutter on narrow-range DAC hardware.
-            sign = 1 if lin > 0 else -1
-            if abs(ang) < 0.10:
-                dac_l = sign * DAC_SPD
-                dac_r = sign * DAC_SPD
-            elif ang > 0:   # curve left: inner=left slows to DAC_MIN
-                dac_l = sign * DAC_MIN
-                dac_r = sign * DAC_SPD
-            else:            # curve right: inner=right slows to DAC_MIN
-                dac_l = sign * DAC_SPD
-                dac_r = sign * DAC_MIN
+            # True differential-drive kinematics: each wheel gets its own speed.
+            # Small angular commands → small DAC difference (smooth curves).
+            # Large angular commands → large DAC difference (tight turns / pivots).
+            v_l = lin - ang * (WHEEL_BASE / 2.0)
+            v_r = lin + ang * (WHEEL_BASE / 2.0)
+
+            # If either wheel exceeds VMAX, scale both down proportionally.
+            peak = max(abs(v_l), abs(v_r))
+            if peak > VMAX:
+                v_l = v_l / peak * VMAX
+                v_r = v_r / peak * VMAX
+
+            dac_l = self._v_to_dac(v_l)
+            dac_r = self._v_to_dac(v_r)
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
