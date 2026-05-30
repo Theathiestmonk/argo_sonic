@@ -31,16 +31,12 @@ class SerialBridge(Node):
         self.declare_parameter('baud', 115200)
         self.declare_parameter('forward_only', False)
         self.declare_parameter('left_tick_scale', 1.0)
-        self.declare_parameter('no_tank_turns', False)
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
         self.forward_only    = self.get_parameter('forward_only').value
         self.left_tick_scale = self.get_parameter('left_tick_scale').value
-        self.no_tank_turns   = self.get_parameter('no_tank_turns').value
         if self.forward_only:
             self.get_logger().info('forward_only=true: reverse commands blocked')
-        if self.no_tank_turns:
-            self.get_logger().info('no_tank_turns=true: pivot turns suppressed (SLAM mode)')
         if self.left_tick_scale != 1.0:
             self.get_logger().info(f'left_tick_scale={self.left_tick_scale:.3f}')
 
@@ -137,15 +133,14 @@ class SerialBridge(Node):
             dac_l = self._v_to_dac(v_l)
             dac_r = self._v_to_dac(v_r)
 
-            # In SLAM mode: if wheels would spin in opposite directions (tank
-            # turn), clamp the reversing wheel to stopped instead.  Converts a
-            # pivot into a single-wheel arc turn — no wheel reverses, so the
-            # ISR direction flag can never be wrong at the moment ticks fire.
-            if self.no_tank_turns:
-                if dac_l < 0 and dac_r > 0:
-                    dac_l = DAC_STOP
-                elif dac_r < 0 and dac_l > 0:
-                    dac_r = DAC_STOP
+            # Never spin wheels in opposite directions (tank turn).
+            # Clamp the reversing wheel to stopped — arc turn around the
+            # stationary wheel instead.  Eliminates ISR direction-flag races
+            # and gives clean odometry through every turn.
+            if dac_l < 0 and dac_r > 0:
+                dac_l = DAC_STOP
+            elif dac_r < 0 and dac_l > 0:
+                dac_r = DAC_STOP
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())

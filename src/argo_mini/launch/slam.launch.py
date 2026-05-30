@@ -63,19 +63,14 @@ def generate_launch_description():
         ),
 
         # ── 2. Serial Bridge (wheel odometry needed for SLAM) ────────────────
-        # no_tank_turns=True: when a command would spin wheels in opposite
-        # directions, the reversing wheel is clamped to stopped instead.
-        # This eliminates the ISR timing race during direction changes and
-        # gives SLAM cleaner odometry through every turn.
         Node(
             package='argo_mini',
             executable='serial_bridge',
             name='serial_bridge',
             output='screen',
             parameters=[{
-                'port':          '/dev/ttyUSB1',
-                'baud':          115200,
-                'no_tank_turns': True,
+                'port': '/dev/ttyUSB1',
+                'baud': 115200,
             }],
         ),
 
