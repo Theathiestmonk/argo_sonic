@@ -56,6 +56,7 @@ class SerialBridge(Node):
         self.prev_right = None
         self.last_time  = self.get_clock().now()
         self.last_cmd   = self.get_clock().now()
+        self.reversing  = False   # firmware ticks are always +ve; track direction from cmd_vel
 
         self.create_timer(0.02, self.publish_tf)
         self.create_timer(0.01, self.read_serial)
@@ -96,6 +97,8 @@ class SerialBridge(Node):
 
         if self.forward_only and lin < 0.0:
             lin = 0.0
+
+        self.reversing = (lin < -0.01)
 
         if abs(lin) < 0.01 and abs(ang) < 0.01:
             dac_l, dac_r = DAC_STOP, DAC_STOP
@@ -158,6 +161,12 @@ class SerialBridge(Node):
         dr = (right_ticks - self.prev_right) * METERS_PER_TICK
         self.prev_left  = left_ticks
         self.prev_right = right_ticks
+
+        # Firmware always increments ticks regardless of direction.
+        # Negate deltas when the last cmd_vel commanded reverse motion.
+        if self.reversing:
+            dl = -dl
+            dr = -dr
 
         d_center = (dl + dr) / 2.0
         d_theta  = (dr - dl) / WHEEL_BASE
