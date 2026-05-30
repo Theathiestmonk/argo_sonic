@@ -46,8 +46,8 @@ class DepthSafetyShield(Node):
         super().__init__('depth_safety_shield')
 
         # ── parameters ───────────────────────────────────────────────────────
-        self.declare_parameter('stop_distance',       0.65)   # m — hard stop (base_link; robot front is ~0.26m ahead of origin)
-        self.declare_parameter('slow_distance',       1.10)  # m — begin proportional scaling
+        self.declare_parameter('stop_distance',       0.40)   # m — hard stop (base_link; robot front is ~0.26m ahead of origin)
+        self.declare_parameter('slow_distance',       0.70)  # m — begin proportional scaling
         self.declare_parameter('slow_factor',         0.40)   # fraction at edge of slow zone (unused: now proportional)
         self.declare_parameter('lateral_margin',      0.35)   # m — half robot width + buffer
         self.declare_parameter('min_obstacle_height', 0.03)   # m — ignore floor reflections
