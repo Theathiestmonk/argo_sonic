@@ -60,8 +60,9 @@ class SerialBridge(Node):
         self.prev_left  = None
         self.prev_right = None
         self.last_time  = self.get_clock().now()
-        self.last_cmd   = self.get_clock().now()
-        self.reversing  = False   # firmware ticks are always +ve; track direction from cmd_vel
+        self.last_cmd      = self.get_clock().now()
+        self.left_forward  = True  # per-wheel direction from cmd_vel (firmware ticks always +ve)
+        self.right_forward = True
 
         self.create_timer(0.02, self.publish_tf)
         self.create_timer(0.01, self.read_serial)
@@ -116,8 +117,6 @@ class SerialBridge(Node):
         if self.forward_only and lin < 0.0:
             lin = 0.0
 
-        self.reversing = (lin < -0.01)
-
         if abs(lin) < 0.01 and abs(ang) < 0.01:
             dac_l, dac_r = DAC_STOP, DAC_STOP
         else:
@@ -135,6 +134,9 @@ class SerialBridge(Node):
 
             dac_l = self._v_to_dac(v_l)
             dac_r = self._v_to_dac(v_r)
+
+        self.left_forward  = (dac_l >= 0)
+        self.right_forward = (dac_r >= 0)
 
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
@@ -167,16 +169,19 @@ class SerialBridge(Node):
             self.prev_right = right_ticks
             return
 
-        dl = (left_ticks  - self.prev_left)  * METERS_PER_TICK * self.left_tick_scale
-        dr = (right_ticks - self.prev_right) * METERS_PER_TICK
+        dl_raw = (left_ticks  - self.prev_left)  * METERS_PER_TICK * self.left_tick_scale
+        dr_raw = (right_ticks - self.prev_right) * METERS_PER_TICK
         self.prev_left  = left_ticks
         self.prev_right = right_ticks
 
         # Firmware always increments ticks regardless of direction.
-        # During reverse, consume the ticks (prev updated above) but skip
-        # pose integration — incorrect sign would corrupt the costmap.
-        if self.reversing:
+        # Pure reverse (both wheels back): freeze pose to avoid costmap corruption.
+        # Spin or curve: apply per-wheel sign so theta integrates correctly.
+        if not self.left_forward and not self.right_forward:
             return
+
+        dl = dl_raw if self.left_forward  else -dl_raw
+        dr = dr_raw if self.right_forward else -dr_raw
 
         d_center = (dl + dr) / 2.0
         d_theta  = (dr - dl) / WHEEL_BASE
