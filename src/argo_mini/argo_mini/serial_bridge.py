@@ -133,15 +133,6 @@ class SerialBridge(Node):
             dac_l = self._v_to_dac(v_l)
             dac_r = self._v_to_dac(v_r)
 
-            # Never spin wheels in opposite directions (tank turn).
-            # Clamp the reversing wheel to stopped — arc turn around the
-            # stationary wheel instead.  Eliminates ISR direction-flag races
-            # and gives clean odometry through every turn.
-            if dac_l < 0 and dac_r > 0:
-                dac_l = DAC_STOP
-            elif dac_r < 0 and dac_l > 0:
-                dac_r = DAC_STOP
-
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
             self.ser.flush()

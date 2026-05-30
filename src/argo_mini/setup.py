@@ -32,6 +32,7 @@ setup(
             'dashboard=argo_mini.dashboard:main',
             'waypoint_ui=argo_mini.waypoint_ui:main',
             'waypoint_manager=argo_mini.waypoint_ui:main',
+            'slam_teleop=argo_mini.slam_teleop:main',
             'pose_setter=argo_mini.pose_setter:main',
         ],
     },
