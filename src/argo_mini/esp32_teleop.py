@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Argo Mini — Full ESP32 Teleop (no ROS)
+Argo Mini — Simple ESP32 Teleop (no ROS, no tank turns)
 Pairs with esp32_simple.ino.
 
 Usage:  python3 esp32_teleop.py [port] [baud]
 
-    W  — forward          X  — backward
-    A  — tank-left        D  — tank-right
-    Z  — back-left arc    C  — back-right arc
+    W  — forward
+    A  — arc left  (left stops, right drives)
+    D  — arc right (right stops, left drives)
+    X  — reverse
     S  — STOP
-    +  — speed up         -  — speed down   (DAC 104 → 120)
+    +  — speed up   (DAC 104 → 120)
+    -  — speed down
     Ctrl+C  quit
 """
 
@@ -21,7 +23,7 @@ BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 DAC_MIN = 104
 DAC_MAX = 120
 
-dac   = DAC_MIN   # current speed level
+dac   = DAC_MIN
 dac_l = 0
 dac_r = 0
 label = 'STOP'
@@ -57,19 +59,15 @@ def read_keys():
                 d = dac
                 if ch in ('\x03', '\x04'):
                     quit_.set()
-                elif ch == 'w':
+                elif ch in ('w', '\x1b[A'):
                     dac_l, dac_r = +d, +d;  label = 'FORWARD'
                 elif ch == 'x':
-                    dac_l, dac_r = -d, -d;  label = 'BACKWARD'
-                elif ch == 'a':
-                    dac_l, dac_r = -d, +d;  label = 'TANK LEFT'
-                elif ch == 'd':
-                    dac_l, dac_r = +d, -d;  label = 'TANK RIGHT'
-                elif ch == 'z':
-                    dac_l, dac_r =  0, -d;  label = 'BACK-LEFT'
-                elif ch == 'c':
-                    dac_l, dac_r = -d,  0;  label = 'BACK-RIGHT'
-                elif ch == 's':
+                    dac_l, dac_r = -d, -d;  label = 'REVERSE'
+                elif ch in ('a', '\x1b[D'):
+                    dac_l, dac_r =  0, +d;  label = 'ARC LEFT'
+                elif ch in ('d', '\x1b[C'):
+                    dac_l, dac_r = +d,  0;  label = 'ARC RIGHT'
+                elif ch in ('s', ' '):
                     dac_l, dac_r =  0,  0;  label = 'STOP'
                 elif ch in ('+', '='):
                     dac = min(dac + 1, DAC_MAX)
@@ -92,16 +90,16 @@ def main():
     threading.Thread(target=read_keys, daemon=True).start()
 
     print('\033[2J\033[H', end='')
-    print('┌─────────────────────────────────────────────┐')
-    print('│      ARGO MINI  —  ESP32 Full Teleop        │')
-    print('├──────────────┬──────────────┬───────────────┤')
-    print('│              │  W  forward  │               │')
-    print('│  A tank-left │  S  stop     │ D tank-right  │')
-    print('│              │  X  backward │               │')
-    print('│  Z back-left │              │ C back-right  │')
-    print('├──────────────┴──────────────┴───────────────┤')
-    print('│   +  speed up   -  speed down   Ctrl+C quit │')
-    print('└─────────────────────────────────────────────┘')
+    print('┌──────────────────────────────────────┐')
+    print('│    ARGO MINI  —  Simple Teleop       │')
+    print('├──────────────────────────────────────┤')
+    print('│         W / ↑   forward              │')
+    print('│  A / ←  arc-left   D / →  arc-right │')
+    print('│         X        reverse             │')
+    print('│         S / SPC  stop                │')
+    print('│         + / -    speed               │')
+    print('│         Ctrl+C   quit                │')
+    print('└──────────────────────────────────────┘')
     print()
     print()
     print()
@@ -110,14 +108,14 @@ def main():
         while not quit_.is_set():
             with lock:
                 l, r, d, lbl = dac_l, dac_r, dac, label
-            pct = int((d - DAC_MIN) / (DAC_MAX - DAC_MIN) * 20)
+            pct     = int((d - DAC_MIN) / (DAC_MAX - DAC_MIN) * 20)
             spd_bar = '█' * pct + '·' * (20 - pct)
             print(
                 f'\033[3A'
-                f'\r  [{lbl:<12s}]  L={l:+4d}  R={r:+4d}\n'
+                f'\r  [{lbl:<10s}]  L={l:+4d}  R={r:+4d}\n'
                 f'\r  Speed: [{spd_bar}] DAC {d}/{DAC_MAX}\n'
                 f'\r',
-                end='', flush=True
+                end='', flush=True,
             )
             time.sleep(0.1)
     except KeyboardInterrupt:
