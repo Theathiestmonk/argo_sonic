@@ -31,14 +31,18 @@ class SerialBridge(Node):
         self.declare_parameter('baud', 115200)
         self.declare_parameter('forward_only', False)
         self.declare_parameter('left_tick_scale', 1.0)
+        self.declare_parameter('fixed_dac', 0)
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
         self.forward_only    = self.get_parameter('forward_only').value
         self.left_tick_scale = self.get_parameter('left_tick_scale').value
+        self.fixed_dac       = self.get_parameter('fixed_dac').value
         if self.forward_only:
             self.get_logger().info('forward_only=true: reverse commands blocked')
         if self.left_tick_scale != 1.0:
             self.get_logger().info(f'left_tick_scale={self.left_tick_scale:.3f}')
+        if self.fixed_dac > 0:
+            self.get_logger().info(f'fixed_dac={self.fixed_dac}: ignoring velocity magnitude, direction only')
 
         try:
             self.ser = serial.Serial(port, baud, timeout=0.05)
@@ -95,14 +99,12 @@ class SerialBridge(Node):
                 pass
 
     def _v_to_dac(self, v: float) -> int:
-        """Map a wheel speed (m/s) to an integer DAC value.
-
-        Dead zone  : |v| < V_DEAD  →  DAC_STOP (0)
-        Active zone: |v| in [V_DEAD, VMAX]  →  DAC [DAC_MIN, DAC_MAX]
-        Sign of v  sets direction (positive = forward, negative = reverse).
-        """
         if abs(v) < V_DEAD:
             return DAC_STOP
+        if self.fixed_dac > 0:
+            # Fixed DAC mode: ignore velocity magnitude, use direction only.
+            # Consistent DAC = consistent tick rate = cleaner odometry.
+            return self.fixed_dac if v > 0 else -self.fixed_dac
         ratio = min(1.0, (abs(v) - V_DEAD) / (VMAX - V_DEAD))
         dac = round(DAC_MIN + ratio * (DAC_MAX - DAC_MIN))
         return dac if v > 0 else -dac
