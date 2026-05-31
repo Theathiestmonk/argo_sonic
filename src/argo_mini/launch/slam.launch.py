@@ -69,8 +69,9 @@ def generate_launch_description():
             name='serial_bridge',
             output='screen',
             parameters=[{
-                'port': '/dev/ttyUSB1',
-                'baud': 115200,
+                'port':            '/dev/ttyUSB1',
+                'baud':            115200,
+                'left_tick_scale': 2.1714,
             }],
         ),
 
