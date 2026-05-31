@@ -72,7 +72,7 @@ def generate_launch_description():
                 'port':            '/dev/ttyUSB1',
                 'baud':            115200,
                 'left_tick_scale': 2.1714,
-                'fixed_dac':       106,
+                'fixed_dac':       112,
             }],
         ),
 
