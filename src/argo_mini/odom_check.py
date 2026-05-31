@@ -44,12 +44,12 @@ V_DEAD   = 0.04
 # ── Teleop constants ────────────────────────────────────────────────────────
 LIN_MAX     = 0.20    # m/s
 ANG_MAX     = 1.2     # rad/s
-LIN_ACCEL   = 0.04    # m/s per 50 ms tick
-ANG_ACCEL   = 0.20    # rad/s per 50 ms tick
+LIN_ACCEL   = 0.10    # m/s per 50 ms tick
+ANG_ACCEL   = 0.25    # rad/s per 50 ms tick
 LIN_DECAY   = 0.78
 ANG_DECAY   = 0.68
 KEY_TIMEOUT = 0.12    # s — release threshold
-NUDGE       = 0.05    # m/s forward added when turning with lin ≈ 0
+NUDGE       = 0.12    # m/s forward added when turning with lin ≈ 0
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
