@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-Argo Mini — Simple ESP32 DAC Teleop
-No ROS. No kinematics. Just raw DAC values over serial.
+Argo Mini — Full ESP32 Teleop (no ROS)
+Raw DAC over serial. Pairs with esp32_simple.ino.
 
 Usage:  python3 esp32_teleop.py [port] [baud]
 
-Controls:
-  W   forward          S   reverse
-  A   arc left         D   arc right
-  SPACE  stop
-  +   increase speed   -   decrease speed
-  Ctrl+C  quit
+Key layout:
+             W  — forward  (both wheels forward)
+    A  — tank-left         D  — tank-right
+    (left back, right fwd) (left fwd, right back)
+             S  — STOP
+             X  — backward (both wheels reverse)
+    Z  — back-left         C  — back-right
+    (left stop, right rev) (left rev, right stop)
+
+    + / -   raise / lower speed level
+    Ctrl+C  quit (sends stop first)
+
+Command held until a new key is pressed.  Press S to stop.
 """
 
 import sys, time, termios, tty, threading, serial
@@ -18,17 +25,17 @@ import sys, time, termios, tty, threading, serial
 PORT  = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
 BAUD  = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 
-DAC_LEVELS = [104, 105, 106, 107, 108]   # low → high speed
-dac_idx    = 0                             # start at lowest speed
+DAC_LEVELS = [104, 105, 106, 107, 108]
+dac_idx    = 0
 
 dac_l = 0
 dac_r = 0
+label = 'STOP'
 lock  = threading.Lock()
 quit_ = threading.Event()
 
 
 def send(ser):
-    """20 Hz command publisher."""
     while not quit_.is_set():
         with lock:
             l, r = dac_l, dac_r
@@ -41,7 +48,7 @@ def send(ser):
 
 
 def read_keys():
-    global dac_l, dac_r, dac_idx
+    global dac_l, dac_r, dac_idx, label
     fd  = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     tty.setraw(fd)
@@ -57,16 +64,27 @@ def read_keys():
             with lock:
                 if ch in ('\x03', '\x04'):
                     quit_.set()
-                elif ch in ('w', '\x1b[A'):   # forward
+                elif ch == 'w':               # forward
                     dac_l, dac_r =  dac,  dac
-                elif ch in ('s', '\x1b[B'):   # reverse
+                    label = 'FORWARD'
+                elif ch == 'x':               # backward
                     dac_l, dac_r = -dac, -dac
-                elif ch in ('a', '\x1b[D'):   # arc left
-                    dac_l, dac_r =    0,  dac
-                elif ch in ('d', '\x1b[C'):   # arc right
-                    dac_l, dac_r =  dac,    0
-                elif ch == ' ':               # stop
+                    label = 'BACKWARD'
+                elif ch == 'a':               # tank left
+                    dac_l, dac_r = -dac,  dac
+                    label = 'TANK LEFT'
+                elif ch == 'd':               # tank right
+                    dac_l, dac_r =  dac, -dac
+                    label = 'TANK RIGHT'
+                elif ch == 'z':               # back-left arc
+                    dac_l, dac_r =    0, -dac
+                    label = 'BACK-LEFT'
+                elif ch == 'c':               # back-right arc
+                    dac_l, dac_r = -dac,    0
+                    label = 'BACK-RIGHT'
+                elif ch == 's':               # stop
                     dac_l, dac_r =    0,    0
+                    label = 'STOP'
                 elif ch in ('+', '='):
                     dac_idx = min(dac_idx + 1, len(DAC_LEVELS) - 1)
                 elif ch == '-':
@@ -84,21 +102,31 @@ def main():
     time.sleep(1.5)
     ser.reset_input_buffer()
 
-    threading.Thread(target=send, args=(ser,), daemon=True).start()
+    threading.Thread(target=send,      args=(ser,), daemon=True).start()
     threading.Thread(target=read_keys, daemon=True).start()
 
     print('\033[2J\033[H', end='')
-    print('  ARGO MINI — ESP32 Teleop')
-    print('  W fwd  S rev  A left  D right  SPACE stop  +/- speed  Ctrl+C quit')
+    print('┌─────────────────────────────────────────────┐')
+    print('│      ARGO MINI  —  ESP32 Full Teleop        │')
+    print('├─────────────────────────────────────────────┤')
+    print('│          W  forward                          │')
+    print('│  A tank-left   S stop   D tank-right        │')
+    print('│          X  backward                         │')
+    print('│  Z back-left            C back-right        │')
+    print('│          +/-  speed     Ctrl+C quit          │')
+    print('└─────────────────────────────────────────────┘')
     print()
 
     try:
         while not quit_.is_set():
             with lock:
-                l, r, idx = dac_l, dac_r, dac_idx
+                l, r, idx, lbl = dac_l, dac_r, dac_idx, label
             spd = DAC_LEVELS[idx]
-            print(f'\r  DAC L={l:+4d}  R={r:+4d}   speed level {idx+1}/{len(DAC_LEVELS)} (DAC {spd})   ',
-                  end='', flush=True)
+            print(
+                f'\r  [{lbl:<12s}]  L={l:+4d}  R={r:+4d}'
+                f'   speed {idx+1}/{len(DAC_LEVELS)} (DAC {spd})   ',
+                end='', flush=True
+            )
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
@@ -107,6 +135,7 @@ def main():
         except: pass
         ser.close()
         print('\n\nStopped.')
+
 
 if __name__ == '__main__':
     main()

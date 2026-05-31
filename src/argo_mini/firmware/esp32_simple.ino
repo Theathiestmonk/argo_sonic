@@ -85,10 +85,6 @@ void loop() {
                 int l = line.substring(2, sp).toInt();
                 int r = line.substring(sp + 1).toInt();
 
-                // Enforce arc-turn: no opposite-sign wheels
-                if (l > 0 && r < 0) r = 0;
-                else if (l < 0 && r > 0) l = 0;
-
                 setMotors(l, r);
             }
         } else if (line == "S") {
