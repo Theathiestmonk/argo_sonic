@@ -33,14 +33,14 @@ from geometry_msgs.msg import Twist
 # ── Constants ─────────────────────────────────────────────────────────────────
 WHEEL_BASE  = 0.40    # m — must match serial_bridge.py
 
-LIN_MAX     = 0.20    # m/s — conservative speed for safe mapping
+LIN_MAX     = 0.25    # m/s
 ANG_MAX     = 1.2     # rad/s
-LIN_ACCEL   = 0.04    # m/s gained per 50 ms tick while key held
-ANG_ACCEL   = 0.20    # rad/s gained per 50 ms tick while key held
-LIN_DECAY   = 0.78    # multiplier applied per 50 ms tick when no key held (~0.5 s to stop)
+LIN_ACCEL   = 0.10    # m/s per 50 ms tick — first press gives 0.10 m/s → DAC 105
+ANG_ACCEL   = 0.25    # rad/s per 50 ms tick
+LIN_DECAY   = 0.78    # multiplier per 50 ms tick when no key held (~0.5 s to stop)
 ANG_DECAY   = 0.68
 KEY_TIMEOUT = 0.12    # s  — treat key as released if nothing received in this window
-NUDGE       = 0.05    # m/s minimum forward component added when turning with lin ≈ 0
+NUDGE       = 0.12    # m/s forward nudge when turning with lin ≈ 0 (gives DAC 105)
 
 
 class SlamTeleop(Node):
