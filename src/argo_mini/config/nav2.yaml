@@ -31,7 +31,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.0
+    failure_tolerance: 3
     transform_tolerance: 0.2
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
@@ -55,22 +55,22 @@ controller_server:
       simulate_ahead_time: 1.0
       rotate_to_goal_heading: true
       
-      time_steps: 30
-      model_dt: 0.067
+      time_steps: 56
+      model_dt: 0.05
       batch_size: 4000
       ax_max: 2.0
       ax_min: -2.0
       az_max: 2.5
-      vx_std: 0.15
-      wz_std: 0.35
-      vx_max: 0.4
-      vx_min: -0.25
+      vx_std: 0.06
+      wz_std: 0.15
+      vx_max: 0.18
+      vx_min: -0.12
       wz_max: 0.7
       iteration_count: 1
       prune_distance: 1.5
       transform_tolerance: 0.1
-      temperature: 0.25
-      gamma: 0.015
+      temperature: 0.30
+      gamma: 0.020
       motion_model: "DiffDrive"
       visualize: false
       regenerate_noises: true
@@ -109,7 +109,7 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0
+        cost_weight: 10.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
         threshold_to_consider: 0.5
@@ -142,7 +142,7 @@ planner_server:
       max_iterations: 1000000
       motion_model_for_search: "REEDS_SHEPP"
       angle_quantization_bins: 72
-      minimum_turning_radius: 0.12
+      minimum_turning_radius: 0.22
       smooth_path: true
 
 local_costmap:
@@ -192,7 +192,7 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
         cost_scaling_factor: 2.5
-        inflation_radius: 0.40
+        inflation_radius: 0.30
 
 global_costmap:
   global_costmap:
@@ -227,17 +227,17 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
         cost_scaling_factor: 2.5
-        inflation_radius: 0.40
+        inflation_radius: 0.30
 
 velocity_smoother:
   ros__parameters:
     use_sim_time: false
     smoothing_frequency: 30.0
     feedback: "OPEN_LOOP"
-    max_velocity: [0.4, 0.0, 1.0]
-    min_velocity: [-0.25, 0.0, -1.0]
-    max_accel: [0.5, 0.0, 1.0]
-    max_decel: [-0.5, 0.0, -1.0]
+    max_velocity: [0.18, 0.0, 0.6]
+    min_velocity: [-0.12, 0.0, -0.6]
+    max_accel: [0.3, 0.0, 0.8]
+    max_decel: [-0.3, 0.0, -0.8]
     odom_topic: /odom
     velocity_timeout: 1.0
 
