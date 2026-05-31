@@ -108,15 +108,16 @@ void loop() {
         targetL = line.substring(2, spaceIdx).toInt();
         targetR = line.substring(spaceIdx + 1).toInt();
 
-        // ── KEY FIX: update direction flags immediately on command arrival ──
-        // The old code updated these inside setDAC() which is called from the
-        // ramp loop (every RAMP_MS = 20 ms).  ISR ticks fire instantly on
-        // every Hall edge, so there was a 20 ms window where ticks fired with
-        // the wrong direction flag.  Setting flags here closes that window.
+        // Hard constraint: wheels must never spin in opposite directions.
+        // If Python already enforces this, these lines are no-ops.
+        // Belt-and-suspenders: enforce at firmware level too.
+        if (targetL > 0 && targetR < 0) targetR = 0;
+        else if (targetL < 0 && targetR > 0) targetL = 0;
+
+        // Update direction flags immediately on command arrival — closes the
+        // 20 ms ramp race window where ISR ticks could fire with the wrong sign.
         leftReverse  = (targetL < 0);
         rightReverse = (targetR < 0);
-        // Also flip the DIR pin immediately so motor controller sees the new
-        // direction before the ramp starts increasing throttle.
         digitalWrite(DIR_L, leftReverse  ? LOW : HIGH);
         digitalWrite(DIR_R, rightReverse ? LOW : HIGH);
       }

@@ -133,6 +133,15 @@ class SerialBridge(Node):
             dac_l = self._v_to_dac(v_l)
             dac_r = self._v_to_dac(v_r)
 
+            # Hard constraint: wheels must never spin in opposite directions.
+            # Turns are always one wheel stopped, one wheel moving.
+            # Forward motion: both wheels forward (or one stopped).
+            # Reverse motion: both wheels reverse (or one stopped).
+            if dac_l > 0 and dac_r < 0:
+                dac_r = DAC_STOP
+            elif dac_l < 0 and dac_r > 0:
+                dac_l = DAC_STOP
+
         try:
             self.ser.write(f"V {dac_l} {dac_r}\n".encode())
             self.ser.flush()
