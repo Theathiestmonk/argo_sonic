@@ -113,6 +113,7 @@ class SerialBridge(Node):
         self.last_cmd = self.get_clock().now()
         lin = msg.linear.x
         ang = msg.angular.z
+        self.get_logger().info(f'cmd_cb: lin={lin:.3f} ang={ang:.3f}')
 
         if self.forward_only and lin < 0.0:
             lin = 0.0
@@ -145,10 +146,12 @@ class SerialBridge(Node):
                     dac_l = DAC_STOP
 
         try:
-            self.ser.write(f"V {dac_l} {dac_r}\n".encode())
+            cmd_str = f"V {dac_l} {dac_r}\n"
+            self.get_logger().info(f'Sending to ESP32: {cmd_str.strip()}')
+            self.ser.write(cmd_str.encode())
             self.ser.flush()
         except serial.SerialException as e:
-            self.get_logger().warn(f'Write error: {e}')
+            self.get_logger().error(f'Write error: {e}')
 
     def read_serial(self):
         try:
