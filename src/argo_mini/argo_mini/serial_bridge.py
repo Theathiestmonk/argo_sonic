@@ -20,7 +20,7 @@ DAC_MAX  = 108   # maximum ESC DAC — 106-108 range gives differential for turn
 
 # Speed mapping — must match nav2 vx_max
 VMAX   = 0.40    # m/s: cmd_vel at which DAC_MAX is sent
-V_DEAD = 0.04    # m/s: below this the wheel stops (avoids stall zone)
+V_DEAD = 0.02    # m/s: below this the wheel stops (must be < DWB fine-tuning velocity)
 
 
 class SerialBridge(Node):
