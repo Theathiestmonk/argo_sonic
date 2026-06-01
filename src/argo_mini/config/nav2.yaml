@@ -46,14 +46,7 @@ controller_server:
       yaw_goal_tolerance: 0.30
       stateful: true
     FollowPath:
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 0.6
-      forward_sampling_distance: 0.4
-      rotate_to_heading_angular_vel: 0.6
-      max_angular_accel: 1.5
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: true
+      plugin: "nav2_mppi_controller::MPPIController"
       
       time_steps: 56
       model_dt: 0.05
@@ -85,8 +78,8 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.81
-        critical_cost: 300.0
+        cost_weight: 3.0
+        critical_cost: 100.0
         consider_footprint: true
         collision_cost: 1000000.0
         near_goal_distance: 1.0
