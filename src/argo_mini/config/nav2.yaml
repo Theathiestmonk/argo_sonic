@@ -61,10 +61,10 @@ controller_server:
       ax_max: 2.0
       ax_min: -2.0
       az_max: 2.5
-      vx_std: 0.06
-      wz_std: 0.15
-      vx_max: 0.18
-      vx_min: -0.12
+      vx_std: 0.10
+      wz_std: 0.25
+      vx_max: 0.25
+      vx_min: -0.15
       wz_max: 0.7
       iteration_count: 1
       prune_distance: 1.5
@@ -234,10 +234,10 @@ velocity_smoother:
     use_sim_time: false
     smoothing_frequency: 30.0
     feedback: "OPEN_LOOP"
-    max_velocity: [0.18, 0.0, 0.6]
-    min_velocity: [-0.12, 0.0, -0.6]
-    max_accel: [0.3, 0.0, 0.8]
-    max_decel: [-0.3, 0.0, -0.8]
+    max_velocity: [0.25, 0.0, 0.7]
+    min_velocity: [-0.15, 0.0, -0.7]
+    max_accel: [0.4, 0.0, 1.0]
+    max_decel: [-0.4, 0.0, -1.0]
     odom_topic: /odom
     velocity_timeout: 1.0
 
