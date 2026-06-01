@@ -31,7 +31,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 3
+    failure_tolerance: 3.0
     transform_tolerance: 0.2
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
