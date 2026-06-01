@@ -136,14 +136,9 @@ class SerialBridge(Node):
             dac_l = self._v_to_dac(v_l)
             dac_r = self._v_to_dac(v_r)
 
-            # Arc turn constraint: only prevent tank turns (pure rotation with zero linear velocity).
-            # Navigation needs differential (one wheel slower) for smooth arc turns.
-            # Teleop pivot turns still work because lin ≈ 0.
-            if abs(lin) < 0.01:  # Pure rotation / pivot turn
-                if dac_l > 0 and dac_r < 0:
-                    dac_r = DAC_STOP
-                elif dac_l < 0 and dac_r > 0:
-                    dac_l = DAC_STOP
+            # Tank turns enabled: wheels can spin opposite directions for pure rotation.
+            # Reverse odometry is perfect (signed hall-sensor ticks), so tank turns are
+            # captured correctly in SLAM without artifacts or drift.
 
         try:
             cmd_str = f"V {dac_l} {dac_r}\n"
