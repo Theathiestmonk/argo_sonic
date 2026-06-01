@@ -47,10 +47,10 @@ lc_node() {
   local node=$1
   echo "[argo]   configure $node..."
   ros2 lifecycle set "$node" configure 2>&1 | tail -1
-  sleep 1
+  sleep 2
   echo "[argo]   activate  $node..."
   ros2 lifecycle set "$node" activate  2>&1 | tail -1
-  sleep 1
+  sleep 2
 }
 
 # ── 1. Robot state publisher ───────────────────────────────────────────────
@@ -142,11 +142,15 @@ SMOOTHER_PID=$!
 sleep 3
 lc_node /velocity_smoother
 
+# ── Wait for action servers to be ready before BT tries to load ──────────────
+echo "[argo] Waiting for action servers to be ready..."
+sleep 5
+
 # ── 11. BT Navigator ──────────────────────────────────────────────────────
 echo "[argo] Starting bt_navigator..."
 ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG &
 BT_PID=$!
-sleep 3
+sleep 5
 lc_node /bt_navigator
 
 # ── 12. Depth camera (optional) ───────────────────────────────────────────
