@@ -275,14 +275,14 @@
     <visual>
       <origin rpy="1.5707963267948966 0 0" xyz="0 0 0"/>
       <geometry>
-        <cylinder length="0.05" radius="0.085"/>
+        <cylinder length="0.05" radius="0.0762"/>
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0 0" xyz="0 0 0"/>
       <geometry>
-        <cylinder length="0.05" radius="0.085"/>
+        <cylinder length="0.05" radius="0.0762"/>
       </geometry>
     </collision>
     <inertial>
@@ -303,14 +303,14 @@
     <visual>
       <origin rpy="1.5707963267948966 0 0" xyz="0 0 0"/>
       <geometry>
-        <cylinder length="0.05" radius="0.085"/>
+        <cylinder length="0.05" radius="0.0762"/>
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0 0" xyz="0 0 0"/>
       <geometry>
-        <cylinder length="0.05" radius="0.085"/>
+        <cylinder length="0.05" radius="0.0762"/>
       </geometry>
     </collision>
     <inertial>

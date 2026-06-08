@@ -30,8 +30,6 @@
           <Wait wait_duration="3.0"/>
         </Sequence>
 
-        <Spin spin_dist="0.785"/>
-
         <BackUp backup_dist="0.20" backup_speed="0.10"/>
 
       </RoundRobin>

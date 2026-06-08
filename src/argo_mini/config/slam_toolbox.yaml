@@ -28,8 +28,8 @@ slam_toolbox:
     use_scan_barycenter:  true
 
     # Smaller buffer — localization only needs recent scans
-    scan_buffer_size:                  10
-    scan_buffer_maximum_scan_distance: 6.0
+    scan_buffer_size:                  5
+    scan_buffer_maximum_scan_distance: 4.0
 
     # Loop closing wastes CPU in localization mode — disable
     do_loop_closing: false

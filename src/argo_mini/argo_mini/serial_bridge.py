@@ -10,15 +10,15 @@ import time
 WHEEL_RADIUS    = 0.0762
 WHEEL_BASE      = 0.40
 POLE_PAIRS      = 15
-TICKS_PER_REV   = POLE_PAIRS * 6   # CHANGE mode: both edges × 3 phases = 90/rev
+TICKS_PER_REV   = POLE_PAIRS * 6   # CHANGE mode: both edges � 3 phases = 90/rev
 METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
 # ESC DAC range
 DAC_STOP = 0
-DAC_MIN  = 106   # minimum DAC that overcomes ESC deadzone and spins the wheel
-DAC_MAX  = 108   # maximum ESC DAC — 106-108 range gives differential for turns at safe speed
+DAC_MIN  = 108   # minimum DAC that overcomes ESC deadzone and spins the wheel
+DAC_MAX  = 115   # maximum ESC DAC ? 106-108 range gives differential for turns at safe speed
 
-# Speed mapping — must match nav2 vx_max
+# Speed mapping ? must match nav2 vx_max
 VMAX   = 0.40    # m/s: cmd_vel at which DAC_MAX is sent
 V_DEAD = 0.02    # m/s: below this the wheel stops (must be < DWB fine-tuning velocity)
 
@@ -32,17 +32,21 @@ class SerialBridge(Node):
         self.declare_parameter('forward_only', False)
         self.declare_parameter('left_tick_scale', 1.0)
         self.declare_parameter('fixed_dac', 0)
+        self.declare_parameter('disable_tank_turns', False)
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
-        self.forward_only    = self.get_parameter('forward_only').value
-        self.left_tick_scale = self.get_parameter('left_tick_scale').value
-        self.fixed_dac       = self.get_parameter('fixed_dac').value
+        self.forward_only      = self.get_parameter('forward_only').value
+        self.left_tick_scale   = self.get_parameter('left_tick_scale').value
+        self.fixed_dac         = self.get_parameter('fixed_dac').value
+        self.disable_tank_turns = self.get_parameter('disable_tank_turns').value
         if self.forward_only:
             self.get_logger().info('forward_only=true: reverse commands blocked')
         if self.left_tick_scale != 1.0:
             self.get_logger().info(f'left_tick_scale={self.left_tick_scale:.3f}')
         if self.fixed_dac > 0:
             self.get_logger().info(f'fixed_dac={self.fixed_dac}: ignoring velocity magnitude, direction only')
+        if self.disable_tank_turns:
+            self.get_logger().info('disable_tank_turns=true: in-place rotation blocked, angular only with forward motion')
 
         try:
             self.ser = serial.Serial(port, baud, timeout=0.05)
@@ -122,10 +126,22 @@ class SerialBridge(Node):
             dac_l, dac_r = DAC_STOP, DAC_STOP
         else:
             # True differential-drive kinematics: each wheel gets its own speed.
-            # Small angular commands → small DAC difference (smooth curves).
-            # Large angular commands → large DAC difference (tight turns / pivots).
+            # Small angular commands ? small DAC difference (smooth curves).
+            # Large angular commands ? large DAC difference (tight turns / pivots).
             v_l = lin - ang * (WHEEL_BASE / 2.0)
             v_r = lin + ang * (WHEEL_BASE / 2.0)
+
+            # Tank turns disabled: prevent wheels spinning opposite directions
+            # (no in-place rotation). Constrain angular velocity so at least one
+            # wheel maintains forward direction.
+            if self.disable_tank_turns:
+                if v_l * v_r < 0:  # Opposite signs: one wheel would reverse
+                    # Reduce angular velocity proportionally
+                    max_ang = abs(lin) * (WHEEL_BASE / 2.0) if abs(lin) > 0.05 else 0.0
+                    if abs(ang) > max_ang and max_ang < 0.01:
+                        ang = 0.0  # Block pure rotation
+                        v_l = lin
+                        v_r = lin
 
             # If either wheel exceeds VMAX, scale both down proportionally.
             peak = max(abs(v_l), abs(v_r))
@@ -135,10 +151,6 @@ class SerialBridge(Node):
 
             dac_l = self._v_to_dac(v_l)
             dac_r = self._v_to_dac(v_r)
-
-            # Tank turns enabled: wheels can spin opposite directions for pure rotation.
-            # Reverse odometry is perfect (signed hall-sensor ticks), so tank turns are
-            # captured correctly in SLAM without artifacts or drift.
 
         try:
             cmd_str = f"V {dac_l} {dac_r}\n"
@@ -153,7 +165,7 @@ class SerialBridge(Node):
             if self.ser.in_waiting > 400:
                 self.ser.reset_input_buffer()
                 return
-            # Only read when data is present — never block the event loop
+            # Only read when data is present ? never block the event loop
             while self.ser.in_waiting:
                 raw = self.ser.readline().decode(
                     'utf-8', errors='ignore').strip()
@@ -185,7 +197,7 @@ class SerialBridge(Node):
         # or the serial line delivered garbage.
         if abs(dl) > 0.10 or abs(dr) > 0.10:
             self.get_logger().warn(
-                f'Implausible tick delta dl={dl:.3f} dr={dr:.3f} — '
+                f'Implausible tick delta dl={dl:.3f} dr={dr:.3f} ? '
                 'skipping (ESP32 reboot or serial glitch)')
             return
 
