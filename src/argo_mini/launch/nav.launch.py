@@ -1,37 +1,37 @@
 """
-Argo Mini — Navigation Launch (SLAM Toolbox localization)
+Argo Mini ? Navigation Launch (SLAM Toolbox localization)
 ==========================================================
 Requires a posegraph map saved during a prior mapping session.
 Pass the map base path (without extension) via the map:= argument:
 
     ros2 launch argo_mini nav.launch.py map:=/home/argo/maps/indoor_map
 
-The robot will relocalize automatically from the first LiDAR scan —
+The robot will relocalize automatically from the first LiDAR scan ?
 no manual initial pose needed.
 
 Topic pipeline for velocity commands:
-  Nav2 controller_server  →  /cmd_vel_raw
-  Nav2 velocity_smoother  →  /cmd_vel_raw  →  /cmd_vel_smoothed
-  depth_safety_shield     →  /cmd_vel_smoothed  →  /cmd_vel
-  serial_bridge           →  /cmd_vel  →  ESP32 motors
+  Nav2 controller_server  ?  /cmd_vel_raw
+  Nav2 velocity_smoother  ?  /cmd_vel_raw  ?  /cmd_vel_smoothed
+  depth_safety_shield     ?  /cmd_vel_smoothed  ?  /cmd_vel
+  serial_bridge           ?  /cmd_vel  ?  ESP32 motors
 
 Depth-camera integration:
-  HP60C SDK  →  /ascamera_hp60c/camera_publisher/depth0/points
+  HP60C SDK  ?  /ascamera_hp60c/camera_publisher/depth0/points
   depth_safety_shield:
-    • STOP / SLOW / CLEAR state machine on /cmd_vel_smoothed
-    • re-publishes /depth_filtered (base_link frame) for Nav2 local costmap
+    ? STOP / SLOW / CLEAR state machine on /cmd_vel_smoothed
+    ? re-publishes /depth_filtered (base_link frame) for Nav2 local costmap
 
 Args:
-  map        (required) — base path to .posegraph map (no extension)
-  use_camera (default true)  — launch the EAI HP60C camera node
-  use_rviz   (default true)  — launch RViz2
+  map        (required) ? base path to .posegraph map (no extension)
+  use_camera (default true)  ? launch the EAI HP60C camera node
+  use_rviz   (default true)  ? launch RViz2
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
@@ -43,7 +43,7 @@ def generate_launch_description():
     slam_yaml  = os.path.join(pkg, 'config', 'slam_toolbox.yaml')
     urdf_file  = os.path.join(pkg, 'urdf',   'argo_mini.urdf')
 
-    # Default map path — update after your first mapping session
+    # Default map path ? update after your first mapping session
     default_map = os.path.join(pkg, 'maps', 'indoor_map')
 
     with open(urdf_file, 'r') as f:
@@ -53,7 +53,7 @@ def generate_launch_description():
     use_rviz   = LaunchConfiguration('use_rviz',   default='true')
     map_path   = LaunchConfiguration('map',         default=default_map)
 
-    # Nav2 lifecycle nodes — slam_toolbox is NOT a lifecycle node; it manages itself
+    # Nav2 lifecycle nodes ? slam_toolbox is NOT a lifecycle node; it manages itself
     nav2_nodes = [
         'behavior_server',
         'controller_server',
@@ -63,7 +63,12 @@ def generate_launch_description():
     ]
 
     return LaunchDescription([
-        # ── launch arguments ────────────────────────────────────────────────
+        # ?? Environment setup for camera SDK ????????????????????????????????
+        SetEnvironmentVariable(
+            'LD_LIBRARY_PATH',
+            '/home/argo/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2/ascamera/libs/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}'),
+
+        # ?? launch arguments ????????????????????????????????????????????????
         DeclareLaunchArgument(
             'map',
             default_value=default_map,
@@ -75,7 +80,7 @@ def generate_launch_description():
             'use_rviz', default_value='true',
             description='Launch RViz2 for visualisation'),
 
-        # ── 1. Robot State Publisher (URDF → TF tree) ───────────────────────
+        # ?? 1. Robot State Publisher (URDF ? TF tree) ???????????????????????
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
@@ -87,7 +92,7 @@ def generate_launch_description():
             }],
         ),
 
-        # ── 2. Serial Bridge (ESP32 motor control + wheel odometry) ─────────
+        # ?? 2. Serial Bridge (ESP32 motor control + wheel odometry) ?????????
         Node(
             package='argo_mini',
             executable='serial_bridge',
@@ -100,9 +105,9 @@ def generate_launch_description():
             }],
         ),
 
-        # ── 3. RPLidar A1 ────────────────────────────────────────────────────
+        # ?? 3. RPLidar A1 ????????????????????????????????????????????????????
         # frame_id = lidar_link matches the URDF joint child frame so that
-        # robot_state_publisher provides the base_link → lidar_link TF that
+        # robot_state_publisher provides the base_link ? lidar_link TF that
         # SLAM Toolbox needs for scan-matching.
         Node(
             package='rplidar_ros',
@@ -119,7 +124,7 @@ def generate_launch_description():
             }],
         ),
 
-        # ── 4. Scan Relay (LiDAR timestamp correction) ───────────────────────
+        # ?? 4. Scan Relay (LiDAR timestamp correction) ???????????????????????
         Node(
             package='argo_mini',
             executable='scan_relay',
@@ -127,10 +132,10 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # ── 5. SLAM Toolbox — localization mode ──────────────────────────────
+        # ?? 5. SLAM Toolbox ? localization mode ??????????????????????????????
         # Replaces both map_server and amcl:
-        #   • serves /map from the serialized posegraph
-        #   • broadcasts map → odom TF via scan-matching (no initial pose needed)
+        #   ? serves /map from the serialized posegraph
+        #   ? broadcasts map ? odom TF via scan-matching (no initial pose needed)
         # map_file_name is overridden here so the launch map:= argument takes effect.
         Node(
             package='slam_toolbox',
@@ -143,7 +148,7 @@ def generate_launch_description():
             ],
         ),
 
-        # ── 6. Behavior Server (Spin / BackUp / Wait recoveries) ─────────────
+        # ?? 6. Behavior Server (Spin / BackUp / Wait recoveries) ?????????????
         LifecycleNode(
             package='nav2_behaviors',
             executable='behavior_server',
@@ -154,7 +159,7 @@ def generate_launch_description():
             remappings=[('cmd_vel', '/cmd_vel_raw')],
         ),
 
-        # ── 7. Controller Server → /cmd_vel_raw (remapped) ───────────────────
+        # ?? 7. Controller Server ? /cmd_vel_raw (remapped) ???????????????????
         LifecycleNode(
             package='nav2_controller',
             executable='controller_server',
@@ -165,7 +170,7 @@ def generate_launch_description():
             remappings=[('cmd_vel', '/cmd_vel_raw')],
         ),
 
-        # ── 8. Planner Server ────────────────────────────────────────────────
+        # ?? 8. Planner Server ????????????????????????????????????????????????
         LifecycleNode(
             package='nav2_planner',
             executable='planner_server',
@@ -175,7 +180,7 @@ def generate_launch_description():
             parameters=[nav2_yaml],
         ),
 
-        # ── 9. Velocity Smoother  /cmd_vel_raw → /cmd_vel_smoothed ───────────
+        # ?? 9. Velocity Smoother  /cmd_vel_raw ? /cmd_vel_smoothed ???????????
         LifecycleNode(
             package='nav2_velocity_smoother',
             executable='velocity_smoother',
@@ -189,7 +194,7 @@ def generate_launch_description():
             ],
         ),
 
-        # ── 10. BT Navigator ─────────────────────────────────────────────────
+        # ?? 10. BT Navigator ?????????????????????????????????????????????????
         LifecycleNode(
             package='nav2_bt_navigator',
             executable='bt_navigator',
@@ -199,7 +204,7 @@ def generate_launch_description():
             parameters=[nav2_yaml],
         ),
 
-        # ── 11. Nav2 Lifecycle Manager ───────────────────────────────────────
+        # ?? 11. Nav2 Lifecycle Manager ???????????????????????????????????????
         Node(
             package='nav2_lifecycle_manager',
             executable='lifecycle_manager',
@@ -212,7 +217,7 @@ def generate_launch_description():
             }],
         ),
 
-        # ── 12. Depth Safety Shield  /cmd_vel_smoothed → /cmd_vel ────────────
+        # ?? 12. Depth Safety Shield  /cmd_vel_smoothed ? /cmd_vel ????????????
         # Acts as the safety layer between Nav2's smoothed output and the motors.
         # Reads depth PointCloud2, stops/slows the robot if an obstacle is close,
         # and re-publishes a filtered cloud on /depth_filtered for the costmap.
@@ -237,22 +242,25 @@ def generate_launch_description():
             }],
         ),
 
-        # ── 13. Camera static TF bridge ──────────────────────────────────────
-        # HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_color_0
-        # Our URDF defines camera_depth_optical_frame at the same physical location.
+        # ?? 13. Camera static TF bridge ??????????????????????????????????????
+        # HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_camera_link_0
+        # Our URDF defines depth_camera_optical_frame at the same physical location.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='camera_tf_bridge',
             output='screen',
             arguments=[
-                '0', '0', '0', '0', '0', '0',
-                'camera_depth_optical_frame',
-                'ascamera_hp60c_color_0',
+                '--x', '0.0', '--y', '0.0', '--z', '0.0',
+                '--roll', '0.0', '--pitch', '0.0', '--yaw', '0.0',
+                '--frame-id', 'depth_camera_optical_frame',
+                '--child-frame-id', 'ascamera_hp60c_camera_link_0',
             ],
         ),
 
-        # ── 14. HP60C Depth Camera (optional) ───────────────────────────────
+        # ?? 14. HP60C Depth Camera (optional) ???????????????????????????????
+        # Sources SDK setup.bash to ensure all camera libraries are available.
+        # Publishes PointCloud2 on /ascamera_hp60c/camera_publisher/depth0/points
         GroupAction(
             condition=IfCondition(use_camera),
             actions=[
@@ -261,12 +269,13 @@ def generate_launch_description():
                     executable='ascamera_node',
                     name='ascamera_hp60c',
                     output='screen',
-                    parameters=[{'camera_type': 'hp60c'}],
+                    shell=True,
+                    prefix='bash -c "source /home/argo/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2/install/setup.bash && exec "$0"" --',
                 ),
             ],
         ),
 
-        # ── 15. RViz2 (optional) ─────────────────────────────────────────────
+        # ?? 15. RViz2 (optional) ?????????????????????????????????????????????
         Node(
             condition=IfCondition(use_rviz),
             package='rviz2',

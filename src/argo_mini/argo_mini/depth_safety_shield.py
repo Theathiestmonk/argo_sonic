@@ -95,7 +95,7 @@ class DepthSafetyShield(Node):
 
         # Rate-limit depth processing: track last processed time
         self._last_proc    = 0.0
-        self._proc_interval = 0.15      # ~7 Hz processing cap
+        self._proc_interval = 0.20      # ~5 Hz processing cap (reduced for Jetson)
 
         # ?? publishers / subscribers ?????????????????????????????????????????
         self.cmd_pub = self.create_publisher(Twist, out_topic, 10)
@@ -103,6 +103,10 @@ class DepthSafetyShield(Node):
         # Re-publish filtered cloud so Nav2 costmap can use it
         self.cloud_pub = self.create_publisher(
             PointCloud2, '/depth_filtered', QoSPresetProfiles.SENSOR_DATA.value)
+
+        # Publish safety state (STOP, SLOW, CLEAR, STALE) so other nodes can react
+        from std_msgs.msg import String
+        self.state_pub = self.create_publisher(String, '/depth_safety_state', 10)
 
         # Use SENSOR_DATA QoS (best-effort, depth-1) to keep only latest frame
         self.depth_sub = self.create_subscription(
@@ -131,12 +135,13 @@ class DepthSafetyShield(Node):
         self._last_proc = now
 
         # Look up TF from camera frame ? base_link
+        # Use latest available transform (time=0) to avoid timestamp skew issues
         try:
             tf_stamped = self.tf_buffer.lookup_transform(
                 'base_link',
                 msg.header.frame_id,
-                msg.header.stamp,
-                timeout=Duration(seconds=0.05))
+                rclpy.time.Time(seconds=0),
+                timeout=Duration(seconds=0.2))
         except (tf2_ros.LookupException,
                 tf2_ros.ConnectivityException,
                 tf2_ros.ExtrapolationException) as e:
@@ -285,6 +290,10 @@ class DepthSafetyShield(Node):
                 f'Safety state: {prev_state} ? {self.state}  '
                 f'(fwd={d_fwd:.2f}m, left={d_left:.2f}m, right={d_right:.2f}m)  '
                 f'avoidance_dir={self.avoidance_dir}')
+            # Publish state for other nodes (allow reverse only in STOP state)
+            state_msg = String()
+            state_msg.data = self.state
+            self.state_pub.publish(state_msg)
 
     def _watchdog(self):
         if self.last_depth_ts is None:
