@@ -4,9 +4,9 @@
 
     <!--
       Recovery priority (RoundRobin cycles in order per failure):
-        1. Clear costmaps + wait 3 s  — resolves most transient issues
-        2. Spin 45°                   — unstuck from tight spot
-        3. Back up 20 cm              — escape obstacle in front
+        1. Clear costmaps + wait 3 s  ? resolves most transient issues
+        2. Spin 45�                   ? unstuck from tight spot
+        3. Back up 20 cm              ? escape obstacle in front
       Each recovery returns SUCCESS so RecoveryNode retries navigation.
       Only stops when goal is reached or a new goal preempts.
     -->
@@ -22,12 +22,11 @@
 
       <RoundRobin name="RecoveryActions">
 
-        <Sequence name="ClearAndWait">
+        <Sequence name="ClearCostmaps">
           <ClearEntireCostmap name="ClearLocalCostmap"
             service_name="local_costmap/clear_entirely_local_costmap"/>
           <ClearEntireCostmap name="ClearGlobalCostmap"
             service_name="global_costmap/clear_entirely_global_costmap"/>
-          <Wait wait_duration="3.0"/>
         </Sequence>
 
         <BackUp backup_dist="0.20" backup_speed="0.10"/>

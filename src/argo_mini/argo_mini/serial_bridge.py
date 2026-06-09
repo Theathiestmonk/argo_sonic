@@ -15,8 +15,8 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
 # ESC DAC range
 DAC_STOP = 0
-DAC_MIN  = 106   # minimum DAC that overcomes ESC deadzone and spins the wheel
-DAC_MAX  = 112   # maximum ESC DAC ? 106-108 range gives differential for turns at safe speed
+DAC_MIN  = 108   # minimum DAC that overcomes ESC deadzone and spins the wheel
+DAC_MAX  = 110   # maximum ESC DAC ? 106-108 range gives differential for turns at safe speed
 
 # Speed mapping ? must match nav2 vx_max
 VMAX   = 0.40    # m/s: cmd_vel at which DAC_MAX is sent
