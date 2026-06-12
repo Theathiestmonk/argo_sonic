@@ -4,42 +4,52 @@ from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, PointStamped
 from std_msgs.msg import Int32
+from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 import json
 import os
 import threading
+import math
 
 WAYPOINTS_FILE = os.path.expanduser('~/argo_mini_ws/src/argo_mini/waypoints/waypoints.json')
 
 class WaypointManager(Node):
     def __init__(self):
         super().__init__('waypoint_manager')
-
+        
         qos = QoSProfile(depth=10, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
-
+        
         # Subscribers
         self.pose_sub = self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self.pose_cb, qos)
         
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom', self.odom_cb, 10)
+        
         self.click_sub = self.create_subscription(
             PointStamped, '/clicked_point', self.click_cb, 10)
-
-        # Dashboard Command Subscriber (Key Integration)
+        
         self.dashboard_sub = self.create_subscription(
             Int32, '/dashboard_waypoint_cmd', self.dashboard_cmd_cb, 10)
 
         # Navigation Action Client
         self.nav_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
-
-        self.current_pose = None
+        
+        self.current_amcl_pose = None
+        self.current_odom_pose = None
         self.clicked_point = None
         self.waypoints = self.load_waypoints()
-
-        self.get_logger().info('Waypoint Manager initialized.')
+        
+        self.get_logger().info('Waypoint Manager initialized with improved pose handling.')
         self.print_menu()
 
+    def odom_cb(self, msg):
+        """Store latest odometry (good for yaw)"""
+        self.current_odom_pose = msg.pose.pose
+
     def pose_cb(self, msg):
-        self.current_pose = msg.pose.pose
+        """AMCL pose in map frame (best for global navigation)"""
+        self.current_amcl_pose = msg.pose.pose
 
     def click_cb(self, msg):
         self.clicked_point = msg.point
@@ -47,10 +57,22 @@ class WaypointManager(Node):
         print('> ', end='', flush=True)
 
     def dashboard_cmd_cb(self, msg):
-        """Handle commands coming from the web dashboard"""
         wp_id = msg.data
         self.get_logger().info(f"Dashboard requested waypoint {wp_id}")
         threading.Thread(target=self.go_to, args=(wp_id,), daemon=True).start()
+
+    def get_current_pose(self):
+        """Return best available pose (AMCL preferred, with good yaw)"""
+        if self.current_amcl_pose:
+            return self.current_amcl_pose
+        return self.current_odom_pose
+
+    def quaternion_to_yaw(self, q):
+        """More accurate yaw from quaternion"""
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return yaw
 
     def load_waypoints(self):
         if os.path.exists(WAYPOINTS_FILE):
@@ -70,48 +92,55 @@ class WaypointManager(Node):
         print('[Saved] Waypoints updated.')
 
     def print_menu(self):
-        print('\n' + '='*55)
-        print('           ARGO MINI WAYPOINT MANAGER')
-        print('='*55)
-        print('  s <0-9>   Save current robot pose')
-        print('  c <0-9>   Save clicked point (RViz)')
-        print('  g <0-9>   Go to waypoint')
-        print('  l         List waypoints')
-        print('  q         Quit')
-        print('='*55)
+        print('\n' + '='*60)
+        print(' ARGO MINI WAYPOINT MANAGER (Improved Pose)')
+        print('='*60)
+        print(' s <0-9>  Save current robot pose (AMCL > Odom)')
+        print(' c <0-9>  Save clicked point (RViz)')
+        print(' g <0-9>  Go to waypoint')
+        print(' p        Print current pose')
+        print(' l        List waypoints')
+        print(' q        Quit')
+        print('='*60)
         if self.waypoints:
             for k, v in sorted(self.waypoints.items(), key=lambda x: int(x[0])):
                 label = 'HOME' if k == '0' else f'Table {k}'
-                print(f'  {label}: x={float(v["x"]):.3f}  y={float(v["y"]):.3f}')
+                print(f' {label}: x={float(v["x"]):.3f} y={float(v["y"]):.3f} theta={float(v.get("theta",0)):.1f}°')
         print()
 
     def save_current_as(self, n):
-        if not self.current_pose:
-            print("ERROR: No current pose available. Set 2D Pose Estimate in RViz.")
+        pose = self.get_current_pose()
+        if not pose:
+            print("ERROR: No pose available. Set 2D Pose Estimate in RViz first.")
             return
+
         key = str(n)
+        yaw = self.quaternion_to_yaw(pose.orientation)
+        
         self.waypoints[key] = {
-            "x": self.current_pose.position.x,
-            "y": self.current_pose.position.y,
-            "qz": self.current_pose.orientation.z,
-            "qw": self.current_pose.orientation.w
+            "x": float(pose.position.x),
+            "y": float(pose.position.y),
+            "qz": float(pose.orientation.z),
+            "qw": float(pose.orientation.w),
+            "theta": float(math.degrees(yaw))   # for easy reading
         }
         self.save_waypoints()
-        print(f"Saved waypoint {n} from current pose.")
+        print(f"Saved waypoint {n} → x={pose.position.x:.3f}, y={pose.position.y:.3f}, theta={math.degrees(yaw):.1f}°")
 
     def save_clicked_as(self, n):
         if not self.clicked_point:
-            print("ERROR: Click a point in RViz first using 'Publish Point'.")
+            print("ERROR: Click a point in RViz first.")
             return
         key = str(n)
         self.waypoints[key] = {
-            "x": self.clicked_point.x,
-            "y": self.clicked_point.y,
+            "x": float(self.clicked_point.x),
+            "y": float(self.clicked_point.y),
             "qz": 0.0,
-            "qw": 1.0
+            "qw": 1.0,
+            "theta": 0.0
         }
         self.save_waypoints()
-        print(f"Saved waypoint {n} from clicked point.")
+        print(f"Saved waypoint {n} from clicked point (facing forward).")
 
     def go_to(self, n):
         key = str(n)
@@ -144,7 +173,7 @@ class WaypointManager(Node):
     def goal_response_cb(self, future, n):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            print(f"\n[FAIL] Goal to waypoint {n} was REJECTED by Nav2.")
+            print(f"\n[FAIL] Goal to waypoint {n} was REJECTED.")
             return
         print(f"\n[ACCEPTED] Moving toward waypoint {n}...")
         result_future = goal_handle.get_result_async()
@@ -157,11 +186,11 @@ class WaypointManager(Node):
         else:
             print(f"\n[FAIL] Failed to reach waypoint {n} (status: {result.status})")
 
+
 def main():
     rclpy.init()
     node = WaypointManager()
     
-    # Run ROS spin in background thread
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
@@ -171,23 +200,33 @@ def main():
             if not cmd:
                 continue
             parts = cmd.split()
+            
             if parts[0] == 'q':
                 break
             elif parts[0] == 'l':
                 node.print_menu()
+            elif parts[0] == 'p':
+                pose = node.get_current_pose()
+                if pose:
+                    yaw = node.quaternion_to_yaw(pose.orientation)
+                    print(f"Current Pose → x={pose.position.x:.3f}  y={pose.position.y:.3f}  "
+                          f"theta={yaw:.3f} rad ({math.degrees(yaw):.1f}°)")
+                else:
+                    print("No pose available yet.")
             elif parts[0] == 's' and len(parts) == 2:
                 node.save_current_as(int(parts[1]))
             elif parts[0] == 'c' and len(parts) == 2:
                 node.save_clicked_as(int(parts[1]))
             elif parts[0] == 'g' and len(parts) == 2:
-                node.go_to(int(parts[1]))
+                threading.Thread(target=node.go_to, args=(int(parts[1]),), daemon=True).start()
             else:
-                print("Commands: s <0-9> | c <0-9> | g <0-9> | l | q")
+                print("Commands: s <0-9> | c <0-9> | g <0-9> | p | l | q")
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

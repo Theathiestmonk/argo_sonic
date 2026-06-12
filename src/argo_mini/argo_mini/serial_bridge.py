@@ -8,19 +8,18 @@ import math
 import time
 
 WHEEL_RADIUS    = 0.0762
-WHEEL_BASE      = 0.40
-POLE_PAIRS      = 15
-TICKS_PER_REV   = POLE_PAIRS * 6   # CHANGE mode: both edges � 3 phases = 90/rev
+WHEEL_BASE      = 0.41
+POLE_PAIRS      = 10
+TICKS_PER_REV   = POLE_PAIRS * 6   # 60 ticks/rev (10 pole pairs � 6 Hall edges)
 METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
-# ESC DAC range
-DAC_STOP = 0
-DAC_MIN  = 108   # minimum DAC that overcomes ESC deadzone and spins the wheel
-DAC_MAX  = 110   # maximum ESC DAC ? 106-108 range gives differential for turns at safe speed
+# IMU complementary filter ? how much to trust IMU gyro vs wheel odometry for angle
+# 0.0 = 100% wheels,  1.0 = 100% IMU,  0.95 = recommended
+IMU_ALPHA = 0.95
 
-# Speed mapping ? must match nav2 vx_max
-VMAX   = 0.40    # m/s: cmd_vel at which DAC_MAX is sent
-V_DEAD = 0.02    # m/s: below this the wheel stops (must be < DWB fine-tuning velocity)
+# Velocity limits
+VMAX   = 0.25    # m/s ? cap wheel speed to match nav2 vx_max
+V_DEAD = 0.02    # m/s ? below this send 0 RPM (stops motor)
 
 
 class SerialBridge(Node):
@@ -31,22 +30,21 @@ class SerialBridge(Node):
         self.declare_parameter('baud', 115200)
         self.declare_parameter('forward_only', False)
         self.declare_parameter('left_tick_scale', 1.0)
-        self.declare_parameter('fixed_dac', 0)
         self.declare_parameter('disable_tank_turns', False)
+        self.declare_parameter('imu_flip_z', False)
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
-        self.forward_only      = self.get_parameter('forward_only').value
-        self.left_tick_scale   = self.get_parameter('left_tick_scale').value
-        self.fixed_dac         = self.get_parameter('fixed_dac').value
+        self.forward_only       = self.get_parameter('forward_only').value
+        self.left_tick_scale    = self.get_parameter('left_tick_scale').value
         self.disable_tank_turns = self.get_parameter('disable_tank_turns').value
+        self.imu_flip_z         = self.get_parameter('imu_flip_z').value
+
         if self.forward_only:
             self.get_logger().info('forward_only=true: reverse commands blocked')
         if self.left_tick_scale != 1.0:
-            self.get_logger().info(f'left_tick_scale={self.left_tick_scale:.3f}')
-        if self.fixed_dac > 0:
-            self.get_logger().info(f'fixed_dac={self.fixed_dac}: ignoring velocity magnitude, direction only')
+            self.get_logger().info(f'left_tick_scale={self.left_tick_scale:.3f} (odometry only)')
         if self.disable_tank_turns:
-            self.get_logger().info('disable_tank_turns=true: in-place rotation blocked, angular only with forward motion')
+            self.get_logger().info('disable_tank_turns=true')
 
         try:
             self.ser = serial.Serial(port, baud, timeout=0.05)
@@ -74,7 +72,7 @@ class SerialBridge(Node):
         self.create_timer(0.01, self.read_serial)
         self.create_timer(0.10, self.watchdog)
 
-        self.get_logger().info('SerialBridge ready.')
+        self.get_logger().info('SerialBridge ready (RPM mode).')
 
     def publish_tf(self):
         now = self.get_clock().now()
@@ -102,16 +100,11 @@ class SerialBridge(Node):
             except Exception:
                 pass
 
-    def _v_to_dac(self, v: float) -> int:
+    def _v_to_rpm(self, v: float) -> float:
+        """Convert wheel velocity (m/s) to RPM. Returns 0.0 below V_DEAD."""
         if abs(v) < V_DEAD:
-            return DAC_STOP
-        if self.fixed_dac > 0:
-            # Fixed DAC mode: ignore velocity magnitude, use direction only.
-            # Consistent DAC = consistent tick rate = cleaner odometry.
-            return self.fixed_dac if v > 0 else -self.fixed_dac
-        ratio = min(1.0, (abs(v) - V_DEAD) / (VMAX - V_DEAD))
-        dac = round(DAC_MIN + ratio * (DAC_MAX - DAC_MIN))
-        return dac if v > 0 else -dac
+            return 0.0
+        return v * 60.0 / (2.0 * math.pi * WHEEL_RADIUS)
 
     def cmd_cb(self, msg: Twist):
         self.last_cmd = self.get_clock().now()
@@ -123,38 +116,32 @@ class SerialBridge(Node):
             lin = 0.0
 
         if abs(lin) < 0.01 and abs(ang) < 0.01:
-            dac_l, dac_r = DAC_STOP, DAC_STOP
+            rpm_l, rpm_r = 0.0, 0.0
         else:
-            # True differential-drive kinematics: each wheel gets its own speed.
-            # Small angular commands ? small DAC difference (smooth curves).
-            # Large angular commands ? large DAC difference (tight turns / pivots).
+            # Differential-drive kinematics
             v_l = lin - ang * (WHEEL_BASE / 2.0)
             v_r = lin + ang * (WHEEL_BASE / 2.0)
 
-            # Tank turns disabled: prevent wheels spinning opposite directions
-            # (no in-place rotation). Constrain angular velocity so at least one
-            # wheel maintains forward direction.
             if self.disable_tank_turns:
-                if v_l * v_r < 0:  # Opposite signs: one wheel would reverse
-                    # Reduce angular velocity proportionally
+                if v_l * v_r < 0:
                     max_ang = abs(lin) * (WHEEL_BASE / 2.0) if abs(lin) > 0.05 else 0.0
                     if abs(ang) > max_ang and max_ang < 0.01:
-                        ang = 0.0  # Block pure rotation
+                        ang = 0.0
                         v_l = lin
                         v_r = lin
 
-            # If either wheel exceeds VMAX, scale both down proportionally.
+            # Cap to VMAX ? scale both wheels proportionally if either exceeds limit
             peak = max(abs(v_l), abs(v_r))
             if peak > VMAX:
                 v_l = v_l / peak * VMAX
                 v_r = v_r / peak * VMAX
 
-            dac_l = self._v_to_dac(v_l)
-            dac_r = self._v_to_dac(v_r)
+            rpm_l = self._v_to_rpm(v_l)
+            rpm_r = self._v_to_rpm(v_r)
 
         try:
-            cmd_str = f"V {dac_l} {dac_r}\n"
-            self.get_logger().info(f'Sending to ESP32: {cmd_str.strip()}')
+            cmd_str = f"V {rpm_l:.2f} {rpm_r:.2f}\n"
+            self.get_logger().info(f'Sending: {cmd_str.strip()}')
             self.ser.write(cmd_str.encode())
             self.ser.flush()
         except serial.SerialException as e:
@@ -165,7 +152,6 @@ class SerialBridge(Node):
             if self.ser.in_waiting > 400:
                 self.ser.reset_input_buffer()
                 return
-            # Only read when data is present ? never block the event loop
             while self.ser.in_waiting:
                 raw = self.ser.readline().decode(
                     'utf-8', errors='ignore').strip()
@@ -173,13 +159,17 @@ class SerialBridge(Node):
                     break
                 if raw.startswith('O '):
                     parts = raw.split()
-                    if len(parts) == 3:
-                        self.update_odom(
-                            int(parts[1]), int(parts[2]))
+                    if len(parts) == 4:
+                        gz = float(parts[3])
+                        if self.imu_flip_z:
+                            gz = -gz
+                        self.update_odom(int(parts[1]), int(parts[2]), gz)
+                    elif len(parts) == 3:
+                        self.update_odom(int(parts[1]), int(parts[2]))
         except Exception as e:
             self.get_logger().warn(f'Read error: {e}')
 
-    def update_odom(self, left_ticks, right_ticks):
+    def update_odom(self, left_ticks, right_ticks, gyro_z=None):
         if self.prev_left is None:
             self.prev_left  = left_ticks
             self.prev_right = right_ticks
@@ -190,27 +180,27 @@ class SerialBridge(Node):
         self.prev_left  = left_ticks
         self.prev_right = right_ticks
 
-        # Sanity check: reject physically impossible deltas.
-        # At VMAX=0.40 m/s with a 50 ms odom period the maximum plausible
-        # distance per tick packet is ~25 mm.  A delta above 0.10 m almost
-        # certainly means the ESP32 rebooted and ticks wrapped to zero,
-        # or the serial line delivered garbage.
         if abs(dl) > 0.10 or abs(dr) > 0.10:
             self.get_logger().warn(
                 f'Implausible tick delta dl={dl:.3f} dr={dr:.3f} ? '
                 'skipping (ESP32 reboot or serial glitch)')
             return
 
-        d_center = (dl + dr) / 2.0
-        d_theta  = (dr - dl) / WHEEL_BASE
-
-        self.x     += d_center * math.cos(self.theta + d_theta / 2.0)
-        self.y     += d_center * math.sin(self.theta + d_theta / 2.0)
-        self.theta += d_theta
+        d_center      = (dl + dr) / 2.0
+        d_theta_wheel = (dr - dl) / WHEEL_BASE
 
         now = self.get_clock().now()
         dt  = (now - self.last_time).nanoseconds / 1e9
         self.last_time = now
+
+        if gyro_z is not None and dt > 0:
+            d_theta = IMU_ALPHA * (gyro_z * dt) + (1.0 - IMU_ALPHA) * d_theta_wheel
+        else:
+            d_theta = d_theta_wheel
+
+        self.x     += d_center * math.cos(self.theta + d_theta / 2.0)
+        self.y     += d_center * math.sin(self.theta + d_theta / 2.0)
+        self.theta += d_theta
 
         v  = d_center / dt if dt > 0 else 0.0
         w  = d_theta  / dt if dt > 0 else 0.0

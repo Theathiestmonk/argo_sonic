@@ -1,262 +1,265 @@
-bt_navigator:
-  ros__parameters:
-    use_sim_time: false
-    global_frame: map
-    robot_base_frame: base_link
-    odom_topic: /odom
-    bt_loop_duration: 10
-    default_server_timeout: 80
-    wait_for_service_timeout: 2000
-    action_server_result_timeout: 900.0
-    transform_tolerance: 0.2
-    default_nav_to_pose_bt_xml: "/home/argo/argo_mini_ws/src/argo_mini/config/bt/navigate_to_pose.xml"
-    default_nav_through_poses_bt_xml: "/home/argo/argo_mini_ws/src/argo_mini/config/bt/navigate_to_pose.xml"
-    plugin_lib_names:
-      - nav2_compute_path_to_pose_action_bt_node
-      - nav2_follow_path_action_bt_node
-      - nav2_pipeline_sequence_bt_node
-      - nav2_recovery_node_bt_node
-      - nav2_rate_controller_bt_node
-      - nav2_round_robin_node_bt_node
-      - nav2_back_up_action_bt_node
-      - nav2_clear_costmap_service_bt_node
-
-controller_server:
-  ros__parameters:
-    use_sim_time: false
-    controller_frequency: 10.0
-    costmap_update_timeout: 0.80
-    min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
-    min_theta_velocity_threshold: 0.001
-    failure_tolerance: 3.0
-    transform_tolerance: 0.2
-    progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["goal_checker"]
-    controller_plugins: ["FollowPath"]
-    progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.10
-      movement_time_allowance: 30.0
-    goal_checker:
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.20
-      yaw_goal_tolerance: 0.30
-      stateful: true
-    FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 56
-      model_dt: 0.05
-      batch_size: 400 
-      vx_std: 0.2
-      vy_std: 0.2
-      wz_std: 0.4
-      vx_max: 0.25
-      vx_min: 0.15 
-      vy_max: 0.0
-      vy_min: 0.0
-      wz_max: 0.8
-      ax_max: 0.5
-      ax_min: -0.5
-      ay_min: 0.0
-      ay_max: 0.0
-      az_max: 1.0
-      iteration_count: 1
-      temperature: 0.3
-      gamma: 0.015
-      motion_model: "DiffDrive"
-      diff_drive:
-        plugin: "nav2_mppi_controller::DiffDriveMotionModel"
-      visualize: false
-      reset_period: 1.0
-      regenerate_noises: false
-      sgf_order: 2
-      TrajectoryVisualizer:
-        trajectory_step: 5
-        time_step: 3
-      TrajectoryValidator:
-        plugin: "nav2_mppi_controller::DefaultOptimalTrajectoryValidator"
-        collision_lookahead_time: 2.0
-        consider_footprint: true
-      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
-      ConstraintCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 6.0
-      GoalCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 1.4
-      GoalAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 1.0
-        threshold_to_consider: 0.5
-      PreferForwardCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 15.0
-        threshold_to_consider: 0.5
-      CostCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 3.81
-        critical_cost: 300.0
-        consider_footprint: true
-        collision_cost: 1000000.0
-        near_goal_distance: 1.0
-        trajectory_point_step: 2
-      PathAlignCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 10.0
-        max_path_occupancy_ratio: 0.05
-        trajectory_point_step: 4
-        threshold_to_consider: 0.5
-        offset_from_furthest: 20
-        use_path_orientations: false
-      PathFollowCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 10.0
-        offset_from_furthest: 5
-        threshold_to_consider: 1.4
-      PathAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 2.0
-        offset_from_furthest: 4
-        threshold_to_consider: 0.5
-        max_angle_to_furthest: 1.0
-        mode: 0
-
-planner_server:
-  ros__parameters:
-    use_sim_time: false
-    planner_plugins: ["GridBased"]
-    costmap_update_timeout: 1.0
-    GridBased:
-      plugin: "nav2_smac_planner/SmacPlannerHybrid"
-      tolerance: 0.3
-      allow_unknown: true
-      max_iterations: 1000000
-      motion_model_for_search: "DUBIN"
-      angle_quantization_bins: 72
-      non_straight_penalty: 1.2
-      change_penalty: 1.2
-      minimum_turning_radius: 0.22
-      smooth_path: true
-
-local_costmap:
-  local_costmap:
+  bt_navigator:
     ros__parameters:
-      update_frequency: 10.0
-      publish_frequency: 5.0
-      use_sim_time: false
-      global_frame: odom
-      robot_base_frame: base_link
-      rolling_window: true
-      width: 3
-      height: 3
-      resolution: 0.05
-      footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
-      plugins: ["obstacle_layer", "depth_layer", "inflation_layer"]
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: scan
-        scan:
-          topic: /scan_corrected
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 2.0
-          raytrace_min_range: 0.30
-          obstacle_max_range: 2.0
-          obstacle_min_range: 0.30
-      depth_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: depth_points
-        depth_points:
-          topic: /depth_filtered
-          max_obstacle_height: 1.80
-          min_obstacle_height: 0.05
-          clearing: true
-          marking: true
-          data_type: "PointCloud2"
-          raytrace_max_range: 2.5
-          raytrace_min_range: 0.10
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.10
-      inflation_layer:
-        plugin: "nav2_costmap_2d::InflationLayer"
-        enabled: true
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.50
-
-global_costmap:
-  global_costmap:
-    ros__parameters:
-      update_frequency: 2.0
-      publish_frequency: 2.0
       use_sim_time: false
       global_frame: map
       robot_base_frame: base_link
-      resolution: 0.05
-      footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
-      track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: scan
-        scan:
-          topic: /scan_corrected
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 1.0
-          raytrace_min_range: 0.35
-          obstacle_max_range: 1.0
-          obstacle_min_range: 0.35
-      inflation_layer:
-        plugin: "nav2_costmap_2d::InflationLayer"
-        enabled: true
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.50
+      odom_topic: /odom
+      bt_loop_duration: 10
+      default_server_timeout: 80
+      wait_for_service_timeout: 2000
+      action_server_result_timeout: 900.0
+      transform_tolerance: 0.2
+      default_nav_to_pose_bt_xml: "/home/argo/argo_mini_ws/src/argo_mini/config/bt/navigate_to_pose.xml"
+      default_nav_through_poses_bt_xml: "/home/argo/argo_mini_ws/src/argo_mini/config/bt/navigate_to_pose.xml"
+      plugin_lib_names:
+        - nav2_compute_path_to_pose_action_bt_node
+        - nav2_follow_path_action_bt_node
+        - nav2_pipeline_sequence_bt_node
+        - nav2_recovery_node_bt_node
+        - nav2_rate_controller_bt_node
+        - nav2_round_robin_node_bt_node
+        - nav2_back_up_action_bt_node
+        - nav2_spin_action_bt_node
+        - nav2_clear_costmap_service_bt_node
 
-velocity_smoother:
-  ros__parameters:
-    use_sim_time: false
-    smoothing_frequency: 30.0
-    feedback: "OPEN_LOOP"
-    max_velocity: [0.25, 0.0, 0.7]
-    min_velocity: [-0.15, 0.0, -0.7]
-    max_accel: [0.4, 0.0, 1.0]
-    max_decel: [-0.4, 0.0, -1.0]
-    odom_topic: /odom
-    velocity_timeout: 1.0
+  controller_server:
+    ros__parameters:
+      use_sim_time: false
+      controller_frequency: 20.0
+      costmap_update_timeout: 0.80
+      min_x_velocity_threshold: 0.001
+      min_y_velocity_threshold: 0.001
+      min_theta_velocity_threshold: 0.001
+      failure_tolerance: 3.0
+      transform_tolerance: 0.2
+      progress_checker_plugins: ["progress_checker"]
+      goal_checker_plugins: ["goal_checker"]
+      controller_plugins: ["FollowPath"]
+      progress_checker:
+        plugin: "nav2_controller::SimpleProgressChecker"
+        required_movement_radius: 0.30
+        movement_time_allowance: 30.0
+      goal_checker:
+        plugin: "nav2_controller::SimpleGoalChecker"
+        xy_goal_tolerance: 0.20
+        yaw_goal_tolerance: 3.14
+        stateful: true
+      FollowPath:
+        plugin: "nav2_mppi_controller::MPPIController"
+        time_steps: 56
+        model_dt: 0.05
+        batch_size: 400 
+        vx_std: 0.2
+        vy_std: 0.2
+        wz_std: 0.4
+        vx_max: 0.40
+        vx_min: 0.0
+        vy_max: 0.0
+        vy_min: 0.0
+        wz_max: 0.8
+        ax_max: 0.5
+        ax_min: -0.5
+        ay_min: 0.0
+        ay_max: 0.0
+        az_max: 1.0
+        iteration_count: 1
+        temperature: 0.3
+        gamma: 0.015
+        motion_model: "DiffDrive"
+        diff_drive:
+          plugin: "nav2_mppi_controller::DiffDriveMotionModel"
+        visualize: false
+        reset_period: 1.0
+        regenerate_noises: false
+        sgf_order: 2
+        TrajectoryVisualizer:
+          trajectory_step: 5
+          time_step: 3
+        TrajectoryValidator:
+          plugin: "nav2_mppi_controller::DefaultOptimalTrajectoryValidator"
+          collision_lookahead_time: 2.0
+          consider_footprint: true
+        critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+        ConstraintCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 6.0
+        GoalCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 8.0
+          threshold_to_consider: 1.4
+        GoalAngleCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 0.0
+          threshold_to_consider: 0.5
+        PreferForwardCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 5.0
+          threshold_to_consider: 0.5
+        CostCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 5.0
+          critical_cost: 300.0
+          consider_footprint: true
+          collision_cost: 1000000.0
+          near_goal_distance: 1.0
+          trajectory_point_step: 2
+        PathAlignCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 5.0
+          max_path_occupancy_ratio: 0.05
+          trajectory_point_step: 4
+          threshold_to_consider: 0.5
+          offset_from_furthest: 10
+          use_path_orientations: false
+        PathFollowCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 5.0
+          offset_from_furthest: 5
+          threshold_to_consider: 1.4
+        PathAngleCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 5.0
+          offset_from_furthest: 4
+          threshold_to_consider: 0.5
+          max_angle_to_furthest: 1.0
+          mode: 0
 
-behavior_server:
-  ros__parameters:
-    use_sim_time: false
-    local_costmap_topic: local_costmap/costmap_raw
-    global_costmap_topic: global_costmap/costmap_raw
-    footprint_topic: local_costmap/published_footprint
-    cycle_frequency: 10.0
-    behavior_plugins: ["backup"]
-    backup:
-      plugin: "nav2_behaviors/BackUp"
-      backup_dist: 0.5
-      backup_speed: 0.1
-    simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 1.5
+  planner_server:
+    ros__parameters:
+      use_sim_time: false
+      planner_plugins: ["GridBased"]
+      costmap_update_timeout: 1.0
+      GridBased:
+        plugin: "nav2_smac_planner/SmacPlannerHybrid"
+        tolerance: 0.3
+        allow_unknown: false
+        max_iterations: 1000000
+        motion_model_for_search: "REEDS_SHEPP"
+        angle_quantization_bins: 72
+        non_straight_penalty: 1.2
+        change_penalty: 1.2
+        minimum_turning_radius: 0.22
+        smooth_path: true
+
+  local_costmap:
+    local_costmap:
+      ros__parameters:
+        update_frequency: 10.0
+        publish_frequency: 5.0
+        use_sim_time: false
+        global_frame: odom
+        robot_base_frame: base_link
+        rolling_window: true
+        width: 6
+        height: 6
+        resolution: 0.05
+        footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
+        plugins: ["obstacle_layer", "depth_layer", "inflation_layer"]
+        obstacle_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          enabled: true
+          observation_sources: scan
+          scan:
+            topic: /scan_corrected
+            max_obstacle_height: 2.0
+            clearing: true
+            marking: true
+            data_type: "LaserScan"
+            raytrace_max_range: 4.0
+            raytrace_min_range: 0.30
+            obstacle_max_range: 4.0
+            obstacle_min_range: 0.30
+        depth_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          enabled: true
+          observation_sources: depth_points
+          depth_points:
+            topic: /ascamera_hp60c/camera_publisher/depth0/points
+            max_obstacle_height: 1.80
+            min_obstacle_height: 0.05
+            clearing: true
+            marking: true
+            data_type: "PointCloud2"
+            raytrace_max_range: 2.5
+            raytrace_min_range: 0.10
+            obstacle_max_range: 2.5
+            obstacle_min_range: 0.10
+        inflation_layer:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          enabled: true
+          cost_scaling_factor: 2.5
+          inflation_radius: 0.65
+
+  global_costmap:
+    global_costmap:
+      ros__parameters:
+        update_frequency: 2.0
+        publish_frequency: 2.0
+        use_sim_time: false
+        global_frame: map
+        robot_base_frame: base_link
+        resolution: 0.05
+        footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
+        track_unknown_space: true
+        plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+        static_layer:
+          plugin: "nav2_costmap_2d::StaticLayer"
+          map_subscribe_transient_local: true
+        obstacle_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          enabled: true
+          observation_sources: scan
+          scan:
+            topic: /scan_corrected
+            max_obstacle_height: 2.0
+            clearing: true
+            marking: true
+            data_type: "LaserScan"
+            raytrace_max_range: 1.0
+            raytrace_min_range: 0.35
+            obstacle_max_range: 1.0
+            obstacle_min_range: 0.35
+        inflation_layer:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          enabled: true
+          cost_scaling_factor: 2.5
+          inflation_radius: 0.65
+
+  velocity_smoother:
+    ros__parameters:
+      use_sim_time: false
+      smoothing_frequency: 30.0
+      feedback: "OPEN_LOOP"
+      max_velocity: [0.40, 0.0, 0.8]
+      min_velocity: [-0.15, 0.0, -0.8]
+      max_accel: [0.5, 0.0, 1.0]
+      max_decel: [-0.5, 0.0, -1.0]
+      odom_topic: /odom
+      velocity_timeout: 1.0
+
+  behavior_server:
+    ros__parameters:
+      use_sim_time: false
+      local_costmap_topic: local_costmap/costmap_raw
+      global_costmap_topic: global_costmap/costmap_raw
+      footprint_topic: local_costmap/published_footprint
+      cycle_frequency: 10.0
+      behavior_plugins: ["backup", "spin"]
+      backup:
+        plugin: "nav2_behaviors/BackUp"
+        backup_dist: 0.5
+        backup_speed: 0.3
+      spin:
+        plugin: "nav2_behaviors/Spin"
+      simulate_ahead_time: 2.0
+      max_rotational_vel: 0.8
+      min_rotational_vel: 0.25
+      rotational_acc_lim: 1.5
