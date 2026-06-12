@@ -18,7 +18,7 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 IMU_ALPHA = 0.95
 
 # Velocity limits
-VMAX   = 0.25    # m/s ? cap wheel speed to match nav2 vx_max
+VMAX   = 0.40    # m/s ? cap wheel speed to match nav2 vx_max
 V_DEAD = 0.02    # m/s ? below this send 0 RPM (stops motor)
 
 
@@ -66,7 +66,11 @@ class SerialBridge(Node):
         self.prev_left  = None
         self.prev_right = None
         self.last_time  = self.get_clock().now()
-        self.last_cmd   = self.get_clock().now()
+        self.last_cmd        = self.get_clock().now()
+        self._last_watchdog_stop = False
+        self._out_rpm_l = 0.0   # last RPM actually sent (used for direction-change ramp)
+        self._out_rpm_r = 0.0
+        self._RPM_RAMP  = 5.0   # RPM per cmd_cb call when stepping through zero
 
         self.create_timer(0.02, self.publish_tf)
         self.create_timer(0.01, self.read_serial)
@@ -93,12 +97,25 @@ class SerialBridge(Node):
 
     def watchdog(self):
         elapsed = (self.get_clock().now() - self.last_cmd).nanoseconds / 1e9
-        if elapsed > 1.0:
+        if elapsed > 1.0 and not self._last_watchdog_stop:
             try:
                 self.ser.write(b'S\n')
                 self.ser.flush()
+                self._last_watchdog_stop = True
             except Exception:
                 pass
+
+    def _ramp_rpm(self, current: float, target: float) -> float:
+        """Step RPM toward target; on direction flip, reset through zero first.
+        Nav2 commands already smoothed by velocity_smoother arrive in tiny steps
+        (< _RPM_RAMP) so they pass through unchanged. Only large jumps (direct
+        teleop, or any sudden sign change) are slowed down ? matching backup."""
+        if current * target < 0:   # direction change: treat current as zero
+            current = 0.0
+        diff = target - current
+        if abs(diff) <= self._RPM_RAMP:
+            return target
+        return current + math.copysign(self._RPM_RAMP, diff)
 
     def _v_to_rpm(self, v: float) -> float:
         """Convert wheel velocity (m/s) to RPM. Returns 0.0 below V_DEAD."""
@@ -108,6 +125,7 @@ class SerialBridge(Node):
 
     def cmd_cb(self, msg: Twist):
         self.last_cmd = self.get_clock().now()
+        self._last_watchdog_stop = False
         lin = msg.linear.x
         ang = msg.angular.z
         self.get_logger().info(f'cmd_cb: lin={lin:.3f} ang={ang:.3f}')
@@ -138,6 +156,12 @@ class SerialBridge(Node):
 
             rpm_l = self._v_to_rpm(v_l)
             rpm_r = self._v_to_rpm(v_r)
+
+        # Ramp through zero on direction change so ESC accepts reverse
+        rpm_l = self._ramp_rpm(self._out_rpm_l, rpm_l)
+        rpm_r = self._ramp_rpm(self._out_rpm_r, rpm_r)
+        self._out_rpm_l = rpm_l
+        self._out_rpm_r = rpm_r
 
         try:
             cmd_str = f"V {rpm_l:.2f} {rpm_r:.2f}\n"
@@ -206,19 +230,6 @@ class SerialBridge(Node):
         w  = d_theta  / dt if dt > 0 else 0.0
         qz = math.sin(self.theta / 2.0)
         qw = math.cos(self.theta / 2.0)
-
-        tf = TransformStamped()
-        tf.header.stamp    = now.to_msg()
-        tf.header.frame_id = 'odom'
-        tf.child_frame_id  = 'base_footprint'
-        tf.transform.translation.x = self.x
-        tf.transform.translation.y = self.y
-        tf.transform.translation.z = 0.0
-        tf.transform.rotation.x    = 0.0
-        tf.transform.rotation.y    = 0.0
-        tf.transform.rotation.z    = qz
-        tf.transform.rotation.w    = qw
-        self.tf_broadcaster.sendTransform(tf)
 
         odom = Odometry()
         odom.header.stamp            = now.to_msg()

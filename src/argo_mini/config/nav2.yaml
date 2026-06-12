@@ -196,7 +196,7 @@
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
           cost_scaling_factor: 2.5
-          inflation_radius: 0.65
+          inflation_radius: 0.40
 
   global_costmap:
     global_costmap:
@@ -231,7 +231,7 @@
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
           cost_scaling_factor: 2.5
-          inflation_radius: 0.65
+          inflation_radius: 0.40
 
   velocity_smoother:
     ros__parameters:

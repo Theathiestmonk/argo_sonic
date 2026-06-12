@@ -17,8 +17,8 @@
 #define DIR_R 4
 
 // ?? DAC range ?????????????????????????????????????????????????????????????
-#define DAC_MIN       100
-#define DAC_MAX       120
+#define DAC_MIN       108
+#define DAC_MAX       135
 #define POLE_PAIRS    10
 #define TICKS_PER_REV (POLE_PAIRS * 6)
 
@@ -57,9 +57,11 @@ void IRAM_ATTR rightISR() {
 }
 
 // ?? Motor drive ???????????????????????????????????????????????????????????
+// Direction comes from the global flags, NOT the sign of l/r.
+// This way setDAC(0, 0) during a hold still drives DIR correctly.
 void setDAC(int l, int r) {
-  digitalWrite(DIR_L, (l < 0) ? LOW : HIGH);
-  digitalWrite(DIR_R, (r < 0) ? LOW : HIGH);
+  digitalWrite(DIR_L, leftReverse  ? LOW : HIGH);
+  digitalWrite(DIR_R, rightReverse ? LOW : HIGH);
   dac_output_voltage(THROTTLE_L, (l == 0) ? 0 : constrain(abs(l), DAC_MIN, DAC_MAX));
   dac_output_voltage(THROTTLE_R, (r == 0) ? 0 : constrain(abs(r), DAC_MIN, DAC_MAX));
 }
@@ -68,6 +70,10 @@ void setDAC(int l, int r) {
 float targetRpmL = 0.0f, targetRpmR = 0.0f;
 float integralL  = 0.0f, integralR  = 0.0f;
 int   dacL = 0, dacR = 0;
+// Cycles to hold DAC=0 after a direction flip so the ESC sees the new DIR pin
+// before throttle is applied (3 × 50 ms = 150 ms).
+uint8_t holdCyclesL = 0, holdCyclesR = 0;
+#define DIR_HOLD_CYCLES 3
 
 // ?? Setup ?????????????????????????????????????????????????????????????????
 void setup() {
@@ -114,11 +120,19 @@ void loop() {
         if (rL > 0 && rR < 0) rR = -rL;
         else if (rL < 0 && rR > 0) rL = -rR;
 
+        bool newLeftRev  = (rL < 0);
+        bool newRightRev = (rR < 0);
+
+        // On direction flip: clear integral and hold DAC at 0 so the ESC sees
+        // the new DIR pin state before throttle is reapplied.
+        if (newLeftRev  != leftReverse)  { integralL = 0.0f; holdCyclesL = DIR_HOLD_CYCLES; }
+        if (newRightRev != rightReverse) { integralR = 0.0f; holdCyclesR = DIR_HOLD_CYCLES; }
+
         targetRpmL = rL;
         targetRpmR = rR;
 
-        leftReverse  = (targetRpmL < 0);
-        rightReverse = (targetRpmR < 0);
+        leftReverse  = newLeftRev;
+        rightReverse = newRightRev;
         digitalWrite(DIR_L, leftReverse  ? LOW : HIGH);
         digitalWrite(DIR_R, rightReverse ? LOW : HIGH);
       }
@@ -126,9 +140,10 @@ void loop() {
       targetRpmL = 0; targetRpmR = 0;
       integralL  = 0; integralR  = 0;
       dacL = 0;       dacR = 0;
+      holdCyclesL = 0; holdCyclesR = 0;
       leftReverse  = false;
       rightReverse = false;
-      setDAC(0, 0);
+      setDAC(0, 0);   // globals false ? DIR HIGH, DAC 0
       Serial.println("STOP");
     } else if (line == "R") {
       noInterrupts();
@@ -156,7 +171,11 @@ void loop() {
     float measRpmR = (float)rp / elapsed * 60.0f / TICKS_PER_REV;
 
     // PI ? left wheel
-    if (abs(targetRpmL) < 1.0f) {
+    if (holdCyclesL > 0) {
+      // DIR pin already set; hold throttle at 0 so ESC recognises direction change
+      dacL = 0;
+      holdCyclesL--;
+    } else if (abs(targetRpmL) < 1.0f) {
       dacL = 0;
       integralL = 0.0f;
     } else {
@@ -166,7 +185,10 @@ void loop() {
     }
 
     // PI ? right wheel
-    if (abs(targetRpmR) < 1.0f) {
+    if (holdCyclesR > 0) {
+      dacR = 0;
+      holdCyclesR--;
+    } else if (abs(targetRpmR) < 1.0f) {
       dacR = 0;
       integralR = 0.0f;
     } else {
@@ -175,7 +197,9 @@ void loop() {
       dacR = constrain(DAC_MIN + (int)(KP * errR + KI * integralR), DAC_MIN, DAC_MAX);
     }
 
-    setDAC(leftReverse ? -dacL : dacL, rightReverse ? -dacR : dacR);
+    // dacL/dacR are always positive magnitudes; setDAC uses leftReverse/rightReverse
+    // globals for direction, so passing 0 during a hold still keeps DIR correct.
+    setDAC(dacL, dacR);
 
     // Publish odometry ticks at 20 Hz
     Serial.printf("O %ld %ld\n", lt, rt);
