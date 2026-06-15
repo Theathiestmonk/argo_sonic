@@ -1,0 +1,42 @@
+{
+  "restaurant": "Argo Kitchen",
+  "currency": "INR",
+  "menu": [
+    { "id": "S001", "name": "Paneer Tikka",       "category": "starter",  "price": 220, "veg": true,  "tags": ["paneer","tikka","starter"] },
+    { "id": "S002", "name": "Chicken Tikka",       "category": "starter",  "price": 280, "veg": false, "tags": ["chicken","tikka","starter"] },
+    { "id": "S003", "name": "Veg Spring Roll",     "category": "starter",  "price": 160, "veg": true,  "tags": ["veg","spring roll","starter"] },
+    { "id": "S004", "name": "Chicken Wings",       "category": "starter",  "price": 320, "veg": false, "tags": ["chicken","wings","starter"] },
+    { "id": "S005", "name": "Hara Bhara Kebab",    "category": "starter",  "price": 180, "veg": true,  "tags": ["kebab","veg","starter"] },
+
+    { "id": "M001", "name": "Paneer Butter Masala","category": "main",     "price": 280, "veg": true,  "tags": ["paneer","butter","masala","curry"] },
+    { "id": "M002", "name": "Paneer Pizza",        "category": "main",     "price": 340, "veg": true,  "tags": ["paneer","pizza"] },
+    { "id": "M003", "name": "Chicken Biryani",     "category": "main",     "price": 380, "veg": false, "tags": ["chicken","biryani","rice"] },
+    { "id": "M004", "name": "Veg Biryani",         "category": "main",     "price": 280, "veg": true,  "tags": ["veg","biryani","rice"] },
+    { "id": "M005", "name": "Dal Makhani",         "category": "main",     "price": 240, "veg": true,  "tags": ["dal","lentil","curry"] },
+    { "id": "M006", "name": "Butter Chicken",      "category": "main",     "price": 360, "veg": false, "tags": ["butter","chicken","curry"] },
+    { "id": "M007", "name": "Palak Paneer",        "category": "main",     "price": 260, "veg": true,  "tags": ["palak","spinach","paneer","curry"] },
+    { "id": "M008", "name": "Mutton Rogan Josh",   "category": "main",     "price": 440, "veg": false, "tags": ["mutton","rogan","josh","curry"] },
+    { "id": "M009", "name": "Margherita Pizza",    "category": "main",     "price": 300, "veg": true,  "tags": ["pizza","margherita","cheese"] },
+    { "id": "M010", "name": "Chicken Pizza",       "category": "main",     "price": 360, "veg": false, "tags": ["pizza","chicken"] },
+
+    { "id": "B001", "name": "Butter Naan",         "category": "bread",    "price":  60, "veg": true,  "tags": ["naan","bread","butter"] },
+    { "id": "B002", "name": "Garlic Naan",         "category": "bread",    "price":  70, "veg": true,  "tags": ["naan","garlic","bread"] },
+    { "id": "B003", "name": "Tandoori Roti",       "category": "bread",    "price":  40, "veg": true,  "tags": ["roti","tandoori","bread"] },
+    { "id": "B004", "name": "Garlic Bread",        "category": "bread",    "price":  90, "veg": true,  "tags": ["garlic","bread","toast"] },
+    { "id": "B005", "name": "Paratha",             "category": "bread",    "price":  50, "veg": true,  "tags": ["paratha","bread"] },
+
+    { "id": "R001", "name": "Steamed Rice",        "category": "rice",     "price":  80, "veg": true,  "tags": ["rice","plain","steamed"] },
+    { "id": "R002", "name": "Jeera Rice",          "category": "rice",     "price": 100, "veg": true,  "tags": ["rice","jeera","cumin"] },
+
+    { "id": "D001", "name": "Gulab Jamun",         "category": "dessert",  "price": 100, "veg": true,  "tags": ["sweet","gulab","jamun","dessert"] },
+    { "id": "D002", "name": "Ice Cream",           "category": "dessert",  "price": 120, "veg": true,  "tags": ["ice cream","dessert","cold"] },
+    { "id": "D003", "name": "Rasgulla",            "category": "dessert",  "price":  90, "veg": true,  "tags": ["rasgulla","sweet","dessert"] },
+
+    { "id": "DR01", "name": "Water Bottle",        "category": "drink",    "price":  30, "veg": true,  "tags": ["water","drink"] },
+    { "id": "DR02", "name": "Lassi",               "category": "drink",    "price":  80, "veg": true,  "tags": ["lassi","yogurt","drink"] },
+    { "id": "DR03", "name": "Mango Lassi",         "category": "drink",    "price": 100, "veg": true,  "tags": ["mango","lassi","drink"] },
+    { "id": "DR04", "name": "Cold Coffee",         "category": "drink",    "price": 120, "veg": true,  "tags": ["coffee","cold","drink"] },
+    { "id": "DR05", "name": "Masala Chai",         "category": "drink",    "price":  50, "veg": true,  "tags": ["chai","tea","masala","drink"] },
+    { "id": "DR06", "name": "Fresh Lime Soda",     "category": "drink",    "price":  80, "veg": true,  "tags": ["lime","soda","drink","fresh"] }
+  ]
+}

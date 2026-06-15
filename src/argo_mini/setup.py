@@ -6,7 +6,14 @@ package_name = 'argo_mini'
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name],
+    packages=[
+        package_name,
+        package_name + '.restaurant_agent',
+        package_name + '.restaurant_agent.nodes',
+        package_name + '.restaurant_agent.subgraphs',
+        package_name + '.restaurant_agent.integrations',
+        package_name + '.stt',
+    ],
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -16,6 +23,8 @@ setup(
         ('share/' + package_name + '/config/bt', glob('config/bt/*.xml')),
         ('share/' + package_name + '/urdf', glob('urdf/*.urdf')),
         ('share/' + package_name + '/launch', glob('launch/*.py')),
+        ('share/' + package_name + '/agent_data',
+            glob('argo_mini/restaurant_agent/data/*.json')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,9 +40,12 @@ setup(
             'depth_safety_shield=argo_mini.depth_safety_shield:main',
             'dashboard=argo_mini.dashboard:main',
             'waypoint_ui=argo_mini.waypoint_ui:main',
-            'waypoint_manager=argo_mini.waypoint_ui:main',
+            'waypoint_manager=argo_mini.waypoint_manager:main',
+            'voice_agent=argo_mini.voice_agent:main',
+            'voice_agent2=argo_mini.voice_agent2:main',
             'slam_teleop=argo_mini.slam_teleop:main',
             'pose_setter=argo_mini.pose_setter:main',
+            'restaurant_agent=argo_mini.restaurant_agent_node:main',
         ],
     },
 )
