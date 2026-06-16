@@ -31,6 +31,8 @@
 
         <BackUp backup_dist="0.20" backup_speed="0.30"/>
 
+        <Spin spin_dist="1.57"/>
+
       </RoundRobin>
 
     </RecoveryNode>
