@@ -78,7 +78,7 @@
         TrajectoryValidator:
           plugin: "nav2_mppi_controller::DefaultOptimalTrajectoryValidator"
           collision_lookahead_time: 2.0
-          consider_footprint: true
+          consider_footprint: false
         critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
         ConstraintCritic:
           enabled: true
@@ -112,7 +112,7 @@
           enabled: true
           cost_power: 1
           cost_weight: 5.0
-          max_path_occupancy_ratio: 0.05
+          max_path_occupancy_ratio: 0.15
           trajectory_point_step: 4
           threshold_to_consider: 0.5
           offset_from_furthest: 10
@@ -179,7 +179,7 @@
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
           cost_scaling_factor: 2.5
-          inflation_radius: 0.40
+          inflation_radius: 0.25
 
   velocity_smoother:
     ros__parameters:
