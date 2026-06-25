@@ -284,14 +284,17 @@ def wait_lifecycle_active(node, env, timeout=30):
     log(f"Timeout – {node} never reached active state", "warn")
     return False
 
-def lc_node(node, env):
+def lc_node(node, env, configure_timeout=20, activate_timeout=15):
     log(f"Lifecycle configure  {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} configure 2>&1 | tail -1", env)
-    time.sleep(2)
+    runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
+    if not wait_lifecycle_state(node, 'inactive', env, timeout=configure_timeout):
+        log(f"Configure timeout for {node} – proceeding anyway", "warn")
     log(f"Lifecycle activate   {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} activate 2>&1 | tail -1", env)
-    time.sleep(2)
-    log(f"Active  {node}", "ok")
+    runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
+    if wait_lifecycle_state(node, 'active', env, timeout=activate_timeout):
+        log(f"Active  {node}", "ok")
+    else:
+        log(f"FAILED to activate {node} – check node logs", "fail")
 
 def wait_lifecycle_state(node, state, env, timeout=30):
     """Poll ros2 lifecycle get until node reports the expected state."""
