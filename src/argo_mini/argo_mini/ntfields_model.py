@@ -370,7 +370,7 @@ class NTFieldsModel:
         }, path)
 
     def load(self, path: str) -> 'CoordNormalizer | None':
-        ckpt = torch.load(path, map_location=self.device)
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.epoch = ckpt['epoch']
         self.dim   = ckpt['dim']
         self.B     = ckpt['B']

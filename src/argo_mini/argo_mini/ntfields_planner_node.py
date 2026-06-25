@@ -61,22 +61,14 @@ class NTFieldsPlannerNode(LifecycleNode):
         self._tf_buf     = tf2_ros.Buffer()
         self._tf_listen  = tf2_ros.TransformListener(self._tf_buf, self)
 
-        self.get_logger().info(
-            f'[NTFieldsPlanner] configured  model={self._model_path}  '
-            f'device={self._device}')
-        return TransitionCallbackReturn.SUCCESS
-
-    # ── activate ──────────────────────────────────────────────────────────────
-
-    def on_activate(self, state: State) -> TransitionCallbackReturn:
+        # Load model at configure time so on_activate is instant
         if not self._model_path or not os.path.exists(self._model_path):
             self.get_logger().error(
                 f'[NTFieldsPlanner] model not found: {self._model_path}')
             return TransitionCallbackReturn.FAILURE
 
         t0 = time.time()
-        self.get_logger().info(
-            f'[NTFieldsPlanner] loading {self._model_path}…')
+        self.get_logger().info(f'[NTFieldsPlanner] loading {self._model_path}…')
         self._model = NTFieldsModel(dim=2, device=self._device)
         self._norm  = self._model.load(self._model_path)
 
@@ -87,9 +79,17 @@ class NTFieldsPlannerNode(LifecycleNode):
             return TransitionCallbackReturn.FAILURE
 
         self.get_logger().info(
-            f'[NTFieldsPlanner] model loaded in {time.time()-t0:.2f}s  '
-            f'epoch={self._model.epoch}  '
-            f'scale={self._norm.scale:.2f}m')
+            f'[NTFieldsPlanner] configured  model loaded in {time.time()-t0:.2f}s  '
+            f'epoch={self._model.epoch}  scale={self._norm.scale:.2f}m  '
+            f'device={self._device}')
+        return TransitionCallbackReturn.SUCCESS
+
+    # ── activate ──────────────────────────────────────────────────────────────
+
+    def on_activate(self, state: State) -> TransitionCallbackReturn:
+        if self._model is None:
+            self.get_logger().error('[NTFieldsPlanner] model not loaded – configure first')
+            return TransitionCallbackReturn.FAILURE
 
         self._action_server = ActionServer(
             self,
