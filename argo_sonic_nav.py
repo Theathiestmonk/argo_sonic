@@ -74,8 +74,8 @@ TOTAL_STEPS = 13
 STEP_NAMES = [
     "Robot State Publisher", "Camera TF Bridge",    "Serial Bridge",
     "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
-    "Behavior Server",       "NTFields Planner",     "Controller Server",
-    "Velocity Smoother",     "BT Navigator",         "Depth Camera",
+    "NTFields Planner",      "Controller Server",    "Velocity Smoother",
+    "Behavior Server",       "BT Navigator",         "Depth Camera",
     "Safety Shield",
 ]
 
@@ -437,17 +437,12 @@ def main():
     launch("SLAM Toolbox",
            (f"ros2 run slam_toolbox localization_slam_toolbox_node --ros-args "
             f"--params-file {slam_cfg} -p map_file_name:={map_base}"), env)
-    time.sleep(5); step_done("SLAM Toolbox")
+    # Wait for SLAM to publish /map before Nav2 nodes configure (needs TF)
+    if not wait_topic("/map", env, timeout=30):
+        log("SLAM map not published – check map file path", "warn")
+    time.sleep(3); step_done("SLAM Toolbox")
 
-    # ── 7. Behavior Server ────────────────────────────────────────────────────
-    launch("Behavior Server",
-           (f"ros2 run nav2_behaviors behavior_server --ros-args "
-            f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
-    time.sleep(5)
-    lc_node("/behavior_server", env)
-    step_done("Behavior Server")
-
-    # ── 8. NTFields Planner ───────────────────────────────────────────────────
+    # ── 7. NTFields Planner ───────────────────────────────────────────────────
     launch("NTFields Planner",
            (f"ros2 run argo_mini ntfields_planner_node --ros-args "
             f"--params-file {ntfields_cfg}"), env)
@@ -455,18 +450,27 @@ def main():
     lc_ntfields("/planner_server", env)
     step_done("NTFields Planner")
 
-    # ── 9. Controller Server ──────────────────────────────────────────────────
+    # ── 8. Controller Server ──────────────────────────────────────────────────
     launch("Controller Server",
            (f"ros2 run nav2_controller controller_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
     time.sleep(3); lc_node("/controller_server", env); step_done("Controller Server")
 
-    # ── 10. Velocity Smoother ─────────────────────────────────────────────────
+    # ── 9. Velocity Smoother ──────────────────────────────────────────────────
     launch("Velocity Smoother",
            (f"ros2 run nav2_velocity_smoother velocity_smoother --ros-args "
             f"--params-file {nav_cfg} "
             f"-r cmd_vel:=/cmd_vel_raw -r cmd_vel_smoothed:=/cmd_vel_smoothed"), env)
     time.sleep(3); lc_node("/velocity_smoother", env); step_done("Velocity Smoother")
+
+    # ── 10. Behavior Server ───────────────────────────────────────────────────
+    # Launched after controller_server so local costmap TF and /map are available
+    launch("Behavior Server",
+           (f"ros2 run nav2_behaviors behavior_server --ros-args "
+            f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
+    time.sleep(3)
+    lc_node("/behavior_server", env)
+    step_done("Behavior Server")
 
     # ── Wait for all action servers ───────────────────────────────────────────
     log("Waiting for action servers...", "info")
