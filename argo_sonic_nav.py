@@ -298,10 +298,13 @@ def lc_node(node, env, configure_timeout=20, activate_timeout=15):
 
 def wait_lifecycle_state(node, state, env, timeout=30):
     """Poll ros2 lifecycle get until node reports the expected state."""
+    # Use state numbers to avoid substring matches ('active' in 'inactive')
+    _state_num = {'unconfigured': '[1]', 'inactive': '[2]', 'active': '[3]'}
+    target = _state_num.get(state, state)
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = runcmd(f"ros2 lifecycle get {node} 2>/dev/null", env)
-        if state in r.stdout.lower():
+        if target in r.stdout:
             return True
         time.sleep(1)
     return False
