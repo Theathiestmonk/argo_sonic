@@ -9,8 +9,8 @@
       wait_for_service_timeout: 2000
       action_server_result_timeout: 900.0
       transform_tolerance: 0.2
-      default_nav_to_pose_bt_xml: "/home/argo/argo_mini_ws/src/argo_mini/config/bt/navigate_to_pose.xml"
-      default_nav_through_poses_bt_xml: "/home/argo/argo_mini_ws/src/argo_mini/config/bt/navigate_to_pose.xml"
+      default_nav_to_pose_bt_xml: "/home/argo/argo_sonic/src/argo_mini/config/bt/navigate_to_pose.xml"
+      default_nav_through_poses_bt_xml: "/home/argo/argo_sonic/src/argo_mini/config/bt/navigate_to_pose.xml"
       plugin_lib_names:
         - nav2_compute_path_to_pose_action_bt_node
         - nav2_follow_path_action_bt_node
