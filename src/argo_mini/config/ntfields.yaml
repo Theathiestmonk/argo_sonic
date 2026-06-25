@@ -5,7 +5,7 @@
 planner_server:
   ros__parameters:
     # Path to the trained model .pt file (set per deployment site)
-    model_path: ~/ntfields_models/site_current.pt
+    model_path: /home/argo/ntfields_models/office_map.pt
 
     # Inference device: 'cuda' for Jetson Orin GPU, 'cpu' as fallback
     device: cuda
