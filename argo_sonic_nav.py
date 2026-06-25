@@ -498,8 +498,9 @@ def main():
     # ── 13. Safety Shield ─────────────────────────────────────────────────────
     launch("Safety Shield",
            ("ros2 run argo_mini depth_safety_shield --ros-args "
-            "-p stop_distance:=0.85 -p tunnel_width:=0.25 -p min_points:=70 "
+            "-p stop_distance:=0.55 -p tunnel_width:=0.25 -p min_points:=70 "
             "-p height_min:=0.20 -p height_max:=1.80 "
+            "-p use_optical_frame:=true "
             "-p input_topic:=/cmd_vel_smoothed -p output_topic:=/cmd_vel "
             "-p depth_topic:=/ascamera_hp60c/camera_publisher/depth0/points"), env)
     time.sleep(5); step_done("Safety Shield")
