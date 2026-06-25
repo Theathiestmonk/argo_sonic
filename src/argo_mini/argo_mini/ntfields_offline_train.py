@@ -23,12 +23,12 @@ import numpy as np
 import yaml
 from PIL import Image
 
-# Locate the argo_mini package regardless of whether it is installed
+# Script lives at src/argo_mini/argo_mini/ — add src/argo_mini/ to path
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, '..', '..'))
+sys.path.insert(0, os.path.join(_HERE, '..'))
 
-from argo_mini.argo_mini.ntfields_model import NTFieldsModel, CoordNormalizer
-from argo_mini.argo_mini.ntfields_speed import sample_training_pairs_from_map
+from argo_mini.ntfields_model import NTFieldsModel, CoordNormalizer
+from argo_mini.ntfields_speed import sample_training_pairs_from_map
 
 
 # ── Map loading ───────────────────────────────────────────────────────────────
