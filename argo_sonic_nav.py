@@ -293,20 +293,34 @@ def lc_node(node, env):
     time.sleep(2)
     log(f"Active  {node}", "ok")
 
+def wait_lifecycle_state(node, state, env, timeout=30):
+    """Poll ros2 lifecycle get until node reports the expected state."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = runcmd(f"ros2 lifecycle get {node} 2>/dev/null", env)
+        if state in r.stdout.lower():
+            return True
+        time.sleep(1)
+    return False
+
 def lc_ntfields(node, env):
     """
     Lifecycle sequence for NTFields planner.
-    configure loads the model (~7s) so we poll for active state
-    instead of relying on the CLI return value.
+    configure loads the model (~7s) which can exceed the CLI default timeout,
+    so we poll the actual node state rather than trusting the CLI return value.
     """
     log(f"Lifecycle configure  {node}  (loading NTFields model...)", "sys")
-    runcmd(f"ros2 lifecycle set {node} configure 2>&1 | tail -1", env)
-    # Wait for configure to complete even if CLI timed out
-    time.sleep(10)
+    runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
+
+    # Wait until node reports 'inactive' (configure done), up to 30s
+    if not wait_lifecycle_state(node, 'inactive', env, timeout=30):
+        log(f"Configure timed out for {node} – model may still be loading", "warn")
+        # Give it extra time before trying activate anyway
+        time.sleep(5)
+
     log(f"Lifecycle activate   {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} activate 2>&1 | tail -1", env)
-    time.sleep(2)
-    # Confirm action server is actually up
+    runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
+
     if wait_action("/compute_path_to_pose", env, timeout=15):
         log(f"Active  {node}  – /compute_path_to_pose ready", "ok")
     else:
@@ -436,7 +450,7 @@ def main():
     launch("NTFields Planner",
            (f"ros2 run argo_mini ntfields_planner_node --ros-args "
             f"--params-file {ntfields_cfg}"), env)
-    time.sleep(3)
+    time.sleep(6)   # Python node + torch import needs extra startup time
     lc_ntfields("/planner_server", env)
     step_done("NTFields Planner")
 
