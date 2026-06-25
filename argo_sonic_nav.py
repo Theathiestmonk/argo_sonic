@@ -416,7 +416,7 @@ def main():
     # ── 3. Serial Bridge ──────────────────────────────────────────────────────
     launch_with_telem("Serial Bridge",
            ("ros2 run argo_mini serial_bridge --ros-args "
-            "-p port:=/dev/ttyUSB1 -p baud:=115200 -p left_tick_scale:=2.0"), env)
+            "-p port:=/dev/ttyUSB1 -p baud:=115200 -p left_tick_scale:=0.66"), env)
     time.sleep(3); step_done("Serial Bridge")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
