@@ -48,7 +48,7 @@
         plugin: "nav2_mppi_controller::MPPIController"
         time_steps: 56
         model_dt: 0.05
-        batch_size: 400 
+        batch_size: 2000
         vx_std: 0.2
         vy_std: 0.2
         wz_std: 0.4
