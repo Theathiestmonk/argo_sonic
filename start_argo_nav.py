@@ -365,7 +365,7 @@ def main():
     env = build_env(home)
     log("Environment ready", "ok")
 
-    ws       = f"{home}/argo_mini_ws"
+    ws       = f"{home}/argo_sonic"
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
     slam_cfg     = f"{ws}/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
     ntfields_cfg = f"{ws}/install/argo_mini/share/argo_mini/config/ntfields.yaml"
