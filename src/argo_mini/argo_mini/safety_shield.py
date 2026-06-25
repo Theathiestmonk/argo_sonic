@@ -36,8 +36,8 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import PointCloud2, Range
 
 # ── Depth camera ──────────────────────────────────────────────────────────────
-DEPTH_STOP_DIST  = 0.10    # m   – last-resort block (Nav2 costmap handles > 10 cm)
-DEPTH_WIDTH_HALF = 0.15    # m   – half-width of danger corridor (~robot width)
+DEPTH_STOP_DIST  = 0.50    # m   – stop if person/obstacle enters forward corridor
+DEPTH_WIDTH_HALF = 0.30    # m   – half-width of danger corridor (~robot width)
 DEPTH_HEIGHT_MIN = -1.30   # opt Y – ignore above robot head
 DEPTH_HEIGHT_MAX =  0.05   # opt Y – ignore floor returns
 DEPTH_MIN_PTS    = 15      # minimum cloud points to confirm obstacle (noise filter)
