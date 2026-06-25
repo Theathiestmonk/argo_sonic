@@ -1,0 +1,35 @@
+# NTFields planner configuration
+# This file is loaded by ntfields_planner_node (replaces nav2 planner_server).
+# Pass with: --params-file /path/to/ntfields.yaml
+
+planner_server:
+  ros__parameters:
+    # Path to the trained model .pt file (set per deployment site)
+    model_path: ~/ntfields_models/site_current.pt
+
+    # Inference device: 'cuda' for Jetson Orin GPU, 'cpu' as fallback
+    device: cuda
+
+    # Gradient descent step size in normalised [-0.5, 0.5] model coordinates.
+    # For a 20 m map (scale=20), step_size=0.015 → ~0.30 m world step.
+    step_size: 0.015
+
+    # Convergence threshold: stop when start and goal are this close (normalised).
+    # 0.025 → ~0.50 m for a 20 m map.
+    tol: 0.025
+
+    # Maximum gradient steps before giving up.
+    max_iter: 400
+
+
+ntfields_data_logger:
+  ros__parameters:
+    # Where to write scan log NPZ files (Mode 2A data collection).
+    output_dir: ~/ntfields_data
+
+    # Only log a frame when the robot has moved at least this far since the last frame.
+    min_move_dist: 0.30    # metres
+    min_move_rad:  0.20    # radians
+
+    # Cap on total frames per logging session.
+    max_frames: 5000

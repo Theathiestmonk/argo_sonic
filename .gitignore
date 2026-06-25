@@ -7,6 +7,3 @@ __pycache__/
 *.o
 *.so
 .DS_Store
-build/
-install/
-log/

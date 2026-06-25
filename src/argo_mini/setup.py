@@ -8,7 +8,6 @@ setup(
     version='0.0.1',
     packages=[
         package_name,
-        package_name + '.ntfields',
         package_name + '.restaurant_agent',
         package_name + '.restaurant_agent.nodes',
         package_name + '.restaurant_agent.subgraphs',
@@ -47,11 +46,8 @@ setup(
             'slam_teleop=argo_mini.slam_teleop:main',
             'pose_setter=argo_mini.pose_setter:main',
             'restaurant_agent=argo_mini.restaurant_agent_node:main',
-            'ntfields_trainer=argo_mini.ntfields_trainer_node:main',
-            'ntfields_navigator=argo_mini.ntfields_navigator_node:main',
-            'ntfields_social_shield=argo_mini.ntfields_social_shield:main',
-            'frontier_explorer=argo_mini.frontier_explorer:main',
-            'safety_shield=argo_mini.safety_shield:main',
+            'ntfields_planner_node=argo_mini.ntfields_planner_node:main',
+            'ntfields_data_logger=argo_mini.ntfields_data_logger:main',
         ],
     },
 )
