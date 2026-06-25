@@ -5,23 +5,29 @@ safety_shield.py – Unified velocity safety gate for Argo Mini.
 Pipeline:
     /cmd_vel_smoothed  –>  [safety_shield]  –>  /cmd_vel
 
-Two independent sensor sources, each with its own stale timeout:
+Three independent sensor sources, each with its own stale timeout:
+
+  Lidar (LaserScan)
+    – Obstacle in forward corridor closer than LIDAR_STOP_DIST -> block forward
+    – Good for legs, chairs, thin objects depth camera may miss
+    – Lidar stale -> lidar vote cleared (other sources still active)
 
   Depth camera (PointCloud2)
     – Obstacle in forward corridor closer than DEPTH_STOP_DIST -> block forward
-    – Camera stale -> camera vote cleared (US still active)
+    – Covers torso-height obstacles not detected by floor-level lidar
+    – Camera stale -> camera vote cleared (other sources still active)
 
   Ultrasonic sensors (Range x 4, published by serial_bridge from ESP32)
     – FL or FR closer than US_FRONT_DIST -> block forward
     – BL or BR closer than US_REAR_DIST  -> block reverse
-    – US stale -> US vote cleared (camera still active)
+    – US stale -> US vote cleared (other sources still active)
 
 Gate logic:
-    forward blocked  = (depth_blocked  OR  us_front_blocked)
+    forward blocked  = (lidar_blocked OR depth_blocked OR us_front_blocked)
     reverse blocked  = us_rear_blocked
     angular.z        = always passes through (robot can always rotate away)
 
-Both sensors stale -> full pass-through so robot never freezes.
+All sensors stale -> full pass-through so robot never freezes.
 """
 
 import math
@@ -33,7 +39,13 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import PointCloud2, Range
+from sensor_msgs.msg import LaserScan, PointCloud2, Range
+
+# ── Lidar ─────────────────────────────────────────────────────────────────────
+LIDAR_STOP_DIST  = 0.70    # m   – stop if obstacle enters forward corridor
+LIDAR_WIDTH_HALF = 0.35    # m   – half-width of danger corridor
+LIDAR_MIN_PTS    = 3       # minimum scan points to confirm obstacle
+LIDAR_STALE_SECS = 1.0     # s   – clear lidar vote if no scan arrives
 
 # ── Depth camera ──────────────────────────────────────────────────────────────
 DEPTH_STOP_DIST  = 0.60    # m   – stop if person/obstacle enters forward corridor
@@ -51,6 +63,7 @@ US_STALE_SECS    = 1.0     # s   – clear US vote if no Range message arrives
 # ── Pipeline topics ───────────────────────────────────────────────────────────
 INPUT_TOPIC  = "/cmd_vel_smoothed"
 OUTPUT_TOPIC = "/cmd_vel"
+LIDAR_TOPIC  = "/scan_corrected"
 DEPTH_TOPIC  = "/ascamera_hp60c/camera_publisher/depth0/points"
 
 # ── Beep ──────────────────────────────────────────────────────────────────────
@@ -79,12 +92,14 @@ class SafetyShield(Node):
         super().__init__("safety_shield")
 
         # ── Internal state (all guarded by _lock) ─────────────────────────────
+        self._lidar_blocked     = False
         self._depth_blocked     = False
         self._us_front_blocked  = False
         self._us_rear_blocked   = False
         self._us_dists          = {'fl': math.inf, 'fr': math.inf,
                                    'bl': math.inf, 'br': math.inf}
 
+        self._last_lidar  = 0.0   # time.monotonic() of last LaserScan
         self._last_depth  = 0.0   # time.monotonic() of last PointCloud2
         self._last_us     = 0.0   # time.monotonic() of last Range message
         self._last_beep   = 0.0
@@ -98,6 +113,9 @@ class SafetyShield(Node):
         )
 
         # ── Subscriptions ──────────────────────────────────────────────────────
+        self.create_subscription(
+            LaserScan, LIDAR_TOPIC, self._on_scan, sensor_qos)
+
         self.create_subscription(
             PointCloud2, DEPTH_TOPIC, self._on_cloud, sensor_qos)
 
@@ -115,12 +133,60 @@ class SafetyShield(Node):
 
         self.get_logger().info(
             f"[SafetyShield] ready\n"
+            f"  lidar  : stop < {LIDAR_STOP_DIST:.2f} m | "
+            f"corridor ±{LIDAR_WIDTH_HALF:.2f} m | min {LIDAR_MIN_PTS} pts\n"
             f"  depth  : stop < {DEPTH_STOP_DIST:.2f} m | "
             f"corridor ±{DEPTH_WIDTH_HALF:.2f} m | min {DEPTH_MIN_PTS} pts\n"
             f"  US fwd : stop < {US_FRONT_DIST:.2f} m (FL / FR)\n"
             f"  US rear: stop < {US_REAR_DIST:.2f}  m (BL / BR)\n"
             f"  {INPUT_TOPIC} -> {OUTPUT_TOPIC}"
         )
+
+    # ── Lidar callback ────────────────────────────────────────────────────────
+
+    def _on_scan(self, msg: LaserScan):
+        self._last_lidar = time.monotonic()
+
+        n = len(msg.ranges)
+        if n == 0:
+            return
+
+        angles = (np.arange(n) * msg.angle_increment + msg.angle_min).astype(np.float32)
+        ranges = np.array(msg.ranges, dtype=np.float32)
+
+        valid = (
+            np.isfinite(ranges)
+            & (ranges > msg.range_min)
+            & (ranges < msg.range_max)
+        )
+
+        # laser frame: x = forward (cos), y = left (sin)
+        x = ranges * np.cos(angles)
+        y = ranges * np.sin(angles)
+
+        danger = (
+            valid
+            & (x > 0.10)                        # skip near-range mount noise
+            & (x < LIDAR_STOP_DIST)
+            & (np.abs(y) < LIDAR_WIDTH_HALF)
+        )
+
+        n_pts   = int(np.sum(danger))
+        blocked = n_pts >= LIDAR_MIN_PTS
+
+        with self._lock:
+            prev = self._lidar_blocked
+            self._lidar_blocked = blocked
+            min_x = float(x[danger].min()) if (blocked and n_pts) else 0.0
+
+        if blocked and not prev:
+            self.get_logger().warn(
+                f"[SafetyShield] *** FORWARD BLOCKED (lidar) *** "
+                f"obstacle at {min_x:.2f} m ({n_pts} pts)"
+            )
+            self._maybe_beep()
+        elif not blocked and prev:
+            self.get_logger().info("[SafetyShield] forward clear (lidar)")
 
     # ── Depth camera callback ──────────────────────────────────────────────────
 
@@ -217,13 +283,15 @@ class SafetyShield(Node):
     # ── Velocity gate ──────────────────────────────────────────────────────────
 
     def _on_cmd(self, msg: Twist):
-        now         = time.monotonic()
-        depth_stale = (now - self._last_depth) > DEPTH_STALE_SECS
-        us_stale    = (now - self._last_us)    > US_STALE_SECS
+        now          = time.monotonic()
+        lidar_stale  = (now - self._last_lidar) > LIDAR_STALE_SECS
+        depth_stale  = (now - self._last_depth) > DEPTH_STALE_SECS
+        us_stale     = (now - self._last_us)    > US_STALE_SECS
 
         with self._lock:
             fwd_blocked = (
-                (not depth_stale and self._depth_blocked)
+                (not lidar_stale and self._lidar_blocked)
+                or (not depth_stale and self._depth_blocked)
                 or (not us_stale  and self._us_front_blocked)
             )
             rear_blocked = not us_stale and self._us_rear_blocked
