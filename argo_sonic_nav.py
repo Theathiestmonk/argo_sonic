@@ -382,7 +382,7 @@ def main():
         "ntfields_planner_node", "planner_server", "controller_server",
         "bt_navigator", "velocity_smoother", "scan_relay",
         "robot_state_publisher", "depth_safety_shield",
-        "ascamera_node", "behavior_server",
+        "ascamera_node", "behavior_server", "safety_shield",
     ]:
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
@@ -496,14 +496,8 @@ def main():
         cleanup()
 
     # ── 13. Safety Shield ─────────────────────────────────────────────────────
-    launch("Safety Shield",
-           ("ros2 run argo_mini depth_safety_shield --ros-args "
-            "-p stop_distance:=0.55 -p tunnel_width:=0.25 -p min_points:=70 "
-            "-p height_min:=0.20 -p height_max:=1.80 "
-            "-p use_optical_frame:=true "
-            "-p input_topic:=/cmd_vel_smoothed -p output_topic:=/cmd_vel "
-            "-p depth_topic:=/ascamera_hp60c/camera_publisher/depth0/points"), env)
-    time.sleep(5); step_done("Safety Shield")
+    launch("Safety Shield", "ros2 run argo_mini safety_shield", env)
+    time.sleep(3); step_done("Safety Shield")
 
     # ── RViz ──────────────────────────────────────────────────────────────────
     env["DISPLAY"] = ":1"
