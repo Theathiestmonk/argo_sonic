@@ -2,16 +2,7 @@
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
 
-    <!--
-      Recovery priority (RoundRobin cycles in order per failure):
-        1. Clear costmaps + wait 3 s  ? resolves most transient issues
-        2. Spin 45?                   ? unstuck from tight spot
-        3. Back up 20 cm              ? escape obstacle in front
-      Each recovery returns SUCCESS so RecoveryNode retries navigation.
-      Only stops when goal is reached or a new goal preempts.
-    -->
-
-    <RecoveryNode number_of_retries="1000000" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
 
       <PipelineSequence name="NavigateWithReplanning">
         <RateController hz="3.0">
@@ -21,18 +12,8 @@
       </PipelineSequence>
 
       <RoundRobin name="RecoveryActions">
-
-        <Sequence name="ClearCostmaps">
-          <ClearEntireCostmap name="ClearLocalCostmap"
-            service_name="local_costmap/clear_entirely_local_costmap"/>
-          <ClearEntireCostmap name="ClearGlobalCostmap"
-            service_name="global_costmap/clear_entirely_global_costmap"/>
-        </Sequence>
-
         <BackUp backup_dist="0.20" backup_speed="0.30"/>
-
         <Spin spin_dist="1.57"/>
-
       </RoundRobin>
 
     </RecoveryNode>

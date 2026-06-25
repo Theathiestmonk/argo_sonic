@@ -20,7 +20,6 @@
         - nav2_round_robin_node_bt_node
         - nav2_back_up_action_bt_node
         - nav2_spin_action_bt_node
-        - nav2_clear_costmap_service_bt_node
         - nav2_wait_action_bt_node
 
   controller_server:
@@ -133,23 +132,6 @@
           max_angle_to_furthest: 1.0
           mode: 0
 
-  planner_server:
-    ros__parameters:
-      use_sim_time: false
-      planner_plugins: ["GridBased"]
-      costmap_update_timeout: 1.0
-      GridBased:
-        plugin: "nav2_smac_planner/SmacPlannerHybrid"
-        tolerance: 0.3
-        allow_unknown: false
-        max_iterations: 1000000
-        motion_model_for_search: "REEDS_SHEPP"
-        angle_quantization_bins: 72
-        non_straight_penalty: 1.2
-        change_penalty: 1.2
-        minimum_turning_radius: 0.22
-        smooth_path: true
-
   local_costmap:
     local_costmap:
       ros__parameters:
@@ -193,41 +175,6 @@
             raytrace_min_range: 0.10
             obstacle_max_range: 2.5
             obstacle_min_range: 0.10
-        inflation_layer:
-          plugin: "nav2_costmap_2d::InflationLayer"
-          enabled: true
-          cost_scaling_factor: 2.5
-          inflation_radius: 0.40
-
-  global_costmap:
-    global_costmap:
-      ros__parameters:
-        update_frequency: 2.0
-        publish_frequency: 2.0
-        use_sim_time: false
-        global_frame: map
-        robot_base_frame: base_link
-        resolution: 0.05
-        footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
-        track_unknown_space: true
-        plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-        static_layer:
-          plugin: "nav2_costmap_2d::StaticLayer"
-          map_subscribe_transient_local: true
-        obstacle_layer:
-          plugin: "nav2_costmap_2d::ObstacleLayer"
-          enabled: true
-          observation_sources: scan
-          scan:
-            topic: /scan_corrected
-            max_obstacle_height: 2.0
-            clearing: true
-            marking: true
-            data_type: "LaserScan"
-            raytrace_max_range: 1.0
-            raytrace_min_range: 0.35
-            obstacle_max_range: 1.0
-            obstacle_min_range: 0.35
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
