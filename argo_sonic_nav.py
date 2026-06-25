@@ -441,8 +441,6 @@ def main():
            (f"ros2 run nav2_behaviors behavior_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
     time.sleep(5)
-    wait_topic("/local_costmap/costmap_raw", env, 15)
-    wait_topic("/global_costmap/costmap_raw", env, 15)
     lc_node("/behavior_server", env)
     step_done("Behavior Server")
 
