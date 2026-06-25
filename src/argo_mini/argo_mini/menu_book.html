@@ -1,0 +1,935 @@
+  <!DOCTYPE html>
+  <html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crazy Plant Lady — Menu Book</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      :root {
+        --leaf: #5a7a4a;
+        --ink: #1c1a14;
+        --cream: #ede8dc;
+        --paper: #faf7f0;
+        --paper-shade: #f0ebe0;
+        --border: rgba(28,26,20,0.14);
+        --font: 'Playfair Display', Georgia, serif;
+      }
+
+      body {
+        font-family: var(--font);
+        background: var(--cream);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        padding: 28px 16px 40px;
+        color: var(--ink);
+      }
+
+      /* ── Header ─────────────────────────────── */
+      .site-header { text-align: center; }
+      .site-header .sub  { font-size: 10px; letter-spacing: .45em; color: var(--leaf); text-transform: uppercase; margin-bottom: 4px; }
+      .site-header h1    { font-size: clamp(1.5rem, 4vw, 2.1rem); font-weight: 700; }
+
+      /* ── Book stage ──────────────────────────── */
+      .book-stage {
+        position: relative;
+        width: 100%;
+        max-width: 420px;
+      }
+      .book-stage.is-spread { max-width: 840px; }
+
+      .book-shadow {
+        position: absolute;
+        bottom: -10px; left: 6%; right: 6%;
+        height: 18px;
+        background: rgba(0,0,0,.18);
+        filter: blur(12px);
+        border-radius: 50%;
+      }
+
+      .book-spread {
+        position: relative;
+        display: flex;
+        height: 540px;
+        border-radius: 3px;
+        overflow: hidden;
+        perspective: 2000px;
+        z-index: 1;
+        box-shadow: 0 4px 32px rgba(0,0,0,.18), 0 1px 4px rgba(0,0,0,.12);
+      }
+
+      .book-page {
+        flex: 1;
+        background: var(--paper);
+        overflow: hidden;
+        position: relative;
+      }
+      .book-page--left  { box-shadow: inset -3px 0 12px rgba(0,0,0,.07); }
+      .book-page--right { box-shadow: inset  3px 0 8px rgba(0,0,0,.04); }
+      .is-single .book-page--right { box-shadow: none; }
+
+      .book-spine {
+        position: absolute;
+        left: 50%; top: 0; bottom: 0;
+        width: 4px;
+        transform: translateX(-50%);
+        background: linear-gradient(90deg, rgba(0,0,0,.10), rgba(0,0,0,.03));
+        pointer-events: none;
+        z-index: 10;
+      }
+
+      /* ── Flip animation ──────────────────────── */
+      .book-flipper {
+        position: absolute;
+        top: 0; bottom: 0;
+        transform-style: preserve-3d;
+        z-index: 20;
+      }
+
+      .book-face {
+        position: absolute;
+        inset: 0;
+        backface-visibility: hidden;
+        -webkit-backface-visibility: hidden;
+        background: var(--paper);
+        overflow: hidden;
+      }
+      .book-face--back { transform: rotateY(180deg); }
+
+      /* Next: right half flips left */
+      .flip-next-half {
+        right: 0; left: 50%;
+        transform-origin: left center;
+        animation: flipNextA .75s cubic-bezier(.645,.045,.355,1) forwards;
+        box-shadow: -6px 0 20px rgba(0,0,0,.14);
+      }
+      .flip-next-full {
+        inset: 0;
+        transform-origin: left center;
+        animation: flipNextA .75s cubic-bezier(.645,.045,.355,1) forwards;
+      }
+      @keyframes flipNextA {
+        from { transform: rotateY(0deg); }
+        to   { transform: rotateY(-180deg); }
+      }
+
+      /* Prev: left half flips right */
+      .flip-prev-half {
+        left: 0; right: 50%;
+        transform-origin: right center;
+        animation: flipPrevA .75s cubic-bezier(.645,.045,.355,1) forwards;
+        box-shadow: 6px 0 20px rgba(0,0,0,.14);
+      }
+      .flip-prev-full {
+        inset: 0;
+        transform-origin: right center;
+        animation: flipPrevA .75s cubic-bezier(.645,.045,.355,1) forwards;
+      }
+      @keyframes flipPrevA {
+        from { transform: rotateY(0deg); }
+        to   { transform: rotateY(180deg); }
+      }
+
+      /* ── Page inner content ──────────────────── */
+      .page-inner {
+        padding: 30px 26px;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      /* Cover */
+      .page-cover { align-items: center; justify-content: center; text-align: center; }
+      .deco { font-size: 50px; color: var(--leaf); line-height: 1; }
+      .cover-est  { font-size: 10px; letter-spacing: .45em; color: var(--leaf); text-transform: uppercase; margin: 14px 0 10px; }
+      .cover-h    { font-size: clamp(1.8rem, 4vw, 2.4rem); font-weight: 700; line-height: 1.2; }
+      .cover-sub  { font-size: 12px; font-style: italic; color: rgba(28,26,20,.55); margin-top: 8px; }
+      .cover-div  { width: 80px; height: 1px; background: rgba(28,26,20,.2); margin: 20px auto; }
+      .cover-menu { font-size: 11px; letter-spacing: .3em; color: rgba(28,26,20,.38); }
+
+      /* Chapter tag */
+      .chapter-tag { font-size: 10px; letter-spacing: .45em; color: var(--leaf); text-transform: uppercase; margin-bottom: 6px; }
+
+      /* Section heading */
+      .sec-heading { font-size: 1.6rem; font-weight: 700; line-height: 1.2; margin-bottom: 4px; }
+      .sec-sub     { font-size: 12px; font-style: italic; color: rgba(28,26,20,.55); }
+      .sec-divider { border: none; border-top: 1px solid var(--border); margin: 10px 0 12px; }
+
+      /* ToC */
+      .toc { list-style: none; margin-top: 20px; }
+      .toc li { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; color: rgba(28,26,20,.7); }
+      .toc li.toc-sep { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 12px; }
+
+      /* Welcome body */
+      .welcome-body { font-size: 14px; font-style: italic; color: rgba(28,26,20,.65); line-height: 1.65; margin-top: 14px; }
+
+      /* Menu items list */
+      .menu-items { list-style: none; flex: 1; overflow-y: auto; padding-right: 2px; display: flex; flex-direction: column; gap: 14px; }
+      .menu-items::-webkit-scrollbar { width: 3px; }
+      .menu-items::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+      .item-name-row { display: flex; align-items: flex-end; gap: 6px; }
+      .item-name  { font-size: 14px; font-weight: 600; white-space: nowrap; }
+      .item-dots  { flex: 1; border-bottom: 1px dotted rgba(28,26,20,.22); margin-bottom: 3px; min-width: 12px; }
+      .item-price { font-size: 14px; font-weight: 600; white-space: nowrap; }
+      .item-desc  { font-size: 11px; color: rgba(28,26,20,.6); margin-top: 3px; line-height: 1.45; }
+      .item-ctrl  { display: flex; justify-content: flex-end; margin-top: 6px; }
+
+      .pg-num { font-size: 10px; letter-spacing: .25em; color: rgba(28,26,20,.35); text-align: center; margin-top: 10px; }
+
+      /* Qty controls */
+      .qty-ctrl { display: flex; align-items: center; gap: 8px; }
+      .qty-ctrl button {
+        width: 26px; height: 26px; border: 1px solid var(--border); background: var(--paper-shade);
+        border-radius: 3px; cursor: pointer; font-family: var(--font); font-size: 15px; line-height: 1;
+        display: flex; align-items: center; justify-content: center; transition: all .15s;
+      }
+      .qty-ctrl button:hover { background: var(--leaf); color: #fff; border-color: var(--leaf); }
+      .qty-ctrl span { font-size: 14px; min-width: 18px; text-align: center; font-weight: 600; }
+
+      .btn-add {
+        font-family: var(--font); font-size: 11px; padding: 4px 12px;
+        border: 1px solid var(--leaf); color: var(--leaf); background: transparent;
+        border-radius: 3px; cursor: pointer; letter-spacing: .05em; transition: all .15s;
+      }
+      .btn-add:hover { background: var(--leaf); color: #fff; }
+
+      /* Order page */
+      .order-lines { list-style: none; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+      .order-lines::-webkit-scrollbar { width: 3px; }
+      .order-lines::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+      .order-line { display: flex; align-items: flex-end; gap: 8px; }
+      .order-line-info { flex: none; }
+      .order-line-name { font-size: 13px; font-weight: 600; }
+      .order-line-sec  { font-size: 10px; color: rgba(28,26,20,.45); margin-top: 1px; }
+      .order-line-dots { flex: 1; border-bottom: 1px dotted rgba(28,26,20,.2); margin-bottom: 3px; }
+      .order-line-total{ font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+      .order-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; }
+      .order-empty p { font-size: 14px; color: rgba(28,26,20,.5); }
+      .order-empty small { font-size: 11px; color: rgba(28,26,20,.4); }
+
+      .order-footer { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+      .total-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+      .total-qty  { font-size: 11px; color: rgba(28,26,20,.55); }
+      .total-val  { font-size: 1.4rem; font-weight: 700; }
+
+      .btn-confirm {
+        width: 100%; padding: 11px; background: var(--leaf); color: #fff; border: none;
+        border-radius: 4px; font-family: var(--font); font-size: 14px; cursor: pointer;
+        letter-spacing: .04em; transition: background .2s;
+      }
+      .btn-confirm:hover:not(:disabled) { background: #4a6a3a; }
+      .btn-confirm:disabled { opacity: .45; cursor: not-allowed; }
+
+      /* Back cover hint */
+      .back-hint { font-size: 13px; font-style: italic; color: rgba(28,26,20,.55); max-width: 200px; line-height: 1.55; margin-top: 14px; }
+
+      /* ── Nav ─────────────────────────────────── */
+      nav { display: flex; align-items: center; gap: 12px; }
+
+      .btn-ghost {
+        display: inline-flex; align-items: center; gap: 6px; padding: 9px 20px;
+        background: transparent; color: var(--ink); border: 1px solid var(--border);
+        border-radius: 4px; font-family: var(--font); font-size: 14px; cursor: pointer; transition: border-color .2s;
+      }
+      .btn-ghost:hover:not(:disabled) { border-color: rgba(28,26,20,.55); }
+      .btn-ghost:disabled { opacity: .3; cursor: not-allowed; }
+
+      .btn-primary {
+        display: inline-flex; align-items: center; gap: 6px; padding: 9px 20px;
+        background: var(--leaf); color: #fff; border: none;
+        border-radius: 4px; font-family: var(--font); font-size: 14px; cursor: pointer; transition: background .2s;
+      }
+      .btn-primary:hover:not(:disabled) { background: #4a6a3a; }
+      .btn-primary:disabled { opacity: .35; cursor: not-allowed; }
+
+      .pg-indicator { font-size: 13px; color: rgba(28,26,20,.5); font-style: italic; min-width: 52px; text-align: center; }
+
+      /* ── Order pill ──────────────────────────── */
+      .order-pill {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 18px; background: var(--paper); border: 1px solid var(--border);
+        border-radius: 24px; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.08);
+      }
+      .order-pill .sep { color: rgba(28,26,20,.3); }
+      .order-pill .go-checkout {
+        background: none; border: none; cursor: pointer; font-family: var(--font);
+        font-size: 13px; color: var(--leaf); text-decoration: underline; text-underline-offset: 3px;
+      }
+
+      @media (max-width: 767px) {
+        .book-spread { height: 520px; }
+      }
+
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* ── Table selector bar ───────────────────── */
+      .table-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        background: var(--paper);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 16px;
+        width: 100%;
+        max-width: 420px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.06);
+      }
+      .book-stage.is-spread ~ .table-bar,
+      .is-spread + .book-shadow + .book-spread { max-width: 840px; }
+      .table-bar-label { font-size: 10px; letter-spacing: .4em; color: rgba(28,26,20,.45); text-transform: uppercase; flex-shrink: 0; }
+      .table-chip {
+        padding: 5px 14px; border: 1px solid var(--border); border-radius: 20px;
+        background: var(--paper-shade); font-family: var(--font); font-size: 13px; cursor: pointer;
+        transition: all .15s; color: var(--ink);
+      }
+      .table-chip:hover { border-color: var(--leaf); color: var(--leaf); }
+      .table-chip.active { background: var(--leaf); color: #fff; border-color: var(--leaf); }
+      .table-notice { font-size: 12px; color: rgba(28,26,20,.4); font-style: italic; }
+    </style>
+  </head>
+  <body>
+
+  <header class="site-header">
+    <p class="sub">Crazy Plant Lady</p>
+    <h1>The Menu Book</h1>
+  </header>
+
+  <div class="table-bar" id="tableBar">
+    <span class="table-bar-label">Your Table</span>
+    <div id="tableChips" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+    <span class="table-notice" id="tableNotice">Select a table to place your order</span>
+  </div>
+
+  <div class="book-stage is-single" id="bookStage">
+    <div class="book-shadow"></div>
+    <div class="book-spread" id="bookSpread">
+      <div class="book-page book-page--left" id="pageLeft" style="display:none"></div>
+      <div class="book-page book-page--right" id="pageRight"></div>
+      <div class="book-spine" id="bookSpine" style="display:none"></div>
+    </div>
+  </div>
+
+  <nav>
+    <button class="btn-ghost" id="btnPrev" onclick="flipTo('prev')" disabled>← Prev</button>
+    <span class="pg-indicator" id="pgIndicator">1 / 8</span>
+    <button class="btn-primary" id="btnNext" onclick="flipTo('next')">Next →</button>
+  </nav>
+
+  <div class="order-pill" id="orderPill" style="display:none">
+    <span id="pillText"></span>
+    <span class="sep">·</span>
+    <span id="pillTotal"></span>
+    <button class="go-checkout" onclick="goToCheckout()">Go to checkout</button>
+  </div>
+
+  <script>
+  /* ── BroadcastChannel & localStorage bridge ───── */
+  const cplBC = (() => { try { return new BroadcastChannel('cpl_restaurant'); } catch { return null; } })();
+
+  /* ── Default menu data (fallback) ─────────────── */
+  const SECTIONS_DEFAULT = [
+    {
+      title: "Beverages",
+      subtitle: "Brewed with love, served with leaves",
+      items: [
+        { id: "b1", name: "Hibiscus Iced Tea",    price: 220, desc: "Tart hibiscus, citrus, raw honey." },
+        { id: "b2", name: "Lavender Cold Brew",    price: 280, desc: "12-hr cold brew, lavender syrup." },
+        { id: "b3", name: "Matcha Garden Latte",   price: 320, desc: "Ceremonial matcha, oat milk." },
+        { id: "b4", name: "Basil Lemonade",        price: 200, desc: "Fresh basil, lemon, sparkling water." },
+      ],
+    },
+    {
+      title: "Small Plates",
+      subtitle: "Little greens to nibble on",
+      items: [
+        { id: "s1", name: "Avocado Bruschetta",    price: 340, desc: "Sourdough, smashed avo, chilli oil." },
+        { id: "s2", name: "Truffle Mushroom Toast", price: 420, desc: "Wild mushrooms, truffle, thyme." },
+        { id: "s3", name: "Garden Hummus Bowl",    price: 360, desc: "Beetroot hummus, crudités, pita." },
+      ],
+    },
+    {
+      title: "Mains",
+      subtitle: "Plant-forward comfort",
+      items: [
+        { id: "m1", name: "Pesto Zoodle Bowl",     price: 480, desc: "Zucchini noodles, basil pesto, pine nuts." },
+        { id: "m2", name: "Wild Mushroom Risotto",  price: 540, desc: "Arborio, porcini, parmesan." },
+        { id: "m3", name: "Smoky Jackfruit Tacos",  price: 460, desc: "Slow-cooked jackfruit, slaw, lime." },
+        { id: "m4", name: "Buddha Power Bowl",      price: 520, desc: "Quinoa, roasted veg, tahini drizzle." },
+      ],
+    },
+    {
+      title: "Desserts",
+      subtitle: "Sweet little endings",
+      items: [
+        { id: "d1", name: "Dark Chocolate Mousse",  price: 320, desc: "70% cocoa, sea salt, berries." },
+        { id: "d2", name: "Tiramisu Jar",           price: 340, desc: "Espresso-soaked sponge, mascarpone." },
+        { id: "d3", name: "Lemon Basil Sorbet",     price: 220, desc: "House churned, refreshing." },
+      ],
+    },
+  ];
+
+  /* ── localStorage loaders ─────────────────────── */
+  function loadSectionsFromStore() {
+    try {
+      const raw = localStorage.getItem('cpl_menu');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return SECTIONS_DEFAULT;
+  }
+
+  function loadTablesFromStore() {
+    try {
+      const raw = localStorage.getItem('cpl_tables');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [
+      { tableNum: 1, name: 'Table 1' },
+      { tableNum: 2, name: 'Table 2' },
+      { tableNum: 3, name: 'Table 3' },
+      { tableNum: 4, name: 'Table 4' },
+    ];
+  }
+
+  // getTotalPages() is now dynamic — use getTotalPages()
+
+  /* ── State ────────────────────────────────────── */
+  let currentPage  = 0;
+  let flipping     = null; // 'next' | 'prev' | null
+  let isSpread     = false;
+  let order        = {};   // { itemId: qty }
+  let confirmed    = false;
+  let selectedTable = null;
+  let SECTIONS     = loadSectionsFromStore();
+  let TABLES       = loadTablesFromStore();
+
+  // Order lifecycle: 'idle' | 'pending' | 'confirmed' | 'cancelled'
+  let orderStatus   = 'idle';
+  let _pendingOrderId = null;
+  let _confirmPoll  = null;
+
+  /* ── Table selector ───────────────────────────── */
+  function renderTableBar() {
+    const chips = document.getElementById('tableChips');
+    const notice = document.getElementById('tableNotice');
+    if (!chips) return;
+    chips.innerHTML = TABLES.map(t =>
+      `<button class="table-chip${selectedTable === t.tableNum ? ' active' : ''}" onclick="selectTable(${t.tableNum})">${t.name}</button>`
+    ).join('');
+    if (notice) notice.textContent = selectedTable ? `Table ${selectedTable} selected` : 'Select a table to place your order';
+  }
+
+  function selectTable(num) {
+    selectedTable = num;
+    renderTableBar();
+    rerenderCurrentPages();
+    updateOrderPill();
+  }
+
+  /* ── Auto table detection from robot nav goal ─── */
+  async function autoDetectTable() {
+    try {
+      const r = await fetch('/api/restaurant/current_table');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.tableNum && d.tableNum > 0 && d.tableNum !== selectedTable) {
+        selectTable(d.tableNum);
+        const notice = document.getElementById('tableNotice');
+        if (notice) notice.textContent = `Table ${d.tableNum} — auto-detected from robot`;
+      }
+    } catch {}
+  }
+
+  /* ── Confirmation polling (after order placed) ─ */
+  function startConfirmPoll(orderId, tableNum) {
+    _pendingOrderId = orderId;
+    if (_confirmPoll) clearInterval(_confirmPoll);
+    _confirmPoll = setInterval(async () => {
+      try {
+        const r = await fetch('/api/restaurant/orders');
+        if (!r.ok) return;
+        const all = await r.json();
+        const myOrder = (all[String(tableNum)] || []).find(o => o.id === orderId);
+        if (!myOrder) return;
+        if (myOrder.status === 'confirmed') {
+          clearInterval(_confirmPoll); _confirmPoll = null;
+          orderStatus = 'confirmed';
+          rerenderCurrentPages();
+        } else if (myOrder.status === 'cancelled') {
+          clearInterval(_confirmPoll); _confirmPoll = null;
+          orderStatus = 'cancelled';
+          rerenderCurrentPages();
+        }
+      } catch {}
+    }, 3000);
+  }
+
+  /* ── BroadcastChannel listeners ───────────────── */
+  if (cplBC) {
+    cplBC.addEventListener('message', e => {
+      if (e.data.type === 'menu_updated' && Array.isArray(e.data.sections) && e.data.sections.length > 0) {
+        SECTIONS = e.data.sections;
+        rerenderCurrentPages();
+      }
+      if (e.data.type === 'tables_updated' && Array.isArray(e.data.tables) && e.data.tables.length > 0) {
+        TABLES = e.data.tables;
+        renderTableBar();
+      }
+      if (e.data.type === 'order_status') {
+        const { orderId, status } = e.data;
+        if (orderId === _pendingOrderId && (status === 'confirmed' || status === 'cancelled')) {
+          if (_confirmPoll) { clearInterval(_confirmPoll); _confirmPoll = null; }
+          orderStatus = status;
+        }
+        rerenderCurrentPages();
+      }
+    });
+  }
+
+  /* ── Order helpers ────────────────────────────── */
+  function addItem(id) {
+    order[id] = (order[id] || 0) + 1;
+    rerenderCurrentPages();
+    updateOrderPill();
+  }
+  function removeItem(id) {
+    if (!order[id]) return;
+    order[id]--;
+    if (order[id] <= 0) delete order[id];
+    rerenderCurrentPages();
+    updateOrderPill();
+  }
+  function confirmOrder() {
+    if (!selectedTable) {
+      alert('Please select your table first — tap a table button above the menu.');
+      return;
+    }
+    confirmed = true;
+    orderStatus = 'pending';
+    const lines = getOrderLines();
+    const total = getTotal();
+    const orderId = 'M' + Date.now();
+    _pendingOrderId = orderId;
+    const payload = {
+      tableNum: selectedTable,
+      items: lines.map(l => ({ id: l.id, name: l.name, qty: l.qty, price: l.price, lineTotal: l.price * l.qty })),
+      total,
+      timestamp: new Date().toISOString(),
+      orderId,
+    };
+    // Persist to localStorage
+    try {
+      const stored = JSON.parse(localStorage.getItem('cpl_orders') || '{}');
+      const tKey = String(selectedTable);
+      if (!stored[tKey]) stored[tKey] = [];
+      stored[tKey].push({
+        id: orderId,
+        items: payload.items,
+        total,
+        status: 'pending',
+        createdAt: new Date().toLocaleTimeString(),
+        source: 'menu',
+      });
+      localStorage.setItem('cpl_orders', JSON.stringify(stored));
+    } catch {}
+    // POST to server — works across devices (customer tablet → admin laptop)
+    fetch('/api/restaurant/order/place', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+    // BroadcastChannel fallback — works when both tabs are in the same browser
+    if (cplBC) cplBC.postMessage({ type: 'order_placed', ...payload });
+    // Start polling for admin confirmation
+    startConfirmPoll(orderId, selectedTable);
+    rerenderCurrentPages();
+  }
+  function resetOrder() {
+    order = {};
+    confirmed = false;
+    orderStatus = 'idle';
+    _pendingOrderId = null;
+    if (_confirmPoll) { clearInterval(_confirmPoll); _confirmPoll = null; }
+    selectedTable = null;
+    currentPage = 0;
+    SECTIONS = loadSectionsFromStore();
+    TABLES = loadTablesFromStore();
+    renderTableBar();
+    renderBook();
+  }
+  function goToCheckout() {
+    if (flipping) return;
+    const ORDER_PAGE = 6;
+    if (currentPage === ORDER_PAGE) return;
+
+    flipping = 'next';
+    document.getElementById('btnPrev').disabled = true;
+    document.getElementById('btnNext').disabled = true;
+
+    const spread = document.getElementById('bookSpread');
+    const pLeft  = document.getElementById('pageLeft');
+    const pRight = document.getElementById('pageRight');
+
+    const flipper = document.createElement('div');
+    const front   = document.createElement('div');
+    front.className = 'book-face book-face--front';
+    const back    = document.createElement('div');
+    back.className = 'book-face book-face--back';
+    flipper.appendChild(front);
+    flipper.appendChild(back);
+
+    if (isSpread) {
+      flipper.className = 'book-flipper flip-next-half';
+      front.innerHTML  = getPageHTML(currentPage + 1);
+      back.innerHTML   = getPageHTML(ORDER_PAGE + 1);
+      pLeft.innerHTML  = getPageHTML(ORDER_PAGE);
+      pRight.innerHTML = getPageHTML(ORDER_PAGE + 1);
+    } else {
+      flipper.className = 'book-flipper flip-next-full';
+      front.innerHTML  = getPageHTML(currentPage);
+      back.innerHTML   = getPageHTML(ORDER_PAGE);
+      pRight.innerHTML = getPageHTML(ORDER_PAGE);
+    }
+
+    spread.appendChild(flipper);
+
+    flipper.addEventListener('animationend', () => {
+      flipper.remove();
+      currentPage = ORDER_PAGE;
+      flipping = null;
+      renderBook();
+    }, { once: true });
+  }
+
+  function getOrderLines() {
+    return SECTIONS.flatMap(s => s.items.map(i => ({ ...i, section: s.title })))
+      .filter(i => order[i.id])
+      .map(i => ({ ...i, qty: order[i.id] }));
+  }
+  function getTotal() { return getOrderLines().reduce((s, l) => s + l.price * l.qty, 0); }
+  function getTotalQty() { return getOrderLines().reduce((s, l) => s + l.qty, 0); }
+
+  /* ── Page HTML builders ───────────────────────── */
+  function htmlCover() {
+    return `<div class="page-inner page-cover">
+      <div class="deco">❦</div>
+      <p class="cover-est">Est. 2021</p>
+      <h2 class="cover-h">Crazy Plant<br>Lady</h2>
+      <p class="cover-sub">A Plant Boutique Café · Nava Vadaj</p>
+      <div class="cover-div"></div>
+      <p class="cover-menu">— Menu —</p>
+    </div>`;
+  }
+
+  function htmlWelcome() {
+    return `<div class="page-inner">
+      <p class="chapter-tag">Welcome</p>
+      <h2 class="sec-heading">A Garden on a Plate</h2>
+      <p class="welcome-body">Turn the page to wander through our garden of small plates, slow brews, and sweet endings.</p>
+      <ul class="toc">
+        ${SECTIONS.map((s, i) => `<li><span>${s.title}</span><span>p. ${i + 3}</span></li>`).join('')}
+        <li class="toc-sep"><span>Your Order</span><span>p. ${SECTIONS.length + 3}</span></li>
+      </ul>
+    </div>`;
+  }
+
+  function htmlSection(section, pgNum) {
+    const items = section.items.map(item => {
+      const qty = order[item.id] || 0;
+      const ctrl = qty > 0
+        ? `<div class="qty-ctrl">
+            <button onclick="removeItem('${item.id}')">−</button>
+            <span>${qty}</span>
+            <button onclick="addItem('${item.id}')">+</button>
+          </div>`
+        : `<button class="btn-add" onclick="addItem('${item.id}')">+ Add</button>`;
+      return `<li>
+        <div class="item-name-row">
+          <span class="item-name">${item.name}</span>
+          <span class="item-dots"></span>
+          <span class="item-price">₹${item.price}</span>
+        </div>
+        <p class="item-desc">${item.desc || item.description || ''}</p>
+        <div class="item-ctrl">${ctrl}</div>
+      </li>`;
+    }).join('');
+    return `<div class="page-inner">
+      <p class="chapter-tag">Chapter</p>
+      <h2 class="sec-heading">${section.title}</h2>
+      <p class="sec-sub">${section.subtitle}</p>
+      <hr class="sec-divider">
+      <ul class="menu-items">${items}</ul>
+      <div class="pg-num">— ${pgNum} —</div>
+    </div>`;
+  }
+
+  function htmlOrder() {
+    const lines = getOrderLines();
+    const total = getTotal();
+    const qty   = getTotalQty();
+    const body = lines.length === 0
+      ? `<div class="order-empty">
+          <p>Your order is empty.</p>
+          <small>Flip back and add a few things you love.</small>
+        </div>`
+      : `<ul class="order-lines">${lines.map(l =>
+          `<li class="order-line">
+            <div class="order-line-info">
+              <p class="order-line-name">${l.qty}× ${l.name}</p>
+              <p class="order-line-sec">${l.section}</p>
+            </div>
+            <span class="order-line-dots"></span>
+            <span class="order-line-total">₹${l.qty * l.price}</span>
+          </li>`).join('')}
+        </ul>`;
+    const tableLabel = selectedTable
+      ? TABLES.find(t => t.tableNum === selectedTable)?.name || `Table ${selectedTable}`
+      : null;
+    const tableRow = tableLabel
+      ? `<div style="font-size:11px;color:rgba(28,26,20,.55);margin-bottom:6px;">For <strong>${tableLabel}</strong></div>`
+      : `<div style="font-size:11px;color:#c97a30;margin-bottom:6px;">⚠ No table selected — tap a table button above</div>`;
+    const btn = orderStatus === 'pending'
+      ? `<button class="btn-confirm" disabled style="opacity:.7;background:#8a7a3a;">⏳ Waiting for kitchen confirmation…</button>`
+      : orderStatus === 'confirmed'
+      ? `<button class="btn-confirm" disabled style="background:var(--leaf);">✓ Order Confirmed!</button>`
+      : orderStatus === 'cancelled'
+      ? `<button class="btn-confirm" disabled style="background:#c04040;opacity:.8;">✕ Order Cancelled</button>`
+      : `<button class="btn-confirm" ${lines.length === 0 || !selectedTable ? 'disabled' : ''} onclick="confirmOrder()">Confirm Order</button>`;
+    return `<div class="page-inner">
+      <p class="chapter-tag">Final Page</p>
+      <h2 class="sec-heading">Your Order</h2>
+      <p class="sec-sub">Review before we send it to the kitchen.</p>
+      <hr class="sec-divider">
+      ${body}
+      <div class="order-footer">
+        ${tableRow}
+        <div class="total-row">
+          <span class="total-qty">${qty} item${qty !== 1 ? 's' : ''}</span>
+          <span class="total-val">₹${total}</span>
+        </div>
+        ${btn}
+      </div>
+    </div>`;
+  }
+
+  function htmlBackCover() {
+    if (orderStatus === 'pending') {
+      return `<div class="page-inner page-cover">
+        <div class="deco" style="color:var(--leaf);font-size:38px;animation:spin 1.8s linear infinite">◌</div>
+        <h2 class="cover-h" style="font-size:1.5rem;margin-top:14px">Waiting for Confirmation</h2>
+        <p class="cover-sub" style="margin-top:8px">Your order has been sent to the kitchen.<br>Please wait while we confirm it.</p>
+      </div>`;
+    }
+    if (orderStatus === 'confirmed') {
+      return `<div class="page-inner page-cover">
+        <div class="deco" style="color:var(--leaf)">✓</div>
+        <h2 class="cover-h" style="font-size:1.7rem;margin-top:12px;color:var(--leaf)">Order Confirmed!</h2>
+        <p class="cover-sub" style="margin-top:8px">Your food is being prepared with love.<br>We'll bring it to your table shortly.</p>
+        <div class="cover-div"></div>
+        <button class="btn-primary" style="margin-top:8px" onclick="resetOrder()">Start a new order</button>
+      </div>`;
+    }
+    if (orderStatus === 'cancelled') {
+      return `<div class="page-inner page-cover">
+        <div class="deco" style="color:#c04040">✕</div>
+        <h2 class="cover-h" style="font-size:1.5rem;margin-top:12px">Order Cancelled</h2>
+        <p class="cover-sub" style="margin-top:8px">We're sorry about that. Please speak<br>to our staff for assistance.</p>
+        <button class="btn-primary" style="margin-top:24px;background:#c04040" onclick="resetOrder()">Try again</button>
+      </div>`;
+    }
+    if (confirmed) {
+      return `<div class="page-inner page-cover">
+        <div class="deco" style="color:var(--leaf)">✓</div>
+        <h2 class="cover-h" style="font-size:1.7rem;margin-top:12px">Thank You</h2>
+        <p class="cover-sub" style="margin-top:8px">Your table will be served shortly.</p>
+        <button class="btn-primary" style="margin-top:24px" onclick="resetOrder()">Start a new order</button>
+      </div>`;
+    }
+    return `<div class="page-inner page-cover">
+      <div class="deco">✿</div>
+      <p class="cover-est">Grown with care</p>
+      <p class="back-hint">Confirm your order on the left page when you're ready.</p>
+    </div>`;
+  }
+
+  function htmlBlank() {
+    return `<div class="page-inner"></div>`;
+  }
+
+  function getPageHTML(i) {
+    // Pages: 0=Cover, 1=Welcome, 2..N+1=Sections, N+2=Order, N+3=BackCover
+    const total = 2 + SECTIONS.length + 2;
+    if (i < 0 || i >= total) return htmlBlank();
+    if (i === 0) return htmlCover();
+    if (i === 1) return htmlWelcome();
+    if (i >= 2 && i < 2 + SECTIONS.length) return htmlSection(SECTIONS[i - 2], i + 1);
+    if (i === 2 + SECTIONS.length) return htmlOrder();
+    if (i === 3 + SECTIONS.length) return htmlBackCover();
+    return htmlBlank();
+  }
+
+  function getTotalPages() {
+    return 2 + SECTIONS.length + 2; // cover + welcome + sections + order + back
+  }
+
+  /* ── Render ───────────────────────────────────── */
+  function renderBook() {
+    const stage  = document.getElementById('bookStage');
+    const pLeft  = document.getElementById('pageLeft');
+    const pRight = document.getElementById('pageRight');
+    const spine  = document.getElementById('bookSpine');
+
+    if (isSpread) {
+      stage.className = 'book-stage is-spread';
+      pLeft.style.display = '';
+      spine.style.display = '';
+      pLeft.innerHTML  = getPageHTML(currentPage);
+      pRight.innerHTML = getPageHTML(currentPage + 1);
+    } else {
+      stage.className = 'book-stage is-single';
+      pLeft.style.display  = 'none';
+      spine.style.display  = 'none';
+      pRight.innerHTML = getPageHTML(currentPage);
+    }
+    updateNav();
+    updateOrderPill();
+  }
+
+  function rerenderCurrentPages() {
+    const pLeft  = document.getElementById('pageLeft');
+    const pRight = document.getElementById('pageRight');
+    if (isSpread) {
+      pLeft.innerHTML  = getPageHTML(currentPage);
+      pRight.innerHTML = getPageHTML(currentPage + 1);
+    } else {
+      pRight.innerHTML = getPageHTML(currentPage);
+    }
+    updateOrderPill();
+  }
+
+  function updateNav() {
+    const step = isSpread ? 2 : 1;
+    document.getElementById('btnPrev').disabled = currentPage <= 0;
+    document.getElementById('btnNext').disabled = currentPage + step >= getTotalPages();
+    const total = isSpread ? Math.ceil(getTotalPages() / 2) : getTotalPages();
+    const current = isSpread ? Math.floor(currentPage / 2) + 1 : currentPage + 1;
+    document.getElementById('pgIndicator').textContent = `${current} / ${total}`;
+  }
+
+  function updateOrderPill() {
+    const pill = document.getElementById('orderPill');
+    const qty  = getTotalQty();
+    const tot  = getTotal();
+    const lastPage = isSpread ? currentPage + 1 : currentPage;
+    if (qty > 0 && lastPage < 6) {
+      pill.style.display = '';
+      document.getElementById('pillText').textContent = `${qty} item${qty !== 1 ? 's' : ''}`;
+      document.getElementById('pillTotal').textContent = `₹${tot}`;
+    } else {
+      pill.style.display = 'none';
+    }
+  }
+
+  /* ── Flip ─────────────────────────────────────── */
+  function flipTo(dir) {
+    if (flipping) return;
+    const step = isSpread ? 2 : 1;
+    const newPage = currentPage + (dir === 'next' ? step : -step);
+    if (newPage < 0 || newPage >= getTotalPages()) return;
+
+    flipping = dir;
+    document.getElementById('btnPrev').disabled = true;
+    document.getElementById('btnNext').disabled = true;
+
+    const spread = document.getElementById('bookSpread');
+    const pLeft  = document.getElementById('pageLeft');
+    const pRight = document.getElementById('pageRight');
+
+    const flipper = document.createElement('div');
+    const front   = document.createElement('div');
+    front.className = 'book-face book-face--front';
+    const back    = document.createElement('div');
+    back.className = 'book-face book-face--back';
+    flipper.appendChild(front);
+    flipper.appendChild(back);
+
+    if (dir === 'next') {
+      if (isSpread) {
+        flipper.className = 'book-flipper flip-next-half';
+        front.innerHTML = getPageHTML(currentPage + 1); // current right
+        back.innerHTML  = getPageHTML(newPage + 1);      // new right (flipper back)
+        pLeft.innerHTML  = getPageHTML(newPage);          // new left (visible beneath)
+        pRight.innerHTML = getPageHTML(newPage + 1);      // new right (visible beneath flipper back)
+      } else {
+        flipper.className = 'book-flipper flip-next-full';
+        front.innerHTML = getPageHTML(currentPage);
+        back.innerHTML  = getPageHTML(newPage);
+        pRight.innerHTML = getPageHTML(newPage);
+      }
+    } else {
+      if (isSpread) {
+        flipper.className = 'book-flipper flip-prev-half';
+        front.innerHTML = getPageHTML(currentPage);       // current left
+        back.innerHTML  = getPageHTML(newPage + 1);       // new right (back of flipped page)
+        pLeft.innerHTML  = getPageHTML(newPage);           // new left (visible beneath)
+        pRight.innerHTML = getPageHTML(newPage + 1);       // new right (visible beneath)
+      } else {
+        flipper.className = 'book-flipper flip-prev-full';
+        front.innerHTML = getPageHTML(currentPage);
+        back.innerHTML  = getPageHTML(newPage);
+        pRight.innerHTML = getPageHTML(newPage);
+      }
+    }
+
+    spread.appendChild(flipper);
+
+    flipper.addEventListener('animationend', () => {
+      flipper.remove();
+      currentPage = newPage;
+      flipping = null;
+      renderBook();
+    }, { once: true });
+  }
+
+  /* ── Responsive spread detection ─────────────── */
+  function handleResize() {
+    const wide = window.matchMedia('(min-width: 768px)').matches;
+    if (wide === isSpread) return;
+    isSpread = wide;
+    // Snap currentPage to even if needed
+    if (isSpread && currentPage % 2 !== 0) {
+      currentPage = Math.max(0, currentPage - 1);
+    }
+    renderBook();
+  }
+
+  /* ── Boot ─────────────────────────────────────── */
+  window.addEventListener('DOMContentLoaded', () => {
+    isSpread = window.matchMedia('(min-width: 768px)').matches;
+    renderTableBar();
+    renderBook();
+    window.matchMedia('(min-width: 768px)').addEventListener('change', handleResize);
+    // Auto-detect which table the robot is at; re-check every 30 s if robot moves
+    autoDetectTable();
+    setInterval(autoDetectTable, 30000);
+  });
+  </script>
+  </body>
+  </html>

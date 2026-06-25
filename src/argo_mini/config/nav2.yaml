@@ -21,6 +21,7 @@
         - nav2_back_up_action_bt_node
         - nav2_spin_action_bt_node
         - nav2_clear_costmap_service_bt_node
+        - nav2_wait_action_bt_node
 
   controller_server:
     ros__parameters:
@@ -161,9 +162,8 @@
         width: 6
         height: 6
         resolution: 0.05
-        transform_tolerance: 1.0
         footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
-        plugins: ["obstacle_layer", "inflation_layer"]
+        plugins: ["obstacle_layer", "depth_layer", "inflation_layer"]
         obstacle_layer:
           plugin: "nav2_costmap_2d::ObstacleLayer"
           enabled: true
@@ -178,6 +178,21 @@
             raytrace_min_range: 0.30
             obstacle_max_range: 4.0
             obstacle_min_range: 0.30
+        depth_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          enabled: true
+          observation_sources: depth_points
+          depth_points:
+            topic: /ascamera_hp60c/camera_publisher/depth0/points
+            max_obstacle_height: 1.80
+            min_obstacle_height: 0.05
+            clearing: true
+            marking: true
+            data_type: "PointCloud2"
+            raytrace_max_range: 2.5
+            raytrace_min_range: 0.10
+            obstacle_max_range: 2.5
+            obstacle_min_range: 0.10
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
@@ -238,13 +253,15 @@
       global_costmap_topic: global_costmap/costmap_raw
       footprint_topic: local_costmap/published_footprint
       cycle_frequency: 10.0
-      behavior_plugins: ["backup", "spin"]
+      behavior_plugins: ["backup", "spin", "wait"]
       backup:
         plugin: "nav2_behaviors/BackUp"
         backup_dist: 0.5
         backup_speed: 0.3
       spin:
         plugin: "nav2_behaviors/Spin"
+      wait:
+        plugin: "nav2_behaviors/Wait"
       simulate_ahead_time: 2.0
       max_rotational_vel: 0.8
       min_rotational_vel: 0.25

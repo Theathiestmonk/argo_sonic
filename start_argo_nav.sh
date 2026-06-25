@@ -10,7 +10,7 @@
 # Create the map first with ./start_slam.sh
 
 NO_CAM=false
-MAP_BASE=~/maps/indoor_map
+MAP_BASE=~/argo_mini_ws/src/argo_mini/maps/office_map
 
 for arg in "$@"; do
   [[ "$arg" == "--no-cam" ]] && NO_CAM=true
@@ -141,7 +141,7 @@ echo "[argo] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
   -p port:=/dev/ttyUSB1 \
   -p baud:=115200 \
-  -p left_tick_scale:=2.1714 &
+  -p left_tick_scale:=0.66 &
 SERIAL_PID=$!
 sleep 5
 

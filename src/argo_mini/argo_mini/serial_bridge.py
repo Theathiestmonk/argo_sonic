@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Range
 from tf2_ros import TransformBroadcaster
 import serial
 import math
@@ -10,7 +11,7 @@ import time
 WHEEL_RADIUS    = 0.0762
 WHEEL_BASE      = 0.41
 POLE_PAIRS      = 10
-TICKS_PER_REV   = POLE_PAIRS * 6   # 60 ticks/rev (10 pole pairs � 6 Hall edges)
+TICKS_PER_REV   = POLE_PAIRS * 6   # 60 ticks/rev (10 pole pairs ? 6 Hall edges)
 METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 
 # IMU complementary filter ? how much to trust IMU gyro vs wheel odometry for angle
@@ -59,6 +60,13 @@ class SerialBridge(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_sub        = self.create_subscription(
             Twist, '/cmd_vel', self.cmd_cb, 10)
+
+        # Ultrasonic Range publishers ? FL, FR, BL, BR
+        _us_names = ['front_left', 'front_right', 'back_left', 'back_right']
+        self._us_frame_ids = ['us_fl', 'us_fr', 'us_bl', 'us_br']
+        self._us_pubs = [
+            self.create_publisher(Range, f'/us/{n}', 10) for n in _us_names
+        ]
 
         self.x          = 0.0
         self.y          = 0.0
@@ -190,8 +198,28 @@ class SerialBridge(Node):
                         self.update_odom(int(parts[1]), int(parts[2]), gz)
                     elif len(parts) == 3:
                         self.update_odom(int(parts[1]), int(parts[2]))
+                elif raw.startswith('U '):
+                    self._publish_us(raw)
         except Exception as e:
             self.get_logger().warn(f'Read error: {e}')
+
+    def _publish_us(self, raw: str):
+        parts = raw.split()
+        if len(parts) != 5:
+            return
+        now = self.get_clock().now().to_msg()
+        for i in range(4):
+            cm = int(parts[i + 1])
+            msg = Range()
+            msg.header.stamp = now
+            msg.header.frame_id = self._us_frame_ids[i]
+            msg.radiation_type = Range.ULTRASOUND
+            msg.field_of_view = 0.26   # ~15� ? typical HC-SR04 cone
+            msg.min_range = 0.02
+            msg.max_range = 4.0
+            # -1 from firmware means no echo / out of range ? publish +inf
+            msg.range = (cm / 100.0) if cm > 0 else float('inf')
+            self._us_pubs[i].publish(msg)
 
     def update_odom(self, left_ticks, right_ticks, gyro_z=None):
         if self.prev_left is None:

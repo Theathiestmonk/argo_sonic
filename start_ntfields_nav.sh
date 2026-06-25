@@ -1,0 +1,378 @@
+#!/bin/bash
+# Argo Mini ? NTFields Navigation
+#
+# Drop-in replacement for start_argo_nav.sh with NTFields stack:
+#   ? ntfields_social_shield  replaces depth_stop (/cmd_vel_smoothed?/cmd_vel slot)
+#   ? ntfields_trainer        auto-trains on /map via CUDA (~20 min first run)
+#   ? ntfields_navigator      action server /ntfields/navigate_to_pose
+#
+# Usage:
+#   ./start_ntfields_nav.sh                        # with camera + RViz
+#   ./start_ntfields_nav.sh --no-cam               # lidar-only
+#   ./start_ntfields_nav.sh --map /path/to/map     # custom map (no extension)
+#
+# Default map: ~/maps/indoor_map
+# Build first:  cd ~/argo_mini_ws && colcon build --packages-select argo_mini --symlink-install
+
+NO_CAM=false
+MAP_BASE=~/maps/gala_magnus_map
+
+for arg in "$@"; do
+  [[ "$arg" == "--no-cam" ]] && NO_CAM=true
+  [[ "$arg" == "--map" ]]    && { shift; MAP_BASE="$1"; }
+done
+MAP_BASE="${MAP_BASE/#\~/$HOME}"
+
+# ?? environment ????????????????????????????????????????????????????????????????
+source /opt/ros/humble/setup.bash
+source ~/argo_mini_ws/install/setup.bash
+
+CAMERA_SDK_PATH=~/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CAMERA_SDK_PATH/ascamera/libs/lib/aarch64-linux-gnu
+
+NAV_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/nav2.yaml
+SLAM_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml
+
+# ?? USB permissions ????????????????????????????????????????????????????????????
+chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
+  sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true
+
+# ?? kill previous run ??????????????????????????????????????????????????????????
+echo "[argo] Killing previous processes..."
+for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
+            map_server amcl planner_server controller_server \
+            bt_navigator velocity_smoother scan_relay \
+            robot_state_publisher depth_safety_shield ascamera_node \
+            ntfields_trainer ntfields_navigator ntfields_social_shield \
+            depth_stop; do
+  pkill -9 -f "$proc" 2>/dev/null || true
+done
+sleep 5
+
+# ?? lifecycle helper ???????????????????????????????????????????????????????????
+lc_node() {
+  local node=$1
+  echo "[argo]   configure $node..."
+  ros2 lifecycle set "$node" configure 2>&1 | tail -1
+  sleep 4
+  echo "[argo]   activate  $node..."
+  ros2 lifecycle set "$node" activate  2>&1 | tail -1
+  sleep 4
+}
+
+# ?? topic checker ??????????????????????????????????????????????????????????????
+wait_for_topic() {
+  local topic=$1
+  local timeout=${2:-30}
+  local start=$(date +%s)
+  echo "[argo] Waiting for topic $topic (timeout: ${timeout}s)..."
+  while true; do
+    if ros2 topic list 2>/dev/null | grep -q "^${topic}$"; then
+      echo "[argo] ? Topic $topic is available"
+      return 0
+    fi
+    local elapsed=$(($(date +%s) - start))
+    if [ $elapsed -ge $timeout ]; then
+      echo "[argo] ? ERROR: Topic $topic not available after ${timeout}s"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+# ?? action server checker ??????????????????????????????????????????????????????
+wait_for_action() {
+  local action=$1
+  local timeout=${2:-30}
+  local start=$(date +%s)
+  echo "[argo] Waiting for action $action (timeout: ${timeout}s)..."
+  while true; do
+    if ros2 action list 2>/dev/null | grep -q "^${action}$"; then
+      echo "[argo] ? Action $action is available"
+      return 0
+    fi
+    local elapsed=$(($(date +%s) - start))
+    if [ $elapsed -ge $timeout ]; then
+      echo "[argo] ? ERROR: Action $action not available after ${timeout}s"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+# ?? process checker ????????????????????????????????????????????????????????????
+check_process() {
+  local pid=$1
+  local name=$2
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "[argo] ? ERROR: Process $name (PID $pid) has crashed!"
+    return 1
+  fi
+  return 0
+}
+
+# ?? 1. Robot state publisher ???????????????????????????????????????????????????
+echo "[argo] Starting robot_state_publisher..."
+ros2 launch argo_mini robot_state_publisher.launch.py &
+RSP_PID=$!
+sleep 5
+
+# ?? 2. Camera TF bridge ????????????????????????????????????????????????????????
+# Publish camera frame directly under base_link (from URDF: x=0.2575, z=0.170)
+echo "[argo] Starting camera TF bridge..."
+ros2 run tf2_ros static_transform_publisher \
+  --x 0.2575 --y 0.0 --z 0.170 \
+  --roll 0.0 --pitch 0.0 --yaw 0.0 \
+  --frame-id base_link \
+  --child-frame-id ascamera_hp60c_color_0 &
+CAM_TF_PID=$!
+
+ros2 run tf2_ros static_transform_publisher \
+  --x 0.2575 --y 0.0 --z 0.170 \
+  --roll 0.0 --pitch 0.0 --yaw 0.0 \
+  --frame-id base_link \
+  --child-frame-id ascamera_hp60c_camera_link_0 &
+CAM_TF2_PID=$!
+sleep 5
+
+# ?? 3. Serial bridge ???????????????????????????????????????????????????????????
+# left_tick_scale=2.1714: calibrated wheel ratio (right ticks 2.17x faster)
+echo "[argo] Starting serial_bridge..."
+ros2 run argo_mini serial_bridge --ros-args \
+  -p port:=/dev/ttyUSB1 \
+  -p baud:=115200 \
+  -p left_tick_scale:=2.1714 &
+SERIAL_PID=$!
+sleep 5
+
+# ?? 4. RPLidar A1 ?????????????????????????????????????????????????????????????
+echo "[argo] Starting rplidar..."
+ros2 run rplidar_ros rplidar_composition --ros-args \
+  -p serial_port:=/dev/ttyUSB0 \
+  -p serial_baudrate:=115200 \
+  -p frame_id:=lidar_link \
+  -p angle_compensate:=true \
+  -p scan_mode:=Boost &
+LIDAR_PID=$!
+sleep 5
+
+# ?? 5. Scan relay ??????????????????????????????????????????????????????????????
+echo "[argo] Starting scan_relay..."
+ros2 run argo_mini scan_relay &
+RELAY_PID=$!
+sleep 4
+
+# ?? 6. SLAM Toolbox ? localization mode ???????????????????????????????????????
+# Replaces map_server + AMCL: serves /map AND broadcasts map?odom TF.
+# Relocalizes automatically on first scan ? no initial pose click needed.
+echo "[argo] Starting slam_toolbox localization (map: $MAP_BASE)..."
+ros2 run slam_toolbox localization_slam_toolbox_node --ros-args \
+  --params-file "$SLAM_CONFIG" \
+  -p map_file_name:="$MAP_BASE" &
+SLAM_PID=$!
+sleep 7
+
+# ?? 7. Behavior server ?????????????????????????????????????????????????????????
+echo "[argo] Starting behavior_server..."
+ros2 run nav2_behaviors behavior_server --ros-args \
+  --params-file $NAV_CONFIG \
+  -r cmd_vel:=/cmd_vel_raw &
+BEHAVIOR_PID=$!
+sleep 7
+
+echo "[argo] Waiting for costmap topics..."
+wait_for_topic "local_costmap/costmap_raw" 15
+wait_for_topic "global_costmap/costmap_raw" 15
+
+lc_node /behavior_server
+
+# ?? 8. Planner server ??????????????????????????????????????????????????????????
+echo "[argo] Starting planner_server..."
+ros2 run nav2_planner planner_server --ros-args --params-file $NAV_CONFIG &
+PLANNER_PID=$!
+sleep 5
+lc_node /planner_server
+
+# ?? 9. Controller server ? /cmd_vel_raw ???????????????????????????????????????
+echo "[argo] Starting controller_server..."
+ros2 run nav2_controller controller_server --ros-args \
+  --params-file $NAV_CONFIG \
+  -r cmd_vel:=/cmd_vel_raw &
+CONTROLLER_PID=$!
+sleep 5
+lc_node /controller_server
+
+# ?? 10. Velocity smoother  /cmd_vel_raw ? /cmd_vel_smoothed ???????????????????
+echo "[argo] Starting velocity_smoother..."
+ros2 run nav2_velocity_smoother velocity_smoother --ros-args \
+  --params-file $NAV_CONFIG \
+  -r cmd_vel:=/cmd_vel_raw \
+  -r cmd_vel_smoothed:=/cmd_vel_smoothed &
+SMOOTHER_PID=$!
+sleep 5
+lc_node /velocity_smoother
+
+# ?? Wait for action servers before BT tries to load ???????????????????????????
+echo "[argo] Waiting for action servers..."
+wait_for_action "/compute_path_to_pose" 30
+wait_for_action "/follow_path" 30
+wait_for_action "/backup" 30
+sleep 5
+
+# ?? 11. BT Navigator ???????????????????????????????????????????????????????????
+echo "[argo] Starting bt_navigator..."
+ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG &
+BT_PID=$!
+sleep 7
+lc_node /bt_navigator
+
+# ?? 12. Depth camera (optional) ???????????????????????????????????????????????
+CAM_PID=""
+if [ "$NO_CAM" = false ]; then
+  echo "[argo] Starting HP60C camera..."
+  (
+    cd $CAMERA_SDK_PATH
+    source install/setup.bash
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CAMERA_SDK_PATH/ascamera/libs/lib/aarch64-linux-gnu
+    ros2 launch ascamera hp60c.launch.py 2>&1 | sed 's/^/[camera] /'
+  ) &
+  CAM_PID=$!
+
+  if wait_for_topic "/ascamera_hp60c/camera_publisher/depth0/points" 15; then
+    echo "[argo] ? Camera ready"
+  else
+    echo "[argo] ? WARNING: Camera not publishing depth data"
+    echo "[argo]   Social shield will run in lidar-only mode (depth layer stale=pass-through)"
+  fi
+else
+  echo "[argo] Camera skipped (--no-cam)"
+fi
+
+# ?? Verify velocity smoother before starting shield ????????????????????????????
+if ! wait_for_topic "/cmd_vel_smoothed" 10; then
+  echo "[argo] ? ERROR: Velocity smoother not publishing!"
+  kill $SMOOTHER_PID 2>/dev/null || true
+  exit 1
+fi
+echo "[argo] ? Velocity smoother ready"
+
+# ?? 13. NTFields Social Shield  /cmd_vel_smoothed ? /cmd_vel ??????????????????
+# Replaces depth_stop.  Three-layer speed scaling:
+#   static speed field (near walls) � social (leg-detected humans) � depth stop
+echo "[argo] Starting ntfields_social_shield..."
+ros2 run argo_mini ntfields_social_shield --ros-args \
+  -p input_topic:=/cmd_vel_smoothed \
+  -p output_topic:=/cmd_vel \
+  -p depth_topic:=/ascamera_hp60c/camera_publisher/depth0/points \
+  -p scan_topic:=/scan_corrected \
+  -p depth_stop_dist:=0.30 \
+  -p depth_slow_dist:=0.70 \
+  -p depth_height_min:=0.10 \
+  -p depth_height_max:=1.80 \
+  -p depth_width:=0.30 \
+  -p depth_min_points:=5 \
+  -p depth_stale_s:=1.0 \
+  -p sigma_human:=0.70 \
+  -p amplitude_human:=0.95 \
+  -p social_max_range:=2.00 \
+  -p epsilon:=0.35 \
+  -p lam:=2.0 &
+SHIELD_PID=$!
+sleep 7
+
+if check_process $SHIELD_PID "ntfields_social_shield"; then
+  echo "[argo] ? Social shield ready"
+else
+  echo "[argo] ? ERROR: Social shield failed to start"
+  exit 1
+fi
+
+# ?? 14. NTFields Trainer (GPU background training) ????????????????????????????
+# Watches /map, trains automatically.  First run ~20 min, fine-tune ~7 min.
+# Saves ~/ntfields_model.pt ? navigator hot-swaps it automatically.
+echo "[argo] Starting ntfields_trainer (training begins when /map arrives)..."
+ros2 run argo_mini ntfields_trainer --ros-args \
+  -p device:=cuda \
+  -p num_epochs:=800 \
+  -p steps_per_epoch:=150 \
+  -p batch_size:=512 \
+  -p n_sample_points:=60000 \
+  -p epsilon:=0.35 \
+  -p lam:=2.0 \
+  -p change_threshold:=0.05 &
+TRAINER_PID=$!
+sleep 5
+
+if check_process $TRAINER_PID "ntfields_trainer"; then
+  echo "[argo] ? NTFields trainer running (watch: ros2 topic echo /ntfields/status)"
+else
+  echo "[argo] ? ERROR: NTFields trainer failed to start"
+  exit 1
+fi
+
+# ?? 15. NTFields Navigator (action server) ????????????????????????????????????
+# Falls back to Nav2 SmacPlannerHybrid until ~/ntfields_model.pt is ready.
+echo "[argo] Starting ntfields_navigator..."
+ros2 run argo_mini ntfields_navigator --ros-args \
+  -p device:=cuda \
+  -p alpha:=0.03 \
+  -p goal_radius:=0.12 \
+  -p max_steps:=600 \
+  -p waypoint_stride:=4 &
+NAV_PID=$!
+sleep 5
+
+if check_process $NAV_PID "ntfields_navigator"; then
+  echo "[argo] ? NTFields navigator ready (/ntfields/navigate_to_pose)"
+else
+  echo "[argo] ? ERROR: NTFields navigator failed to start"
+  exit 1
+fi
+
+# ?? 16. RViz ??????????????????????????????????????????????????????????????????
+echo "[argo] Starting RViz..."
+export DISPLAY=:1
+rviz2 &
+RVIZ_PID=$!
+
+echo ""
+echo "=========================================="
+echo "  ARGO MINI ? NTFields Navigation"
+echo "=========================================="
+echo "  Map:      $MAP_BASE"
+echo "  Camera:   $([ "$NO_CAM" = false ] && echo 'enabled' || echo 'disabled')"
+echo "  Pipeline: controller  ? /cmd_vel_raw"
+echo "            smoother    ? /cmd_vel_smoothed"
+echo "            social_shield? /cmd_vel"
+echo ""
+echo "  ROS Topics:"
+ros2 topic list 2>/dev/null | grep -E "(cmd_vel|depth|scan|odom|ntfields)" | sed 's/^/    /'
+echo ""
+echo "  NTFields training: ros2 topic echo /ntfields/status"
+echo "  Training time:     ~20 min first run, ~7 min fine-tune"
+echo "  Model saved to:    ~/ntfields_model.pt"
+echo ""
+echo "  Send a nav goal:"
+echo "    ros2 action send_goal /ntfields/navigate_to_pose \\"
+echo "      nav2_msgs/action/NavigateToPose \\"
+echo "      \"{pose:{header:{frame_id:map},pose:{position:{x:2.0,y:1.0}}}}\""
+echo ""
+echo "  Use RViz 2D Goal Pose to send nav goals."
+echo "  No initial pose needed ? auto-localizes."
+echo "  Press Ctrl+C to stop all nodes"
+echo "=========================================="
+echo ""
+
+trap '
+  echo "[argo] Shutting down..."
+  kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID \
+       $SLAM_PID $PLANNER_PID $CONTROLLER_PID \
+       $SMOOTHER_PID $BT_PID $BEHAVIOR_PID \
+       $SHIELD_PID $TRAINER_PID $NAV_PID $RVIZ_PID \
+       ${CAM_PID:-} $CAM_TF_PID $CAM_TF2_PID 2>/dev/null || true
+  sleep 4
+  pkill -9 -f ros2 2>/dev/null || true
+  exit 0
+' INT TERM
+
+wait $RVIZ_PID
