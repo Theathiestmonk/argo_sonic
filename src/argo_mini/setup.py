@@ -50,6 +50,7 @@ setup(
             'ntfields_trainer=argo_mini.ntfields_trainer_node:main',
             'ntfields_navigator=argo_mini.ntfields_navigator_node:main',
             'ntfields_social_shield=argo_mini.ntfields_social_shield:main',
+            'frontier_explorer=argo_mini.frontier_explorer:main',
         ],
     },
 )

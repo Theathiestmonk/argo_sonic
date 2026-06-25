@@ -1,0 +1,27 @@
+# Nav2 parameter overrides for autonomous frontier exploration.
+#
+# Loaded in ADDITION to nav2.yaml during slam.launch.py with
+#   use_frontier_exploration:=true
+#
+# Key differences from the standard nav2.yaml:
+#   - Planner uses NavFn (Dijkstra) instead of SmacPlannerHybrid so it can
+#     plan paths into unexplored (unknown) territory.
+#   - allow_unknown: true  — the planner accepts unknown cells as traversable.
+#   - Larger goal tolerance (0.5 m) suits frontier centroids which may sit at
+#     the edge of the explored area.
+#
+# All other Nav2 parameters (controller, smoother, costmaps, BT, behaviors)
+# are inherited from nav2.yaml.
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    planner_plugins: ["GridBased"]
+    costmap_update_timeout: 1.0
+    GridBased:
+      # NavFn (Dijkstra) handles unknown space correctly during exploration.
+      # SmacPlannerHybrid with allow_unknown:false would reject frontiers.
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.50         # m — looser than normal; frontier centroids are approximate
+      use_astar: false        # Dijkstra gives better coverage in unknown terrain
+      allow_unknown: true     # CRITICAL — plan through/into unexplored cells
