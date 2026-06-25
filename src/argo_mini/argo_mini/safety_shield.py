@@ -37,6 +37,8 @@ import time
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan, PointCloud2, Range
@@ -105,6 +107,10 @@ class SafetyShield(Node):
         self._last_beep   = 0.0
         self._lock        = threading.Lock()
 
+        # ── Callback groups: gate runs independently of sensor processing ────────
+        self._sensor_group = MutuallyExclusiveCallbackGroup()
+        self._gate_group   = MutuallyExclusiveCallbackGroup()
+
         # ── QoS for sensor topics ──────────────────────────────────────────────
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -114,21 +120,28 @@ class SafetyShield(Node):
 
         # ── Subscriptions ──────────────────────────────────────────────────────
         self.create_subscription(
-            LaserScan, LIDAR_TOPIC, self._on_scan, sensor_qos)
+            LaserScan, LIDAR_TOPIC, self._on_scan, sensor_qos,
+            callback_group=self._sensor_group)
 
         self.create_subscription(
-            PointCloud2, DEPTH_TOPIC, self._on_cloud, sensor_qos)
+            PointCloud2, DEPTH_TOPIC, self._on_cloud, sensor_qos,
+            callback_group=self._sensor_group)
 
         self.create_subscription(
-            Range, '/us/front_left',  lambda m: self._on_us(m, 'fl'), sensor_qos)
+            Range, '/us/front_left',  lambda m: self._on_us(m, 'fl'), sensor_qos,
+            callback_group=self._sensor_group)
         self.create_subscription(
-            Range, '/us/front_right', lambda m: self._on_us(m, 'fr'), sensor_qos)
+            Range, '/us/front_right', lambda m: self._on_us(m, 'fr'), sensor_qos,
+            callback_group=self._sensor_group)
         self.create_subscription(
-            Range, '/us/back_left',   lambda m: self._on_us(m, 'bl'), sensor_qos)
+            Range, '/us/back_left',   lambda m: self._on_us(m, 'bl'), sensor_qos,
+            callback_group=self._sensor_group)
         self.create_subscription(
-            Range, '/us/back_right',  lambda m: self._on_us(m, 'br'), sensor_qos)
+            Range, '/us/back_right',  lambda m: self._on_us(m, 'br'), sensor_qos,
+            callback_group=self._sensor_group)
 
-        self.create_subscription(Twist, INPUT_TOPIC, self._on_cmd, 10)
+        self.create_subscription(Twist, INPUT_TOPIC, self._on_cmd, 1,
+                                 callback_group=self._gate_group)
         self._pub = self.create_publisher(Twist, OUTPUT_TOPIC, 10)
 
         self.get_logger().info(
@@ -320,8 +333,11 @@ class SafetyShield(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SafetyShield()
+    # 2 threads: one for sensor callbacks, one dedicated to the cmd_vel gate
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
