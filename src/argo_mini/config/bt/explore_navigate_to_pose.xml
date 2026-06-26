@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!--
+  explore_navigate_to_pose.xml – Behavior Tree for autonomous frontier exploration.
+
+  Key differences from navigate_to_pose.xml:
+    - planner_id="NavFn"  (NavFn with allow_unknown:true, configured in exploration_nav2.yaml)
+    - No <Spin>           (distorts SLAM pose-graph)
+    - No <BackUp>         (always fails near frontier walls; causes positional jitter)
+    - Recovery = ClearEntireCostmap only (zero physical motion → SLAM stays accurate)
+    - number_of_retries="3" (fewer than the standard 6)
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+
+    <RecoveryNode number_of_retries="3" name="NavigateRecovery">
+
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="NavFn"/>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+
+      <ClearEntireCostmap name="ClearLocalCostmap"
+                          service_name="/local_costmap/clear_entirely_local_costmap"/>
+
+    </RecoveryNode>
+
+  </BehaviorTree>
+</root>
