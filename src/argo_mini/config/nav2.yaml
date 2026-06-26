@@ -145,7 +145,7 @@
         height: 6
         resolution: 0.05
         footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
-        plugins: ["obstacle_layer", "depth_voxel_layer", "inflation_layer"]
+        plugins: ["obstacle_layer", "depth_stvl_layer", "inflation_layer"]
         obstacle_layer:
           plugin: "nav2_costmap_2d::ObstacleLayer"
           enabled: true
@@ -160,26 +160,37 @@
             raytrace_min_range: 0.30
             obstacle_max_range: 4.0
             obstacle_min_range: 0.30
-        depth_voxel_layer:
-          plugin: "nav2_costmap_2d::VoxelLayer"
+        depth_stvl_layer:
+          plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
           enabled: true
-          publish_voxel_map: true
+          # Exponential decay: noise (seen once) fades in ~0.3s;
+          # real obstacles (seen at 30 fps) keep their timestamp reset → stay lethal
+          voxel_decay: 2.0           # max lifetime without reinforcement (s)
+          decay_model: 1             # 1 = exponential
+          decay_acceleration: 10.0  # e^(-10t): ~37% at 0.1s, ~5% at 0.3s
+          voxel_size: 0.05           # matches costmap resolution
+          track_unknown_space: false
+          mark_threshold: 0
+          update_footprint_enabled: true   # clear voxels under robot body
+          combination_method: 1            # max cost wins (safety first)
           origin_z: 0.0
           z_resolution: 0.05
-          z_voxels: 32
+          z_voxels: 32               # 32 × 0.05 = 1.60 m height
           max_obstacle_height: 1.60
-          mark_threshold: 0
+          min_obstacle_height: 0.10
+          publish_voxel_map: true
           observation_sources: depth_cloud
           depth_cloud:
             topic: /ascamera_hp60c/camera_publisher/depth0/points_corrected
-            data_type: "PointCloud2"
+            data_type: PointCloud2
             max_obstacle_height: 1.60
             min_obstacle_height: 0.10
+            marking: true
+            clearing: true
             obstacle_range: 2.0
             raytrace_range: 2.5
-            clearing: true
-            marking: true
             inf_is_valid: false
+            voxel_filter: true       # downsample input before inserting
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
