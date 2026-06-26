@@ -165,32 +165,32 @@
           enabled: true
           # Exponential decay: noise (seen once) fades in ~0.3s;
           # real obstacles (seen at 30 fps) keep their timestamp reset → stay lethal
-          voxel_decay: 2.0           # max lifetime without reinforcement (s)
+          voxel_decay: 0.5           # max lifetime without reinforcement (s)
           decay_model: 1             # 1 = exponential
-          decay_acceleration: 10.0  # e^(-10t): ~37% at 0.1s, ~5% at 0.3s
+          decay_acceleration: 25.0  # e^(-25t): ~8% at 0.1s – noise gone in <0.1s
           voxel_size: 0.05           # matches costmap resolution
           track_unknown_space: false
           mark_threshold: 0
-          update_footprint_enabled: true   # clear voxels under robot body
-          combination_method: 1            # max cost wins (safety first)
+          update_footprint_enabled: true
+          combination_method: 1
           origin_z: 0.0
           z_resolution: 0.05
-          z_voxels: 32               # 32 × 0.05 = 1.60 m height
+          z_voxels: 32
           max_obstacle_height: 1.60
-          min_obstacle_height: 0.10
+          min_obstacle_height: 0.20  # raised: cuts floor/wheel noise at close range
           publish_voxel_map: true
           observation_sources: depth_cloud
           depth_cloud:
             topic: /ascamera_hp60c/camera_publisher/depth0/points_corrected
             data_type: PointCloud2
             max_obstacle_height: 1.60
-            min_obstacle_height: 0.10
+            min_obstacle_height: 0.20
             marking: true
             clearing: true
-            obstacle_range: 2.0
-            raytrace_range: 2.5
+            obstacle_range: 1.5      # depth noise lives at range – cut at 1.5m
+            raytrace_range: 2.0
             inf_is_valid: false
-            voxel_filter: true       # downsample input before inserting
+            voxel_filter: true
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true
