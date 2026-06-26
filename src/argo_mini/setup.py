@@ -39,6 +39,7 @@ setup(
             'scan_relay=argo_mini.scan_relay:main',
             'depth_safety_shield=argo_mini.depth_safety_shield:main',
             'safety_shield=argo_mini.safety_shield:main',
+            'pointcloud_restamper=argo_mini.pointcloud_restamper:main',
             'dashboard=argo_mini.dashboard:main',
             'waypoint_ui=argo_mini.waypoint_ui:main',
             'waypoint_manager=argo_mini.waypoint_manager:main',

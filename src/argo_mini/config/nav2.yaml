@@ -145,7 +145,7 @@
         height: 6
         resolution: 0.05
         footprint: "[[0.265, 0.225], [0.265, -0.225], [-0.265, -0.225], [-0.265, 0.225]]"
-        plugins: ["obstacle_layer", "depth_layer", "inflation_layer"]
+        plugins: ["obstacle_layer", "depth_voxel_layer", "inflation_layer"]
         obstacle_layer:
           plugin: "nav2_costmap_2d::ObstacleLayer"
           enabled: true
@@ -160,21 +160,26 @@
             raytrace_min_range: 0.30
             obstacle_max_range: 4.0
             obstacle_min_range: 0.30
-        depth_layer:
-          plugin: "nav2_costmap_2d::ObstacleLayer"
+        depth_voxel_layer:
+          plugin: "nav2_costmap_2d::VoxelLayer"
           enabled: true
-          observation_sources: depth_points
-          depth_points:
-            topic: /ascamera_hp60c/camera_publisher/depth0/points
-            max_obstacle_height: 1.80
-            min_obstacle_height: 0.05
+          publish_voxel_map: true
+          origin_z: 0.0
+          z_resolution: 0.05
+          z_voxels: 32
+          max_obstacle_height: 1.60
+          mark_threshold: 0
+          observation_sources: depth_cloud
+          depth_cloud:
+            topic: /ascamera_hp60c/camera_publisher/depth0/points_corrected
+            data_type: "PointCloud2"
+            max_obstacle_height: 1.60
+            min_obstacle_height: 0.10
+            obstacle_range: 2.0
+            raytrace_range: 2.5
             clearing: true
             marking: true
-            data_type: "PointCloud2"
-            raytrace_max_range: 2.5
-            raytrace_min_range: 0.10
-            obstacle_max_range: 2.5
-            obstacle_min_range: 0.10
+            inf_is_valid: false
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           enabled: true

@@ -76,7 +76,7 @@ STEP_NAMES = [
     "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
     "NTFields Planner",      "Controller Server",    "Velocity Smoother",
     "Behavior Server",       "BT Navigator",         "Depth Camera",
-    "Safety Shield",
+    "PC Restamper",          "Safety Shield",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ def main():
         "ntfields_planner_node", "planner_server", "controller_server",
         "bt_navigator", "velocity_smoother", "scan_relay",
         "robot_state_publisher", "depth_safety_shield",
-        "ascamera_node", "behavior_server", "safety_shield",
+        "ascamera_node", "pointcloud_restamper", "behavior_server", "safety_shield",
     ]:
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
@@ -502,7 +502,14 @@ def main():
         log("Velocity smoother not publishing – aborting", "fail")
         cleanup()
 
-    # ── 13. Safety Shield ─────────────────────────────────────────────────────
+    # ── 13. PointCloud Restamper ──────────────────────────────────────────────
+    if not no_cam:
+        launch("PC Restamper", "ros2 run argo_mini pointcloud_restamper", env)
+        if not wait_topic("/ascamera_hp60c/camera_publisher/depth0/points_corrected", env, 10):
+            log("points_corrected not publishing – voxel layer will have no depth data", "warn")
+    step_done("PC Restamper")
+
+    # ── 14. Safety Shield ─────────────────────────────────────────────────────
     launch("Safety Shield", "ros2 run argo_mini safety_shield", env)
     time.sleep(3); step_done("Safety Shield")
 
