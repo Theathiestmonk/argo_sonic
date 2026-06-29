@@ -355,84 +355,77 @@ def cleanup(sig=None, frame=None):
     sys.exit(0)
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Map selector (runs before TUI takes over the terminal)
+#  Map selector  (runs before TUI – normal terminal, print/input work fine)
 # ──────────────────────────────────────────────────────────────────────────────
-def _find_maps(home: str) -> list:
-    """Return sorted list of (display_name, map_base_path, has_model) tuples."""
+def select_map(home: str, default: str) -> str:
+    """
+    Print a numbered list of available maps and return the chosen map_base path.
+    Called only when --map is not supplied on the command line.
+    """
     maps_dir   = Path(home) / "argo_sonic/src/argo_mini/maps"
     models_dir = Path(home) / "ntfields_models"
-    results = []
-    seen = set()
+
+    entries = []
+    seen    = set()
     for f in sorted(maps_dir.glob("*.yaml")):
         name = f.stem
         if name in seen:
             continue
         seen.add(name)
         has_model = (models_dir / f"{name}.pt").exists()
-        results.append((name, str(f.with_suffix("")), has_model))
-    return results
+        entries.append((name, str(f.with_suffix("")), has_model))
 
-
-def select_map_interactive(home: str, default_name: str) -> str:
-    """
-    Print a numbered map list and return the chosen map_base path.
-    Runs before the fullscreen TUI so normal print/input work fine.
-    """
-    maps = _find_maps(home)
-    if not maps:
-        print(f"{RED}No maps found in src/argo_mini/maps/{RS}")
+    if not entries:
+        print(f"{RED}No maps found in {maps_dir}{RS}")
         sys.exit(1)
 
-    # Find default index
-    default_idx = 0
-    for i, (name, _, _) in enumerate(maps):
-        if name == default_name:
-            default_idx = i
-            break
+    default_idx = next((i for i, (n, _, _) in enumerate(entries) if n == default), 0)
 
-    W = 62
+    W = 64
     print(f"\n{BORDER}+{'-'*(W-2)}+{RS}")
-    print(f"{BORDER}|{RS}{BG_H}  {GOLD}{BLD}  ARGO SONIC  –  Select Navigation Map  {RS}{BG_H}{'':>14}{RS}{BORDER}|{RS}")
-    print(f"{BORDER}+{'-'*(W-2)}+{RS}")
-    print(f"{BORDER}|{RS}  {DIM}{GRAY}  #   Map Name                        Model{RS}{'':>18}{BORDER}|{RS}")
+    title = f"  {GOLD}{BLD}  ARGO SONIC  –  Select Map  {RS}"
+    pad   = " " * max(0, W - 2 - len("    ARGO SONIC  -  Select Map  "))
+    print(f"{BORDER}|{RS}{BG_H}{title}{pad}{RS}{BORDER}|{RS}")
     print(f"{BORDER}+{'-'*(W-2)}+{RS}")
 
-    for i, (name, _, has_model) in enumerate(maps):
-        marker  = f"{GOLD}{BLD}▶ {RS}" if i == default_idx else "  "
+    for i, (name, _, has_model) in enumerate(entries):
+        marker  = f"{GOLD}{BLD}>{RS}" if i == default_idx else " "
         num     = f"{CYAN}{i+1:>2}{RS}"
-        model_s = f"{GREEN}[model OK]{RS}" if has_model else f"{YELLOW}[no model]{RS}"
-        name_col = name[:35].ljust(35)
-        print(f"{BORDER}|{RS}  {marker}{num}  {WHITE}{name_col}{RS}  {model_s}  {BORDER}|{RS}")
+        status  = f"{GREEN}[model OK]{RS}" if has_model else f"{YELLOW}[no model]{RS}"
+        col     = name[:36].ljust(36)
+        content = f"  {marker} {num}  {WHITE}{col}{RS}  {status}"
+        pad2    = " " * max(0, W - 2 - vlen(content))
+        print(f"{BORDER}|{RS}{content}{pad2}{BORDER}|{RS}")
 
     print(f"{BORDER}+{'-'*(W-2)}+{RS}")
-    print(f"  {DIM}Enter number  [default={default_idx+1} – {maps[default_idx][0]}]: {RS}", end="", flush=True)
+    print(f"  {DIM}Select [1-{len(entries)}]  default={default_idx+1} ({entries[default_idx][0]}): {RS}", end="", flush=True)
 
     try:
         raw = input().strip()
     except (EOFError, KeyboardInterrupt):
-        print(); sys.exit(0)
+        print()
+        sys.exit(0)
 
     if raw == "":
-        chosen = maps[default_idx]
+        chosen = entries[default_idx]
     else:
         try:
             n = int(raw)
-            if not (1 <= n <= len(maps)):
+            if not (1 <= n <= len(entries)):
                 raise ValueError
-            chosen = maps[n - 1]
+            chosen = entries[n - 1]
         except ValueError:
-            print(f"{RED}Invalid selection – using default.{RS}")
-            chosen = maps[default_idx]
+            print(f"{YELLOW}Invalid – using default.{RS}")
+            chosen = entries[default_idx]
 
     name, map_base, has_model = chosen
     if not has_model:
-        print(f"\n  {YELLOW}Warning: no trained NTFields model found for '{name}'.{RS}")
-        print(f"  {GRAY}Run  python3 train_ntfields.py  to train one first.{RS}")
-        print(f"  {GRAY}Continuing anyway – planner will fail to load model.{RS}\n")
+        print(f"\n  {YELLOW}Warning: no NTFields model for '{name}'.{RS}")
+        print(f"  {GRAY}Run train_ntfields.py first. Planner will fail to load.{RS}\n")
         time.sleep(2)
 
-    print(f"\n  {GREEN}Selected:{RS}  {GOLD}{BLD}{name}{RS}  →  {GRAY}{map_base}{RS}\n")
-    time.sleep(0.8)
+    print(f"\n  {GREEN}Map:{RS}  {GOLD}{BLD}{name}{RS}  {GRAY}{map_base}{RS}\n")
+    time.sleep(0.6)
     return map_base
 
 
@@ -444,22 +437,22 @@ def main():
 
     parser = argparse.ArgumentParser(description="Argo Sonic NTFields Navigation Launcher")
     parser.add_argument("--no-cam", action="store_true", help="Skip depth camera")
-    parser.add_argument("--map", default=None,
-                        help="Map name or full path (skips interactive selector)")
+    parser.add_argument("--map",
+                        default=None,
+                        help="Map base path or name (no extension). Omit to get a selector.")
     args = parser.parse_args()
 
     home   = str(Path.home())
     no_cam = args.no_cam
 
     if args.map:
-        # CLI override: accept bare name (e.g. office_map) or full path
         raw = args.map.replace("~", home)
+        # bare name (no path separator) → resolve into maps directory
         if os.sep not in raw:
-            # bare name → resolve to maps dir, strip any extension
             raw = str(Path(home) / "argo_sonic/src/argo_mini/maps" / raw)
         map_base = str(Path(raw).with_suffix(""))
     else:
-        map_base = select_map_interactive(home, default_name="office_map")
+        map_base = select_map(home, default="office_map")
 
     signal.signal(signal.SIGINT,  cleanup)
     signal.signal(signal.SIGTERM, cleanup)
