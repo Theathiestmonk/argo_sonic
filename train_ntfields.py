@@ -269,16 +269,19 @@ class TrainerApp(tk.Tk):
             messagebox.showerror('Bad parameter', str(e))
             return
 
+        # -u = unbuffered stdout so log lines appear immediately in the GUI
+        print_every = max(1, epochs // 60)   # ~60 updates regardless of epoch count
         cmd = [
-            sys.executable, TRAIN_SCRIPT,
-            '--map',    map_yaml,
-            '--output', model_path,
-            '--epochs', str(epochs),
-            '--pairs',  str(pairs),
-            '--batch',  str(batch),
-            '--d-min',  str(d_min),
-            '--d-max',  str(d_max),
-            '--device', self.device,
+            sys.executable, '-u', TRAIN_SCRIPT,
+            '--map',         map_yaml,
+            '--output',      model_path,
+            '--epochs',      str(epochs),
+            '--pairs',       str(pairs),
+            '--batch',       str(batch),
+            '--d-min',       str(d_min),
+            '--d-max',       str(d_max),
+            '--device',      self.device,
+            '--print-every', str(print_every),
         ]
 
         self._log.configure(state='normal')

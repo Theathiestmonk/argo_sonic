@@ -237,7 +237,8 @@ class NTFieldsModel:
             losses.append(ln.item())
             self.epoch += 1
             if ep % print_every == 0:
-                print(f"  epoch {self.epoch:>6}  loss {ln.item():.4e}")
+                print(f"  epoch {self.epoch:>6}/{n_epochs}  loss {ln.item():.4e}",
+                      flush=True)
 
         return losses
 

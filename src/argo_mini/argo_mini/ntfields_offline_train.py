@@ -87,26 +87,29 @@ def main():
     p.add_argument('--batch',  type=int,   default=2000)
     p.add_argument('--d-min',  type=float, default=0.07,
                    help='Min obstacle distance metres (speed=0)')
-    p.add_argument('--d-max',  type=float, default=0.70,
+    p.add_argument('--d-max',       type=float, default=0.70,
                    help='Max obstacle distance metres (speed=1)')
+    p.add_argument('--print-every', type=int,   default=50,
+                   help='Print loss every N epochs')
     import torch
     p.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = p.parse_args()
 
-    print(f'[NTFields] Map:    {args.map}')
-    print(f'[NTFields] Output: {args.output}')
-    print(f'[NTFields] Device: {args.device}')
+    print(f'[NTFields] Map:    {args.map}', flush=True)
+    print(f'[NTFields] Output: {args.output}', flush=True)
+    print(f'[NTFields] Device: {args.device}', flush=True)
 
     occ, res, origin = load_slam_map(args.map)
     H, W = occ.shape
     n_free = int(np.sum(occ == 0))
     print(f'[NTFields] Grid {W}×{H}  res={res:.3f}m  '
-          f'free={n_free} cells ({n_free * res * res:.1f} m²)')
+          f'free={n_free} cells ({n_free * res * res:.1f} m²)', flush=True)
 
     norm = build_normalizer(occ, res, origin)
-    print(f'[NTFields] Normalizer  offset={norm.offset}  scale={norm.scale:.2f}m')
+    print(f'[NTFields] Normalizer  offset={norm.offset}  scale={norm.scale:.2f}m',
+          flush=True)
 
-    print(f'[NTFields] Sampling {args.pairs:,} pairs via EDT…')
+    print(f'[NTFields] Sampling {args.pairs:,} pairs via EDT…', flush=True)
     t0 = time.time()
     points, speeds = sample_training_pairs_from_map(
         occ, res, origin, norm,
@@ -115,24 +118,24 @@ def main():
         d_max_m=args.d_max,
     )
     print(f'[NTFields] Dataset ready in {time.time()-t0:.1f}s  '
-          f'points={tuple(points.shape)}  speeds={tuple(speeds.shape)}')
+          f'points={tuple(points.shape)}  speeds={tuple(speeds.shape)}', flush=True)
 
     model = NTFieldsModel(dim=2, device=args.device)
-    print(f'[NTFields] Training {args.epochs} epochs…')
+    print(f'[NTFields] Training {args.epochs} epochs…', flush=True)
     t0 = time.time()
     losses = model.train_offline(
         points, speeds,
         n_epochs=args.epochs,
         batch_size=args.batch,
-        print_every=200,
+        print_every=args.print_every,
     )
     elapsed = time.time() - t0
-    print(f'[NTFields] Done in {elapsed:.0f}s  final loss={losses[-1]:.4e}')
+    print(f'[NTFields] Done in {elapsed:.0f}s  final loss={losses[-1]:.4e}', flush=True)
 
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
     model.save(args.output, norm)
-    print(f'[NTFields] Model saved → {args.output}')
+    print(f'[NTFields] Model saved → {args.output}', flush=True)
 
 
 if __name__ == '__main__':

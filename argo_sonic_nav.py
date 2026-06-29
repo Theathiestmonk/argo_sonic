@@ -355,6 +355,88 @@ def cleanup(sig=None, frame=None):
     sys.exit(0)
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  Map selector (runs before TUI takes over the terminal)
+# ──────────────────────────────────────────────────────────────────────────────
+def _find_maps(home: str) -> list:
+    """Return sorted list of (display_name, map_base_path, has_model) tuples."""
+    maps_dir   = Path(home) / "argo_sonic/src/argo_mini/maps"
+    models_dir = Path(home) / "ntfields_models"
+    results = []
+    seen = set()
+    for f in sorted(maps_dir.glob("*.yaml")):
+        name = f.stem
+        if name in seen:
+            continue
+        seen.add(name)
+        has_model = (models_dir / f"{name}.pt").exists()
+        results.append((name, str(f.with_suffix("")), has_model))
+    return results
+
+
+def select_map_interactive(home: str, default_name: str) -> str:
+    """
+    Print a numbered map list and return the chosen map_base path.
+    Runs before the fullscreen TUI so normal print/input work fine.
+    """
+    maps = _find_maps(home)
+    if not maps:
+        print(f"{RED}No maps found in src/argo_mini/maps/{RS}")
+        sys.exit(1)
+
+    # Find default index
+    default_idx = 0
+    for i, (name, _, _) in enumerate(maps):
+        if name == default_name:
+            default_idx = i
+            break
+
+    W = 62
+    print(f"\n{BORDER}+{'-'*(W-2)}+{RS}")
+    print(f"{BORDER}|{RS}{BG_H}  {GOLD}{BLD}  ARGO SONIC  –  Select Navigation Map  {RS}{BG_H}{'':>14}{RS}{BORDER}|{RS}")
+    print(f"{BORDER}+{'-'*(W-2)}+{RS}")
+    print(f"{BORDER}|{RS}  {DIM}{GRAY}  #   Map Name                        Model{RS}{'':>18}{BORDER}|{RS}")
+    print(f"{BORDER}+{'-'*(W-2)}+{RS}")
+
+    for i, (name, _, has_model) in enumerate(maps):
+        marker  = f"{GOLD}{BLD}▶ {RS}" if i == default_idx else "  "
+        num     = f"{CYAN}{i+1:>2}{RS}"
+        model_s = f"{GREEN}[model OK]{RS}" if has_model else f"{YELLOW}[no model]{RS}"
+        name_col = name[:35].ljust(35)
+        print(f"{BORDER}|{RS}  {marker}{num}  {WHITE}{name_col}{RS}  {model_s}  {BORDER}|{RS}")
+
+    print(f"{BORDER}+{'-'*(W-2)}+{RS}")
+    print(f"  {DIM}Enter number  [default={default_idx+1} – {maps[default_idx][0]}]: {RS}", end="", flush=True)
+
+    try:
+        raw = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        print(); sys.exit(0)
+
+    if raw == "":
+        chosen = maps[default_idx]
+    else:
+        try:
+            n = int(raw)
+            if not (1 <= n <= len(maps)):
+                raise ValueError
+            chosen = maps[n - 1]
+        except ValueError:
+            print(f"{RED}Invalid selection – using default.{RS}")
+            chosen = maps[default_idx]
+
+    name, map_base, has_model = chosen
+    if not has_model:
+        print(f"\n  {YELLOW}Warning: no trained NTFields model found for '{name}'.{RS}")
+        print(f"  {GRAY}Run  python3 train_ntfields.py  to train one first.{RS}")
+        print(f"  {GRAY}Continuing anyway – planner will fail to load model.{RS}\n")
+        time.sleep(2)
+
+    print(f"\n  {GREEN}Selected:{RS}  {GOLD}{BLD}{name}{RS}  →  {GRAY}{map_base}{RS}\n")
+    time.sleep(0.8)
+    return map_base
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  Main
 # ──────────────────────────────────────────────────────────────────────────────
 def main():
@@ -362,14 +444,22 @@ def main():
 
     parser = argparse.ArgumentParser(description="Argo Sonic NTFields Navigation Launcher")
     parser.add_argument("--no-cam", action="store_true", help="Skip depth camera")
-    parser.add_argument("--map",
-                        default="~/argo_sonic/src/argo_mini/maps/office_map",
-                        help="Map path (no extension)")
+    parser.add_argument("--map", default=None,
+                        help="Map name or full path (skips interactive selector)")
     args = parser.parse_args()
 
-    home     = str(Path.home())
-    map_base = args.map.replace("~", home)
-    no_cam   = args.no_cam
+    home   = str(Path.home())
+    no_cam = args.no_cam
+
+    if args.map:
+        # CLI override: accept bare name (e.g. office_map) or full path
+        raw = args.map.replace("~", home)
+        if os.sep not in raw:
+            # bare name → resolve to maps dir, strip any extension
+            raw = str(Path(home) / "argo_sonic/src/argo_mini/maps" / raw)
+        map_base = str(Path(raw).with_suffix(""))
+    else:
+        map_base = select_map_interactive(home, default_name="office_map")
 
     signal.signal(signal.SIGINT,  cleanup)
     signal.signal(signal.SIGTERM, cleanup)
