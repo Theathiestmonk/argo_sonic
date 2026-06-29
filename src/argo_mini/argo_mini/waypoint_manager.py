@@ -9,6 +9,7 @@ from nav2_msgs.action import NavigateToPose
 import json
 import os
 import threading
+import time
 import math
 
 WAYPOINTS_FILE = os.path.expanduser('~/argo_mini_ws/src/argo_mini/waypoints/waypoints.json')
@@ -39,6 +40,10 @@ class WaypointManager(Node):
         self.current_odom_pose = None
         self.clicked_point = None
         self.waypoints = self.load_waypoints()
+
+        self._current_handle = None   # active goal handle (for cancellation)
+        self._retry_wp       = None   # waypoint key being retried
+        self._stop_retry     = threading.Event()  # set to halt retry loop
         
         self.get_logger().info('Waypoint Manager initialized with improved pose handling.')
         self.print_menu()
@@ -93,11 +98,12 @@ class WaypointManager(Node):
 
     def print_menu(self):
         print('\n' + '='*60)
-        print(' ARGO MINI WAYPOINT MANAGER (Improved Pose)')
+        print(' ARGO MINI WAYPOINT MANAGER')
         print('='*60)
         print(' s <0-9>  Save current robot pose (AMCL > Odom)')
         print(' c <0-9>  Save clicked point (RViz)')
-        print(' g <0-9>  Go to waypoint')
+        print(' g <0-9>  Go to waypoint  (retries until success or cancel)')
+        print(' x        Cancel navigation + stop retrying')
         print(' p        Print current pose')
         print(' l        List waypoints')
         print(' q        Quit')
@@ -142,14 +148,38 @@ class WaypointManager(Node):
         self.save_waypoints()
         print(f"Saved waypoint {n} from clicked point (facing forward).")
 
-    def go_to(self, n):
+    def cancel_current(self):
+        """Cancel the active goal and stop any retry loop."""
+        self._stop_retry.set()
+        self._retry_wp = None
+        if self._current_handle is not None:
+            self._current_handle.cancel_goal_async()
+            self._current_handle = None
+            print("\n[CANCEL] Navigation cancelled.")
+
+    def go_to(self, n, _retry=False):
+        """Send a goal to waypoint n.  Set _retry=True for internal retries."""
         key = str(n)
         if key not in self.waypoints:
             print(f"ERROR: Waypoint {n} not found.")
             return
 
+        # A fresh user command cancels any existing retry loop first
+        if not _retry:
+            self._stop_retry.clear()
+            self._retry_wp = key
+            if self._current_handle is not None:
+                self._current_handle.cancel_goal_async()
+                self._current_handle = None
+                time.sleep(0.5)   # let Nav2 process the cancel
+
+        if self._stop_retry.is_set():
+            return
+
         wp = self.waypoints[key]
-        print(f"\n[NAV] Sending goal to waypoint {n} → x={wp['x']:.3f}, y={wp['y']:.3f}")
+        attempt = getattr(self, '_attempt', 1)
+        print(f"\n[NAV] → Waypoint {n}  x={wp['x']:.3f} y={wp['y']:.3f}"
+              + (f"  (attempt {attempt})" if attempt > 1 else ""))
 
         if not self.nav_client.wait_for_server(timeout_sec=8.0):
             print("ERROR: Nav2 action server not available!")
@@ -173,18 +203,37 @@ class WaypointManager(Node):
     def goal_response_cb(self, future, n):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            print(f"\n[FAIL] Goal to waypoint {n} was REJECTED.")
+            print(f"\n[FAIL] Goal rejected by Nav2.")
+            self._schedule_retry(n)
             return
+        self._current_handle = goal_handle
+        self._attempt = getattr(self, '_attempt', 0) + 1
         print(f"\n[ACCEPTED] Moving toward waypoint {n}...")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(lambda f: self.result_cb(f, n))
 
     def result_cb(self, future, n):
-        result = future.result()
-        if result.status == 4:  # Succeeded
+        self._current_handle = None
+        result  = future.result()
+        status  = result.status
+
+        if status == 4:            # STATUS_SUCCEEDED
+            self._retry_wp  = None
+            self._attempt   = 1
             print(f"\n[SUCCESS] Reached waypoint {n}!")
+        elif self._stop_retry.is_set():
+            print(f"\n[CANCELLED] Navigation to waypoint {n} stopped.")
         else:
-            print(f"\n[FAIL] Failed to reach waypoint {n} (status: {result.status})")
+            print(f"\n[FAIL] Status {status} – will retry waypoint {n}…")
+            self._schedule_retry(n)
+
+    def _schedule_retry(self, n, delay=2.0):
+        """Wait delay seconds then retry, unless stop_retry is set."""
+        def _do():
+            if not self._stop_retry.wait(timeout=delay):
+                threading.Thread(target=self.go_to, args=(n,),
+                                 kwargs={'_retry': True}, daemon=True).start()
+        threading.Thread(target=_do, daemon=True).start()
 
 
 def main():
@@ -202,6 +251,7 @@ def main():
             parts = cmd.split()
             
             if parts[0] == 'q':
+                node.cancel_current()
                 break
             elif parts[0] == 'l':
                 node.print_menu()
@@ -218,9 +268,12 @@ def main():
             elif parts[0] == 'c' and len(parts) == 2:
                 node.save_clicked_as(int(parts[1]))
             elif parts[0] == 'g' and len(parts) == 2:
+                node._attempt = 1
                 threading.Thread(target=node.go_to, args=(int(parts[1]),), daemon=True).start()
+            elif parts[0] == 'x':
+                node.cancel_current()
             else:
-                print("Commands: s <0-9> | c <0-9> | g <0-9> | p | l | q")
+                print("Commands: s <0-9> | c <0-9> | g <0-9> | x | p | l | q")
     except KeyboardInterrupt:
         pass
     finally:
