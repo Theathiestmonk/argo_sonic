@@ -24,17 +24,15 @@
 #   ros2 service call /slam_toolbox/save_map \
 #     slam_toolbox/srv/SaveMap "{name: {data: '/home/argo/maps/explored_map'}}"
 
-set -euo pipefail
-
 # ── Environment ───────────────────────────────────────────────────────────────
 source /opt/ros/humble/setup.bash
-source ~/argo_sonic/install/setup.bash
+source ~/dhruvil/argo_sonic/install/setup.bash
 
-SHARE=~/argo_sonic/install/argo_mini/share/argo_mini
+SHARE=~/dhruvil/argo_sonic/install/argo_mini/share/argo_mini
 NAV_CONFIG=$SHARE/config/nav2.yaml
 EXPLORE_CONFIG=$SHARE/config/exploration_nav2.yaml
 SLAM_CONFIG=$SHARE/config/slam_mapping.yaml
-FRONTIER_NODE=~/argo_sonic/src/argo_mini/argo_mini/frontier_explorer.py
+FRONTIER_NODE=~/dhruvil/argo_sonic/src/argo_mini/argo_mini/frontier_explorer.py
 
 # ── USB permissions ───────────────────────────────────────────────────────────
 chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
