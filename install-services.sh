@@ -1,16 +1,15 @@
 #!/bin/bash
 # install-services.sh
-# Run once on the Jetson to set up auto-start for the UI and launcher.
+# Run on the Jetson (safe to re-run after updates).
 #
-# Usage:
-#   bash ~/dhruvil/argo_sonic/install-services.sh
+# Creates 3 systemd services that auto-start at boot:
+#   argo-rosbridge  →  rosbridge WebSocket (port 9090)  — always on
+#   argo-launcher   →  launcher HTTP API   (port 8888)  — always on
+#   argo-ui         →  React frontend      (port 3000)  — always on
 #
-# After this, on every boot:
-#   - http://<jetson-ip>:3000  → Argo setup UI
-#   - http://<jetson-ip>:8888  → Launcher API (called by UI "Start Argo" button)
-#
-# The UI "Start Argo" button calls the launcher which runs start_slam_explore.sh
-# (rosbridge is included in that script so the UI connects automatically).
+# User flow after this:
+#   Open http://<jetson-ip>:3000 → UI loads, already connected to ROS
+#   Click "Start Argo" → launcher starts SLAM + Nav2 + frontier_explorer
 
 set -e
 
@@ -18,6 +17,7 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 WHOAMI="$(whoami)"
 PYTHON="$(which python3)"
 NPM="$(which npm)"
+ROS_SETUP="/opt/ros/humble/setup.bash"
 
 echo ""
 echo "================================================"
@@ -28,13 +28,36 @@ echo "  python: $PYTHON"
 echo "================================================"
 echo ""
 
-# ── Step 1: Build the React frontend ──────────────────────────────────────────
+# ── Step 1: Build the React frontend ─────────────────────────────────────────
 echo "[install] Building frontend..."
 cd "$REPO/frontend"
 $NPM run build
 echo "[install] Frontend built → $REPO/frontend/dist"
+cd "$REPO"
 
-# ── Step 2: Create argo-launcher.service ──────────────────────────────────────
+# ── Step 2: argo-rosbridge.service ───────────────────────────────────────────
+# Rosbridge must be always-on so the UI can connect the moment you open it.
+# It is NOT part of start_slam_explore.sh — it runs independently.
+echo "[install] Creating argo-rosbridge.service..."
+sudo tee /etc/systemd/system/argo-rosbridge.service > /dev/null <<EOF
+[Unit]
+Description=ROS2 Rosbridge WebSocket Server (port 9090)
+After=network.target
+
+[Service]
+Type=simple
+User=$WHOAMI
+ExecStart=/bin/bash -c 'source $ROS_SETUP && exec ros2 launch rosbridge_server rosbridge_websocket_launch.xml'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ── Step 3: argo-launcher.service ────────────────────────────────────────────
 echo "[install] Creating argo-launcher.service..."
 sudo tee /etc/systemd/system/argo-launcher.service > /dev/null <<EOF
 [Unit]
@@ -55,8 +78,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ── Step 3: Create argo-ui.service ────────────────────────────────────────────
-# Serves the built React app with Python's built-in HTTP server — no Node needed at runtime.
+# ── Step 4: argo-ui.service ──────────────────────────────────────────────────
 echo "[install] Creating argo-ui.service..."
 sudo tee /etc/systemd/system/argo-ui.service > /dev/null <<EOF
 [Unit]
@@ -77,25 +99,27 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ── Step 4: Enable and start both services ─────────────────────────────────────
-echo "[install] Enabling services..."
+# ── Step 5: Enable and (re)start all three services ──────────────────────────
+echo "[install] Enabling and starting services..."
 sudo systemctl daemon-reload
-sudo systemctl enable argo-launcher.service argo-ui.service
-sudo systemctl restart argo-launcher.service argo-ui.service
+sudo systemctl enable  argo-rosbridge.service argo-launcher.service argo-ui.service
+sudo systemctl restart argo-rosbridge.service argo-launcher.service argo-ui.service
 
 echo ""
 echo "================================================"
-echo "  Done! Services are running."
+echo "  Done!"
 echo ""
-echo "  UI       →  http://$(hostname -I | awk '{print $1}'):3000"
-echo "  Launcher →  http://$(hostname -I | awk '{print $1}'):8888"
+echo "  Open this URL on any device:"
+echo "  → http://$(hostname -I | awk '{print $1}'):3000"
 echo ""
-echo "  Check status:"
-echo "    sudo systemctl status argo-ui"
-echo "    sudo systemctl status argo-launcher"
+echo "  Services:"
+echo "    rosbridge  :9090  $(sudo systemctl is-active argo-rosbridge)"
+echo "    launcher   :8888  $(sudo systemctl is-active argo-launcher)"
+echo "    ui         :3000  $(sudo systemctl is-active argo-ui)"
 echo ""
-echo "  View logs:"
-echo "    journalctl -u argo-ui -f"
-echo "    journalctl -u argo-launcher -f"
+echo "  Logs:"
+echo "    journalctl -u argo-rosbridge -f"
+echo "    journalctl -u argo-launcher  -f"
+echo "    journalctl -u argo-ui        -f"
 echo "================================================"
 echo ""

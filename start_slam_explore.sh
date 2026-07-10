@@ -99,12 +99,6 @@ wait_for_action() {
   done
 }
 
-# ── 0. Rosbridge WebSocket (UI ↔ ROS bridge) ─────────────────────────────────
-echo "[explore] 0. rosbridge_server (port 9090)..."
-ros2 launch rosbridge_server rosbridge_websocket_launch.xml &
-ROSBRIDGE_PID=$!
-sleep 3
-
 # ── 1. Robot state publisher ──────────────────────────────────────────────────
 echo "[explore] 1. robot_state_publisher..."
 ros2 launch argo_mini robot_state_publisher.launch.py &
@@ -254,7 +248,7 @@ echo ""
 
 trap '
   echo "[explore] Shutting down..."
-  kill "$ROSBRIDGE_PID" "$RSP_PID" "$SERIAL_PID" "$LIDAR_PID" "$RELAY_PID" \
+  kill "$RSP_PID" "$SERIAL_PID" "$LIDAR_PID" "$RELAY_PID" \
        "$SLAM_PID" "$BEHAVIOR_PID" "$PLANNER_PID" "$CONTROLLER_PID" \
        "$SMOOTHER_PID" "$SHIELD_PID" "$BT_PID" "$FRONTIER_PID" \
        "${RVIZ_PID:-}" 2>/dev/null || true
