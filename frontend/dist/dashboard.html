@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Argo · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #060408;
+    --glass: rgba(14, 10, 20, 0.32);
+    --glass-dense: rgba(16, 11, 24, 0.58);
+    --glass-specular: linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 38%, rgba(212,162,74,0.02) 58%, rgba(212,162,74,0.11) 100%);
+    --border-glass: rgba(255,255,255,0.09);
+    --text: #fdfbfa;
+    --muted: #9c92a6;
+    --gold: #e2b35c;
+    --gold-bright: #ffd485;
+    --danger: #ff5e5e;
+    --ok: #3bf09b;
+    --blue: #7fa8e8;
+    --radius-lg: 24px;
+    --radius-md: 14px;
+    --font-heading: "Plus Jakarta Sans", system-ui, sans-serif;
+    --font-body: "Inter", system-ui, sans-serif;
+    --shadow-fluid: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-body); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  html { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.14) transparent; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 8px; }
+  button { font-family: inherit; color: inherit; background: none; border: 0; cursor: pointer; transition: all 0.25s cubic-bezier(0.25,0.8,0.25,1); }
+
+  /* Ambient blobs */
+  .ambient { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .blob { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.38; animation: float 12s infinite alternate ease-in-out; }
+  .blob-1 { top: -8%; left: 22%; width: 600px; height: 600px; background: #7b3fd4; }
+  .blob-2 { bottom: 8%; right: 8%; width: 520px; height: 520px; background: #e2962a; animation-delay: -4s; }
+  .blob-3 { top: 42%; left: -4%; width: 400px; height: 400px; background: #1d9962; animation-delay: -8s; }
+  @keyframes float { 0% { transform: translateY(0) scale(1) rotate(0deg); } 100% { transform: translateY(40px) scale(1.1) rotate(20deg); } }
+
+  /* Glass mixin helpers */
+  .glass-card {
+    background: var(--glass); border: 1px solid var(--border-glass); border-radius: var(--radius-lg);
+    backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+    box-shadow: var(--shadow-fluid); position: relative; overflow: hidden;
+  }
+  .glass-card::before { content: ""; position: absolute; inset: 0; background: var(--glass-specular); pointer-events: none; z-index: 0; }
+  .glass-card > * { position: relative; z-index: 1; }
+  .glass-dense {
+    background: var(--glass-dense); border: 1px solid var(--border-glass); border-radius: var(--radius-lg);
+    backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+    box-shadow: var(--shadow-fluid); position: relative; overflow: hidden;
+  }
+  .glass-dense::before { content: ""; position: absolute; inset: 0; background: var(--glass-specular); pointer-events: none; z-index: 0; }
+  .glass-dense > * { position: relative; z-index: 1; }
+
+  /* Shell */
+  .shell { display: flex; flex-direction: column; min-height: 100vh; }
+
+  /* Top nav */
+  .topnav {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    padding: 0 28px; height: 68px; flex-shrink: 0;
+    background: rgba(10,8,14,0.55);
+    backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+    border-bottom: 1px solid var(--border-glass);
+    position: sticky; top: 0; z-index: 30;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .logo {
+    width: 36px; height: 36px; border-radius: 11px;
+    background: linear-gradient(180deg,rgba(255,255,255,0.9) 0%,rgba(255,255,255,0) 100%), var(--gold);
+    background-blend-mode: overlay;
+    color: #1a1103; font-family: var(--font-heading); font-weight: 800; font-size: 17px;
+    display: grid; place-items: center; box-shadow: 0 6px 18px rgba(226,179,92,0.28);
+  }
+  .brand-name { font-family: var(--font-heading); font-weight: 800; font-size: 16px; }
+  .brand-sub { color: var(--muted); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; }
+
+  .nav-links { display: flex; align-items: center; gap: 2px; }
+  .nav-links a {
+    padding: 9px 14px; border-radius: var(--radius-md); font-size: 13px; font-weight: 600;
+    color: var(--muted); text-decoration: none; border: 1px solid transparent; transition: all 0.2s;
+  }
+  .nav-links a:hover { color: #fff; background: rgba(255,255,255,0.04); }
+  .nav-links a.active { color: var(--gold-bright); background: rgba(226,179,92,0.08); border-color: rgba(226,179,92,0.25); }
+
+  .nav-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .setup-btn {
+    padding: 9px 16px; border-radius: var(--radius-md); font-size: 12.5px; font-weight: 700;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border-glass); color: var(--muted);
+    text-decoration: none; display: flex; align-items: center; gap: 7px;
+  }
+  .setup-btn:hover { color: #fff; border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.07); }
+  .conn-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-radius: 99px; font-size: 12.5px; font-weight: 600;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); color: var(--muted);
+    cursor: pointer;
+  }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.2); flex-shrink: 0; }
+  .conn-dot.on { background: var(--ok); box-shadow: 0 0 7px var(--ok); animation: pulse-dot 2s infinite; }
+  @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Workspace */
+  .workspace { display: grid; grid-template-columns: 320px 1fr; flex: 1; }
+
+  /* Left rail */
+  .rail {
+    padding: 24px 20px; display: flex; flex-direction: column; gap: 16px;
+    border-right: 1px solid var(--border-glass);
+    background: rgba(8,6,11,0.25); backdrop-filter: blur(20px);
+    position: sticky; top: 68px; height: calc(100vh - 68px); overflow-y: auto;
+  }
+  .rail-label { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em; font-weight: 700; }
+  .mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mini {
+    background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);
+    border-radius: var(--radius-md); padding: 12px;
+  }
+  .mini .k { font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+  .mini .v { font-size: 13px; font-weight: 600; margin-top: 5px; }
+  .mini .s { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+
+  .flow-block { padding-top: 16px; border-top: 1px dashed rgba(255,255,255,0.08); }
+  .flow-label {
+    font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em;
+    font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .flow-num {
+    width: 20px; height: 20px; border-radius: 7px; background: rgba(226,179,92,0.12);
+    color: var(--gold-bright); display: grid; place-items: center; font-size: 10px; font-weight: 800; flex-shrink: 0;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    padding: 8px 14px; border-radius: 99px; font-size: 12.5px; font-weight: 600;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); color: var(--muted);
+    transition: all 0.2s;
+  }
+  .chip:hover { border-color: rgba(255,255,255,0.2); color: #fff; }
+  .chip.on { background: rgba(226,179,92,0.15); color: var(--gold-bright); border-color: rgba(226,179,92,0.38); font-weight: 700; }
+  #task .chip.on { background: rgba(226,179,92,0.15); color: var(--gold-bright); border-color: rgba(226,179,92,0.38); }
+
+  .cta { display: flex; gap: 10px; }
+  .btn {
+    padding: 13px 16px; border-radius: var(--radius-md); font-weight: 700; font-size: 13px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: 1;
+  }
+  .btn-primary {
+    background: linear-gradient(180deg,#fff 0%,#f3ede2 100%);
+    color: #1a1103; box-shadow: 0 10px 30px rgba(226,179,92,0.25);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 15px 35px rgba(226,179,92,0.4); }
+  .btn-ghost { background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); color: #fff; }
+  .btn-ghost:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.2); }
+
+  /* Main area */
+  .main { padding: 32px 36px 56px; }
+
+  .page-top { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 28px; flex-wrap: wrap; gap: 16px; }
+  .page-top h2 { font-family: var(--font-heading); font-size: 27px; font-weight: 800; letter-spacing: -0.5px; }
+  .page-top p { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .time-pill {
+    padding: 9px 16px; border-radius: 99px; font-size: 13px; font-weight: 600;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); color: var(--muted);
+  }
+
+  /* Stats strip */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 32px; }
+  .stat {
+    background: var(--glass); border: 1px solid var(--border-glass);
+    padding: 18px 20px; border-radius: var(--radius-lg); position: relative; overflow: hidden;
+    backdrop-filter: blur(25px); box-shadow: var(--shadow-fluid); display: flex; flex-direction: column; gap: 5px;
+  }
+  .stat::before { content: ""; position: absolute; inset: 0; background: var(--glass-specular); pointer-events: none; }
+  .stat .k { font-size: 10.5px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; position: relative; }
+  .stat .v { font-family: var(--font-heading); font-size: 24px; font-weight: 800; margin: 2px 0; position: relative; }
+  .stat .d { font-size: 11.5px; color: var(--muted); position: relative; }
+  .stat.pos .d { color: var(--ok); }
+
+  /* Places grid */
+  .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .section-head h3 { font-family: var(--font-heading); font-size: 19px; font-weight: 700; }
+  .section-head .sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .places-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin-bottom: 36px; }
+
+  .place-card {
+    background: var(--glass); border: 1px solid var(--border-glass); border-left: 3px solid rgba(255,255,255,0.15);
+    border-radius: var(--radius-lg); padding: 18px 20px; position: relative; overflow: hidden;
+    backdrop-filter: blur(25px); box-shadow: var(--shadow-fluid); cursor: pointer; transition: all 0.25s;
+  }
+  .place-card::before { content: ""; position: absolute; inset: 0; background: var(--glass-specular); pointer-events: none; }
+  .place-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.2); }
+  .place-card.selected { border-left-color: var(--gold); box-shadow: 0 0 0 2px rgba(226,179,92,0.2), var(--shadow-fluid); }
+  .place-card .head { display: flex; justify-content: space-between; align-items: flex-start; position: relative; }
+  .place-card .pname { font-family: var(--font-heading); font-size: 16px; font-weight: 800; }
+  .place-card .badge {
+    font-size: 10px; padding: 4px 10px; border-radius: 99px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); color: var(--muted);
+    white-space: nowrap;
+  }
+  .place-card .coords { font-size: 11.5px; color: var(--muted); margin-top: 8px; position: relative; }
+  .place-card .send-btn {
+    margin-top: 14px; width: 100%; padding: 10px; border-radius: 11px;
+    font-size: 12.5px; font-weight: 700;
+    background: rgba(226,179,92,0.08); border: 1px solid rgba(226,179,92,0.22); color: var(--gold-bright);
+    transition: all 0.2s; position: relative;
+  }
+  .place-card .send-btn:hover { background: rgba(226,179,92,0.16); }
+
+  .empty-places {
+    grid-column: 1/-1; text-align: center; padding: 56px 20px;
+    color: var(--muted); font-size: 14px; line-height: 1.8;
+  }
+  .empty-places a {
+    color: var(--gold-bright); text-decoration: none; font-weight: 700;
+    border-bottom: 1px solid rgba(226,179,92,0.3); padding-bottom: 1px;
+  }
+
+  /* Bottom panels */
+  .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .panel {
+    background: var(--glass); border: 1px solid var(--border-glass);
+    border-radius: var(--radius-lg); padding: 24px; box-shadow: var(--shadow-fluid);
+    backdrop-filter: blur(25px); position: relative; overflow: hidden;
+  }
+  .panel::before { content: ""; position: absolute; inset: 0; background: var(--glass-specular); pointer-events: none; }
+  .panel h3 { font-family: var(--font-heading); font-size: 17px; font-weight: 700; position: relative; }
+  .panel .sub { color: var(--muted); font-size: 12px; margin: 4px 0 16px; position: relative; }
+  .activity li, .alerts li {
+    list-style: none; display: flex; align-items: center; gap: 14px;
+    padding: 13px 0; border-bottom: 1px solid rgba(255,255,255,0.05); position: relative;
+  }
+  .activity li:last-child, .alerts li:last-child { border-bottom: 0; }
+  .act-tag {
+    width: 34px; height: 34px; border-radius: 10px; background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border-glass); color: var(--gold-bright);
+    display: grid; place-items: center; font-weight: 700; font-size: 11px; flex-shrink: 0;
+  }
+  .act-txt { font-size: 13px; }
+  .act-txt small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .alert-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 28px; right: 28px; z-index: 100;
+    background: rgba(12,9,18,0.92); border: 1px solid rgba(226,179,92,0.2);
+    border-radius: 14px; padding: 13px 20px; font-size: 13.5px; font-weight: 600;
+    backdrop-filter: blur(20px); box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+    color: var(--gold-bright); max-width: 320px;
+    transform: translateY(20px); opacity: 0; pointer-events: none;
+    transition: all 0.3s cubic-bezier(0.175,0.885,0.32,1.2);
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.ok { border-color: rgba(59,240,155,0.3); color: var(--ok); }
+  .toast.danger { border-color: rgba(255,94,94,0.3); color: var(--danger); }
+
+  @media (max-width: 1100px) {
+    .workspace { grid-template-columns: 1fr; }
+    .rail { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border-glass); }
+    .stats { grid-template-columns: repeat(2,1fr); }
+    .bottom-grid { grid-template-columns: 1fr; }
+    .nav-links { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="ambient">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+</div>
+
+<div class="shell">
+
+  <!-- Top nav -->
+  <header class="topnav">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <div class="brand-name">Argo <span id="envLabel" style="opacity:0.5;font-weight:600"></span></div>
+        <div class="brand-sub">Restaurant Dashboard</div>
+      </div>
+    </div>
+
+    <nav class="nav-links">
+      <a href="#" class="active">Overview</a>
+      <a href="#">Places</a>
+      <a href="#">Activity</a>
+      <a href="#">Settings</a>
+    </nav>
+
+    <div class="nav-right">
+      <a href="/" class="setup-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        Setup / Remap
+      </a>
+      <button class="conn-pill" id="connBtn" onclick="toggleConnect()">
+        <span class="conn-dot" id="connDot"></span>
+        <span id="connLabel">Connect</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="workspace">
+
+    <!-- Left rail: Argo control -->
+    <aside class="rail">
+      <div>
+        <div class="rail-label" style="margin-bottom:14px">Argo Status</div>
+        <div class="mini-grid">
+          <div class="mini"><div class="k">Current spot</div><div class="v" id="curPos">Home</div><div class="s">Right now</div></div>
+          <div class="mini"><div class="k">Status</div><div class="v" id="curStatus" style="color:var(--ok)">Idle</div><div class="s">Ready</div></div>
+          <div class="mini"><div class="k">Task</div><div class="v" id="taskLabel" style="color:var(--gold-bright)">—</div><div class="s">Next job</div></div>
+          <div class="mini"><div class="k">Battery</div><div class="v" style="color:var(--ok)">78%</div><div class="s">~1h 20m</div></div>
+        </div>
+      </div>
+
+      <div class="flow-block">
+        <div class="flow-label"><span class="flow-num">1</span>What do you need?</div>
+        <div class="chips" id="task">
+          <button class="chip on" data-task="Deliver">Deliver</button>
+          <button class="chip" data-task="Call Argo">Call Argo</button>
+          <button class="chip" data-task="Take order">Take order</button>
+          <button class="chip" data-task="Billing">Billing</button>
+          <button class="chip" data-task="Room service">Room service</button>
+        </div>
+      </div>
+
+      <div class="flow-block">
+        <div class="flow-label"><span class="flow-num">2</span>Where should Argo go?</div>
+        <div class="chips" id="dest">
+          <!-- populated from saved labels -->
+        </div>
+      </div>
+
+      <div class="flow-block">
+        <div class="flow-label"><span class="flow-num">3</span>Send Argo</div>
+        <div class="cta">
+          <button class="btn btn-ghost" onclick="recall()">Send Home</button>
+          <button class="btn btn-primary" onclick="sendArgo()">Confirm</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <div class="page-top">
+        <div>
+          <h2 id="greeting">Good day</h2>
+          <p>Here's what's happening right now.</p>
+        </div>
+        <div class="time-pill" id="timePill">—</div>
+      </div>
+
+      <!-- Stats -->
+      <section class="stats">
+        <div class="stat pos">
+          <div class="k">Today's Revenue</div>
+          <div class="v">₹18,240</div>
+          <div class="d">+12.5% vs yesterday</div>
+        </div>
+        <div class="stat">
+          <div class="k">Total Orders</div>
+          <div class="v">56</div>
+          <div class="d">+8 new today</div>
+        </div>
+        <div class="stat">
+          <div class="k">Locations Mapped</div>
+          <div class="v" id="statPlaces">0</div>
+          <div class="d">Ready to navigate</div>
+        </div>
+        <div class="stat">
+          <div class="k">Argo Status</div>
+          <div class="v" id="statArgo" style="color:var(--ok)">Ready</div>
+          <div class="d">Battery 78%</div>
+        </div>
+      </section>
+
+      <!-- Saved places grid -->
+      <section>
+        <div class="section-head">
+          <div>
+            <h3>Saved Places</h3>
+            <div class="sub">Click any place to send Argo there instantly.</div>
+          </div>
+          <a href="/" style="color:var(--gold-bright);font-size:13px;font-weight:600;text-decoration:none">Add places →</a>
+        </div>
+        <div class="places-grid" id="placesGrid">
+          <!-- populated from saved labels -->
+        </div>
+      </section>
+
+      <!-- Activity + Alerts -->
+      <section class="bottom-grid">
+        <div class="panel">
+          <h3>Recent Activity</h3>
+          <div class="sub">What Argo has done today.</div>
+          <ul class="activity" id="activity">
+            <li><div class="act-tag">—</div><div class="act-txt">No activity yet<small>Argo is ready to start</small></div></li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Alerts</h3>
+          <div class="sub">Things that may need attention.</div>
+          <ul class="alerts">
+            <li><div class="alert-dot" style="background:var(--ok)"></div><div class="act-txt">All systems normal<small>Argo is online and ready</small></div></li>
+            <li><div class="alert-dot" style="background:var(--gold)"></div><div class="act-txt">No pending tasks<small>Choose a destination and confirm</small></div></li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── rosbridge connection ──────────────────────────────────────────────────
+  const ROS_URL = 'ws://localhost:9090'
+  let ros = null
+  let cmdVelTopic = null
+  let goalTopic = null
+  let connected = false
+
+  function connectRos() {
+    if (typeof ROSLIB === 'undefined') return  // roslib not loaded offline
+    ros = new ROSLIB.Ros({ url: ROS_URL })
+    ros.on('connection', () => {
+      connected = true
+      document.getElementById('connDot').classList.add('on')
+      document.getElementById('connLabel').textContent = 'Connected'
+      cmdVelTopic = new ROSLIB.Topic({ ros, name: '/cmd_vel', messageType: 'geometry_msgs/Twist' })
+      goalTopic   = new ROSLIB.Topic({ ros, name: '/goal_pose', messageType: 'geometry_msgs/PoseStamped' })
+    })
+    ros.on('close',   () => { connected = false; document.getElementById('connDot').classList.remove('on'); document.getElementById('connLabel').textContent = 'Disconnected' })
+    ros.on('error',   () => { connected = false; document.getElementById('connDot').classList.remove('on'); document.getElementById('connLabel').textContent = 'Error' })
+  }
+
+  function toggleConnect() {
+    if (connected) { ros?.close(); } else { connectRos() }
+  }
+
+  // ── Load saved labels from localStorage ──────────────────────────────────
+  let labels = []
+  let selectedDest = null
+  let selectedTask = 'Deliver'
+
+  function loadLabels() {
+    try { labels = JSON.parse(localStorage.getItem('argo_labels') || '[]') } catch { labels = [] }
+    document.getElementById('statPlaces').textContent = labels.length
+
+    // Populate destination chips
+    const dest = document.getElementById('dest')
+    dest.innerHTML = ''
+    const allDests = [{ name: 'Home', wx: 0, wy: 0 }, ...labels]
+    allDests.forEach(l => {
+      const btn = document.createElement('button')
+      btn.className = 'chip'
+      btn.dataset.name = l.name
+      btn.dataset.wx = l.wx ?? 0
+      btn.dataset.wy = l.wy ?? 0
+      btn.textContent = l.name
+      btn.onclick = () => selectDest(l.name)
+      dest.appendChild(btn)
+    })
+
+    // Populate places grid
+    const grid = document.getElementById('placesGrid')
+    if (labels.length === 0) {
+      grid.innerHTML = `
+        <div class="empty-places">
+          No places saved yet.<br/>
+          <a href="/">Run the setup flow</a> to map your space and label locations — then they'll appear here.
+        </div>`
+      return
+    }
+    grid.innerHTML = ''
+    labels.forEach(l => {
+      const card = document.createElement('div')
+      card.className = 'place-card'
+      card.dataset.name = l.name
+      card.innerHTML = `
+        <div class="head">
+          <div class="pname">${l.name}</div>
+          <div class="badge">Saved</div>
+        </div>
+        <div class="coords">${Number(l.wx).toFixed(1)} m, ${Number(l.wy).toFixed(1)} m</div>
+        <button class="send-btn">Send Argo here</button>`
+      card.querySelector('.send-btn').onclick = (e) => {
+        e.stopPropagation()
+        selectDest(l.name)
+        sendArgo()
+      }
+      card.onclick = () => selectDest(l.name)
+      grid.appendChild(card)
+    })
+  }
+
+  function selectDest(name) {
+    selectedDest = name
+    document.querySelectorAll('#dest .chip').forEach(c => c.classList.toggle('on', c.dataset.name === name))
+    document.querySelectorAll('.place-card').forEach(c => c.classList.toggle('selected', c.dataset.name === name))
+  }
+
+  function sendArgo() {
+    if (!selectedDest) { showToast('Select a destination first', 'danger'); return }
+    const label = [...labels, { name: 'Home', wx: 0, wy: 0 }].find(l => l.name === selectedDest)
+
+    document.getElementById('curStatus').textContent = 'Moving'
+    document.getElementById('curStatus').style.color = 'var(--gold)'
+    document.getElementById('taskLabel').textContent = selectedTask + ' → ' + selectedDest
+    document.getElementById('statArgo').textContent = 'Moving'
+    document.getElementById('statArgo').style.color = 'var(--gold)'
+
+    showToast(`Argo is heading to ${selectedDest}`, 'ok')
+
+    // Publish ROS goal if connected
+    if (connected && goalTopic && label) {
+      goalTopic.publish({
+        header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
+        pose: { position: { x: label.wx, y: label.wy, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } }
+      })
+    }
+
+    // Log activity
+    addActivity(selectedDest, selectedTask)
+
+    setTimeout(() => {
+      document.getElementById('curPos').textContent = selectedDest
+      document.getElementById('curStatus').textContent = 'Arrived'
+      document.getElementById('curStatus').style.color = 'var(--ok)'
+      document.getElementById('statArgo').textContent = 'Idle'
+      document.getElementById('statArgo').style.color = 'var(--ok)'
+      showToast(`Argo arrived at ${selectedDest}`, 'ok')
+    }, 1800)
+  }
+
+  function recall() {
+    selectDest('Home')
+    sendArgo()
+  }
+
+  // ── Activity log ──────────────────────────────────────────────────────────
+  const activityLog = []
+  function addActivity(dest, task) {
+    const now = new Date()
+    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    activityLog.unshift({ dest, task, time })
+    const ul = document.getElementById('activity')
+    ul.innerHTML = activityLog.slice(0, 6).map(a => `
+      <li>
+        <div class="act-tag">${a.dest.slice(0,4)}</div>
+        <div class="act-txt">${a.task} → ${a.dest}<small>${a.time}</small></div>
+      </li>`).join('')
+  }
+
+  // ── Task chips ────────────────────────────────────────────────────────────
+  document.querySelectorAll('#task .chip').forEach(c => {
+    c.onclick = () => {
+      selectedTask = c.dataset.task
+      document.getElementById('taskLabel').textContent = selectedTask
+      document.querySelectorAll('#task .chip').forEach(x => x.classList.toggle('on', x === c))
+    }
+  })
+
+  // ── Greeting + time ───────────────────────────────────────────────────────
+  function updateTime() {
+    const now = new Date()
+    const h = now.getHours()
+    const greeting = h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening'
+    document.getElementById('greeting').textContent = greeting
+    document.getElementById('timePill').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  updateTime(); setInterval(updateTime, 30000)
+
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  let toastTimer
+  function showToast(msg, type = '') {
+    const t = document.getElementById('toast')
+    t.textContent = msg
+    t.className = 'toast show' + (type ? ' ' + type : '')
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { t.className = 'toast' }, 3200)
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  loadLabels()
+  // Auto-connect on load
+  if (document.readyState === 'complete') { setTimeout(connectRos, 500) }
+  else { window.addEventListener('load', () => setTimeout(connectRos, 500)) }
+</script>
+
+<!-- Load roslib from CDN for live ROS connection -->
+<script src="https://cdn.jsdelivr.net/npm/roslib@1.4.1/build/roslib.min.js"></script>
+</body>
+</html>

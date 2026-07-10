@@ -26,6 +26,7 @@ from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -61,6 +62,7 @@ class FrontierExplorer(Node):
         self._consec_fails  = 0
         self._backoff_until = 0.0
         self._blacklist: list[tuple[float, float]] = []
+        self._paused        = False
 
         # ── TF ────────────────────────────────────────────────────────────────
         self._tf_buffer   = Buffer()
@@ -75,6 +77,9 @@ class FrontierExplorer(Node):
         )
         self.create_subscription(OccupancyGrid, "/map", self._on_map, map_qos)
 
+        # ── /exploration/paused subscription (UI pause/resume) ────────────────
+        self.create_subscription(Bool, "/exploration/paused", self._on_paused, 10)
+
         # ── Action client + marker publisher ──────────────────────────────────
         self._action_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self._marker_pub = self.create_publisher(MarkerArray, "/frontier_markers", 10)
@@ -83,6 +88,15 @@ class FrontierExplorer(Node):
         self.create_timer(TICK_SECS, self._tick)
 
         self.get_logger().info("[FrontierExplorer] ready – waiting for /map and TF")
+
+    # ── Pause callback (from UI) ──────────────────────────────────────────────
+
+    def _on_paused(self, msg: Bool) -> None:
+        self._paused = msg.data
+        if self._paused and self._goal_active:
+            self.get_logger().info("[FrontierExplorer] paused by UI – cancelling current goal")
+            self._cancel_current()
+        self.get_logger().info(f"[FrontierExplorer] {'paused' if self._paused else 'resumed'} by UI")
 
     # ── Map callback ──────────────────────────────────────────────────────────
 
@@ -105,7 +119,7 @@ class FrontierExplorer(Node):
     # ── Main exploration tick ─────────────────────────────────────────────────
 
     def _tick(self) -> None:
-        if self._map is None:
+        if self._map is None or self._paused:
             return
 
         # If a goal is active, only check for timeout.
