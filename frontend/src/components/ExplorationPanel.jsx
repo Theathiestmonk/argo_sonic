@@ -60,10 +60,11 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     return () => clearInterval(pollRef.current)
   }, [])
 
-  // Stop retrying once connected
+  // Poll stack status every 5 s so UI stays in sync
   useEffect(() => {
-    if (connected) { stopRetrying?.(); setStackState('running') }
-  }, [connected])
+    const id = setInterval(checkStack, 5000)
+    return () => clearInterval(id)
+  }, [])
 
   const checkStack = async () => {
     try {
@@ -163,8 +164,8 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
       {/* ── Left panel ── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto', paddingRight: 2 }}>
 
-        {/* Stack launch gate */}
-        {!connected && (
+        {/* Stack launch gate — show when stack not running (independent of rosbridge) */}
+        {stackState !== 'running' && (
           <div className="glass-dense" style={{ padding: 20, animation: 'slideUp 0.2s ease' }}>
             <div className="label-xs" style={{ marginBottom: 14 }}>Robot stack</div>
 
@@ -207,10 +208,10 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
             <div className="label-xs">How should Argo map?</div>
             {connected && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 10px', borderRadius: 99, background: 'rgba(59,240,155,0.1)', border: '1px solid rgba(59,240,155,0.25)', color: 'var(--ok)' }}>Connected</span>}
           </div>
-          <ModeToggle mode={mode} onAuto={activateAuto} onManual={activateManual} disabled={!connected} />
-          {!connected && !isStarting && (
+          <ModeToggle mode={mode} onAuto={activateAuto} onManual={activateManual} disabled={stackState !== 'running'} />
+          {stackState !== 'running' && !isStarting && (
             <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
-              Click <strong style={{ color: '#fff' }}>Start Argo</strong> above to launch the robot stack, then choose a mode.
+              Click <strong style={{ color: '#fff' }}>Start Argo</strong> above to launch SLAM, Nav2 and the exploration stack.
             </p>
           )}
           {connected && !mode && (
