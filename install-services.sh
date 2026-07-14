@@ -35,9 +35,21 @@ $NPM run build
 echo "[install] Frontend built → $REPO/frontend/dist"
 cd "$REPO"
 
-# ── Step 2: argo-rosbridge.service ───────────────────────────────────────────
+# ── Step 2: install rosbridge if missing ─────────────────────────────────────
+echo "[install] Checking rosbridge_suite..."
+if ! /opt/ros/humble/bin/ros2 pkg list 2>/dev/null | grep -q rosbridge_server; then
+    echo "[install] rosbridge not found — installing ros-humble-rosbridge-suite..."
+    sudo apt-get install -y ros-humble-rosbridge-suite
+else
+    echo "[install] rosbridge_server found ✓"
+fi
+
+# Make the wrapper executable
+chmod +x "$REPO/backend/start-rosbridge.sh"
+
+# ── Step 3: argo-rosbridge.service ───────────────────────────────────────────
 # Rosbridge must be always-on so the UI can connect the moment you open it.
-# It is NOT part of start_slam_explore.sh — it runs independently.
+# Uses a wrapper script so systemd gets the full ROS environment (PATH fix).
 echo "[install] Creating argo-rosbridge.service..."
 sudo tee /etc/systemd/system/argo-rosbridge.service > /dev/null <<EOF
 [Unit]
@@ -47,7 +59,7 @@ After=network.target
 [Service]
 Type=simple
 User=$WHOAMI
-ExecStart=/bin/bash -c 'source $ROS_SETUP && exec ros2 launch rosbridge_server rosbridge_websocket_launch.xml'
+ExecStart=/bin/bash $REPO/backend/start-rosbridge.sh
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -57,7 +69,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ── Step 3: argo-launcher.service ────────────────────────────────────────────
+# ── Step 4: argo-launcher.service ────────────────────────────────────────────
 echo "[install] Creating argo-launcher.service..."
 sudo tee /etc/systemd/system/argo-launcher.service > /dev/null <<EOF
 [Unit]
@@ -78,7 +90,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ── Step 4: argo-ui.service ──────────────────────────────────────────────────
+# ── Step 5: argo-ui.service ──────────────────────────────────────────────────
 echo "[install] Creating argo-ui.service..."
 sudo tee /etc/systemd/system/argo-ui.service > /dev/null <<EOF
 [Unit]
@@ -99,7 +111,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ── Step 5: Enable and (re)start all three services ──────────────────────────
+# ── Step 6: Enable and (re)start all three services ──────────────────────────
 echo "[install] Enabling and starting services..."
 sudo systemctl daemon-reload
 sudo systemctl enable  argo-rosbridge.service argo-launcher.service argo-ui.service
