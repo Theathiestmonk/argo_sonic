@@ -25,14 +25,16 @@
 #     slam_toolbox/srv/SaveMap "{name: {data: '/home/argo/maps/explored_map'}}"
 
 # ── Environment ───────────────────────────────────────────────────────────────
-source /opt/ros/humble/setup.bash
-source ~/dhruvil/argo_sonic/install/setup.bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-SHARE=~/dhruvil/argo_sonic/install/argo_mini/share/argo_mini
+source /opt/ros/humble/setup.bash
+source "$SCRIPT_DIR/install/setup.bash"
+
+SHARE="$SCRIPT_DIR/install/argo_mini/share/argo_mini"
 NAV_CONFIG=$SHARE/config/nav2.yaml
 EXPLORE_CONFIG=$SHARE/config/exploration_nav2.yaml
 SLAM_CONFIG=$SHARE/config/slam_mapping.yaml
-FRONTIER_NODE=~/dhruvil/argo_sonic/src/argo_mini/argo_mini/frontier_explorer.py
+FRONTIER_NODE="$SCRIPT_DIR/src/argo_mini/argo_mini/frontier_explorer.py"
 
 # ── USB permissions ───────────────────────────────────────────────────────────
 chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
