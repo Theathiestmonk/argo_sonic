@@ -25,7 +25,7 @@
 #     slam_toolbox/srv/SaveMap "{name: {data: '/home/argo/maps/explored_map'}}"
 
 # ── Environment ───────────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/install/setup.bash"
@@ -209,9 +209,12 @@ wait_for_action "/wait"                 15 || true
 
 # ── 12. BT Navigator (exploration BT via exploration_nav2.yaml) ───────────────
 echo "[explore] 12. bt_navigator..."
+BT_XML="$SCRIPT_DIR/src/argo_mini/config/bt/explore_navigate_to_pose.xml"
 ros2 run nav2_bt_navigator bt_navigator --ros-args \
   --params-file "$NAV_CONFIG" \
-  --params-file "$EXPLORE_CONFIG" &
+  --params-file "$EXPLORE_CONFIG" \
+  -p "default_nav_to_pose_bt_xml:=$BT_XML" \
+  -p "default_nav_through_poses_bt_xml:=$BT_XML" &
 BT_PID=$!
 sleep 7
 lc_node /bt_navigator

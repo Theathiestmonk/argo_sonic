@@ -7,7 +7,7 @@
 #   ./start_argo_nav.sh --map /path/to/map       # custom map path (no extension)
 #
 # Default map: ~/maps/indoor_map
-# Create the map first with ./start_slam.sh
+# Create the map first with sh/start_slam.sh
 
 NO_CAM=false
 MAP_BASE=~/argo_mini_ws/src/argo_mini/maps/office_map

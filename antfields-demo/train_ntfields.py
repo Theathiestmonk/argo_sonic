@@ -3,7 +3,7 @@
 train_ntfields.py – GUI trainer for NTFields models.
 
 Usage:
-    python3 train_ntfields.py
+    python3 antfields-demo/train_ntfields.py
 
 Discovers all SLAM maps in src/argo_mini/maps/, lets you pick one,
 configure training, run it with live log output, and automatically
@@ -18,7 +18,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-WS           = os.path.dirname(os.path.abspath(__file__))
+WS           = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAPS_DIR     = os.path.join(WS, 'src', 'argo_mini', 'maps')
 MODELS_DIR   = os.path.expanduser('~/ntfields_models')
 TRAIN_SCRIPT = os.path.join(WS, 'src', 'argo_mini', 'argo_mini',

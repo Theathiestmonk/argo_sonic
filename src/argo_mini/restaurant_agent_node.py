@@ -13,7 +13,7 @@ Other components (unchanged):
 
 Run:
     # First time: download models
-    bash scripts/download_models.sh
+    bash sh/download_models.sh
 
     # Launch
     ros2 run argo_mini restaurant_agent

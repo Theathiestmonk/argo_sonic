@@ -84,8 +84,8 @@ export default function App() {
       showToast('Argo is connected', 'ok')
       subscribe()
     })
-    ros.on('close', () => { setConnected(false) })
-    ros.on('error', () => { setConnected(false) })
+    ros.on('close', () => { setConnected(false); subRefs.current = {} })
+    ros.on('error', () => { setConnected(false); subRefs.current = {} })
   }, [rosUrl, subscribe, showToast])
 
   // auto-retry connect every 3 s (started by ExplorationPanel after launching stack)

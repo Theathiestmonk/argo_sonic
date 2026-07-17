@@ -13,7 +13,7 @@
 
 set -e
 
-REPO="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WHOAMI="$(whoami)"
 PYTHON="$(which python3)"
 NPM="$(which npm)"
@@ -45,7 +45,7 @@ else
 fi
 
 # Make the wrapper executable
-chmod +x "$REPO/backend/start-rosbridge.sh"
+chmod +x "$REPO/sh/start-rosbridge.sh"
 
 # ── Step 3: argo-rosbridge.service ───────────────────────────────────────────
 # Rosbridge must be always-on so the UI can connect the moment you open it.
@@ -59,7 +59,7 @@ After=network.target
 [Service]
 Type=simple
 User=$WHOAMI
-ExecStart=/bin/bash $REPO/backend/start-rosbridge.sh
+ExecStart=/bin/bash $REPO/sh/start-rosbridge.sh
 Restart=always
 RestartSec=5
 StandardOutput=journal

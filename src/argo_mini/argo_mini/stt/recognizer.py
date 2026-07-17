@@ -11,7 +11,7 @@ Why Sherpa-ONNX over Whisper / Vosk:
 Model: sherpa-onnx-streaming-zipformer-en-2023-06-26
   Encoder: Zipformer (best accuracy/speed tradeoff)
   Decoder: RNNT transducer (streaming-native)
-  Download: scripts/download_models.sh
+  Download: sh/download_models.sh
 """
 
 import logging
@@ -67,7 +67,7 @@ class StreamingRecognizer:
                     return sorted(matches)[0]
             raise FileNotFoundError(
                 f"No {prefix}*.onnx found in {model_dir}.\n"
-                "Run scripts/download_models.sh to download the model."
+                "Run sh/download_models.sh to download the model."
             )
 
         encoder = _find("encoder-epoch-99-avg-1")

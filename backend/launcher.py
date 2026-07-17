@@ -13,7 +13,7 @@ Run once on the robot before opening the UI:
 
 Endpoints (CORS-open so the browser can call them directly):
     GET  /status  →  {"running": bool, "pid": int|null}
-    POST /start   →  starts start_slam_explore.sh in a new session
+    POST /start   →  starts sh/start_slam_explore.sh in a new session
     POST /stop    →  kills the entire process group cleanly
 """
 
@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 _HERE   = os.path.dirname(os.path.abspath(__file__))
 _ROOT   = os.path.dirname(_HERE)
 
-SCRIPT  = os.path.join(_ROOT, 'start_slam_explore.sh')
+SCRIPT  = os.path.join(_ROOT, 'sh', 'start_slam_explore.sh')
 PORT    = 8888
 
 # ── State ────────────────────────────────────────────────────────────────────

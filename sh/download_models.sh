@@ -1,6 +1,6 @@
 #!/bin/bash
 # Download Sherpa-ONNX streaming model + OpenWakeWord pre-trained models
-# Run once on Jetson: bash scripts/download_models.sh
+# Run once on Jetson: bash sh/download_models.sh
 
 set -e
 MODEL_DIR="${1:-$HOME/argo_models}"
@@ -64,5 +64,5 @@ echo "   SHERPA_MODEL_DIR = \"$MODEL_DIR/$SHERPA_MODEL\""
 echo "   HOTWORDS_FILE    = \"$MODEL_DIR/hotwords.txt\""
 echo ""
 echo " To train a custom 'hey sonic' wake word:"
-echo "   python3 scripts/train_wake_word.py --model-dir $MODEL_DIR"
+echo "   python3 src/argo_mini/scripts/train_wake_word.py --model-dir $MODEL_DIR"
 echo "=========================================="
