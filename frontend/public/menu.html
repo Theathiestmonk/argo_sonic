@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Argo · Menu Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/radial-nav.css">
+
+<style>
+  .main { padding: 32px 36px 90px; max-width: 1180px; margin: 0 auto; }
+
+  .page-top { margin-bottom: 26px; }
+  .page-top h2 { font-family: var(--font-heading); font-size: 27px; font-weight: 800; letter-spacing: -0.5px; }
+  .page-top p { color: var(--muted); font-size: 14px; margin-top: 4px; }
+
+  /* Shared form styling (settings panel + add-item form) */
+  .form-panel { padding: 26px; margin-bottom: 28px; }
+  .form-panel h3 { font-family: var(--font-heading); font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .form-panel .panel-sub { color: var(--muted); font-size: 12.5px; margin-bottom: 18px; }
+  .form-grid { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr; gap: 16px; }
+  .field { display: flex; flex-direction: column; gap: 7px; }
+  .field label { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+  .field input[type="text"], .field input[type="number"], .field textarea, .field input[list], .field select {
+    padding: 11px 14px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass);
+    color: var(--text); font-size: 13.5px; outline: 0;
+  }
+  .field select { appearance: none; }
+  .field select option {
+    background: #16121f; color: var(--text);
+  }
+  .field input:focus, .field textarea:focus, .field select:focus { border-color: rgba(226,179,92,0.4); }
+  .field textarea { resize: vertical; min-height: 44px; font-family: inherit; }
+  .field.full { grid-column: 1 / -1; }
+  .field-check { display: flex; align-items: center; gap: 9px; padding-top: 4px; }
+  .field-check input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--gold); }
+  .field-check label { font-size: 12.5px; color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 600; }
+
+  /* Store settings panel */
+  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 520px; }
+
+  /* Backup file panel */
+  .backup-status { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; line-height: 1.6; }
+  .backup-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .backup-actions .btn { padding: 10px 16px; font-size: 12.5px; }
+  .backup-divider { height: 1px; background: var(--border-glass); margin: 20px 0; }
+  .backup-manual { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .backup-manual .btn { padding: 10px 16px; font-size: 12.5px; }
+  .backup-manual .hint { font-size: 11.5px; color: var(--muted); }
+
+  .image-field { display: flex; align-items: center; gap: 14px; }
+  .image-preview {
+    width: 64px; height: 64px; border-radius: 14px; flex-shrink: 0; overflow: hidden;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border-glass);
+    display: grid; place-items: center; font-size: 28px;
+  }
+  .image-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .file-btn {
+    padding: 10px 16px; border-radius: 12px; font-size: 12.5px; font-weight: 700;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border-glass); color: var(--text);
+  }
+  .file-btn:hover { background: rgba(255,255,255,0.08); }
+  .image-field input[type="file"] { display: none; }
+  .image-hint { font-size: 11px; color: var(--muted); }
+
+  .form-actions { display: flex; gap: 10px; margin-top: 20px; }
+  .form-actions .btn { flex: 0 0 auto; padding: 12px 22px; }
+
+  /* Discount sub-fields inside the item form */
+  .discount-grid { display: grid; grid-template-columns: 0.6fr 1fr 1fr; gap: 16px; align-items: end; }
+
+  /* Stock + availability sub-fields inside the item form */
+  .stock-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: end; }
+
+  /* Reusable toggle switch (availability control) */
+  .switch { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch-track {
+    width: 38px; height: 22px; border-radius: 99px; background: rgba(255,255,255,0.12);
+    transition: background 0.2s; position: relative; flex-shrink: 0;
+  }
+  .switch-thumb {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; transition: transform 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  }
+  .switch input:checked + .switch-track { background: var(--ok); }
+  .switch input:checked + .switch-track .switch-thumb { transform: translateX(16px); }
+  .avail-field { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
+  .avail-field .avail-text { font-size: 12.5px; font-weight: 700; color: var(--text); }
+
+  /* Veg / Non-veg — the familiar square-with-a-dot mark */
+  .diet-mark {
+    display: inline-block; width: 12px; height: 12px; border: 1.5px solid; border-radius: 3px;
+    position: relative; vertical-align: middle; flex-shrink: 0;
+  }
+  .diet-mark::after { content: ""; position: absolute; inset: 2.5px; border-radius: 50%; }
+  .diet-mark.veg { border-color: #2ecc71; }
+  .diet-mark.veg::after { background: #2ecc71; }
+  .diet-mark.nonveg { border-color: #e74c3c; }
+  .diet-mark.nonveg::after { background: #e74c3c; }
+
+  .diet-toggle-group { display: flex; gap: 8px; }
+  .diet-toggle-btn {
+    padding: 9px 16px; border-radius: 10px; font-size: 12.5px; font-weight: 700;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .diet-toggle-btn:hover { color: #fff; border-color: rgba(255,255,255,0.2); }
+  .diet-toggle-btn.on { background: rgba(226,179,92,0.15); color: var(--gold-bright); border-color: rgba(226,179,92,0.4); }
+
+  /* Bulk actions bar */
+  .bulk-bar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 18px; margin-bottom: 16px;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); border-radius: var(--radius-md);
+  }
+  .bulk-select-all { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--text); }
+  .bulk-select-all input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--gold); }
+  .bulk-count { font-size: 12px; color: var(--muted); }
+  .bulk-spacer { flex: 1; }
+  .bulk-bar .btn { padding: 9px 15px; font-size: 12.5px; }
+  .bulk-bar input[type="file"] { display: none; }
+  .bulk-upload-summary { width: 100%; font-size: 12px; color: var(--muted); }
+
+  /* Catalog grid — the "3D" elevated card look */
+  .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+  .cat-card {
+    background: var(--glass); border: 1px solid var(--border-glass); border-radius: var(--radius-lg);
+    padding: 16px; backdrop-filter: blur(25px); box-shadow: var(--shadow-fluid);
+    position: relative; overflow: hidden; transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s;
+  }
+  .cat-card::before { content: ""; position: absolute; inset: 0; background: var(--glass-specular); pointer-events: none; }
+  .cat-card > * { position: relative; z-index: 1; }
+  .cat-card:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 30px 64px rgba(0,0,0,0.6), 0 0 0 1px rgba(226,179,92,0.15), inset 0 1px 1px rgba(255,255,255,0.1); }
+  .cat-card.selected { border-color: rgba(226,179,92,0.5); box-shadow: 0 0 0 2px rgba(226,179,92,0.25), var(--shadow-fluid); }
+
+  .cat-select {
+    position: absolute; top: 12px; left: 12px; z-index: 2; width: 19px; height: 19px; accent-color: var(--gold);
+  }
+
+  .cat-card .item-thumb {
+    width: 100%; aspect-ratio: 1.3/1; border-radius: 16px; margin-bottom: 12px; overflow: hidden;
+    background: radial-gradient(120% 120% at 30% 20%, rgba(255,255,255,0.05), rgba(255,255,255,0) 60%), linear-gradient(160deg, rgba(226,179,92,0.1), rgba(123,63,212,0.08));
+  }
+  .cat-card .item-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cat-card .item-thumb.placeholder-thumb {
+    display: grid; place-items: center;
+    background: radial-gradient(120% 120% at 30% 20%, rgba(255,255,255,0.08), rgba(255,255,255,0) 60%), linear-gradient(160deg, rgba(226,179,92,0.16), rgba(123,63,212,0.12));
+  }
+  .cat-card .thumb-badge {
+    width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 22px;
+    background: rgba(226,179,92,0.14); box-shadow: inset 0 0 0 1px rgba(226,179,92,0.3);
+  }
+  .cat-badge {
+    display: inline-flex; gap: 6px; font-size: 10px; padding: 4px 10px; border-radius: 99px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em; background: rgba(226,179,92,0.12); color: var(--gold-bright);
+    border: 1px solid rgba(226,179,92,0.25); margin-bottom: 8px; margin-right: 6px;
+  }
+  .discount-badge {
+    display: inline-block; font-size: 10px; padding: 4px 10px; border-radius: 99px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em; background: rgba(59,240,155,0.14); color: var(--ok);
+    border: 1px solid rgba(59,240,155,0.3); margin-bottom: 8px;
+  }
+  .cat-name { font-family: var(--font-heading); font-size: 15px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 7px; }
+  .cat-price { font-family: var(--font-heading); font-weight: 800; font-size: 15px; margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+  .cat-price .price-now { color: var(--gold-bright); }
+  .cat-price .price-was { color: var(--muted); font-weight: 600; font-size: 12.5px; text-decoration: line-through; }
+  .out-of-stock-badge {
+    display: inline-block; font-size: 10px; padding: 4px 10px; border-radius: 99px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em; background: rgba(255,94,94,0.14); color: var(--danger);
+    border: 1px solid rgba(255,94,94,0.3); margin-bottom: 8px; margin-left: 6px;
+  }
+  .cat-stock { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; }
+  .cat-avail { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+  .cat-avail .avail-text { font-size: 11.5px; font-weight: 700; color: var(--text); }
+  .cat-actions { display: flex; gap: 8px; }
+  .cat-actions button {
+    flex: 1; padding: 8px 0; border-radius: 10px; font-size: 12px; font-weight: 700;
+    background: rgba(255,255,255,0.04); border: 1px solid var(--border-glass); color: var(--text);
+  }
+  .cat-actions button:hover { background: rgba(255,255,255,0.09); }
+  .cat-actions .del { color: var(--danger); }
+
+  .empty-catalog { grid-column: 1/-1; text-align: center; padding: 56px 20px; color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 760px) {
+    .form-grid, .discount-grid, .settings-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="ambient">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+</div>
+
+<div class="shell">
+  <header class="topnav">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <div class="brand-name">Argo</div>
+        <div class="brand-sub">Menu Settings</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="page-top">
+      <h2>Menu Catalog</h2>
+      <p>Add dishes with a price and photo — they show up instantly on the Order page.</p>
+    </div>
+
+    <section class="form-panel glass-card">
+      <h3>Store Settings</h3>
+      <div class="panel-sub">Applies everywhere prices are shown — this catalog and the Order page.</div>
+      <div class="settings-grid">
+        <div class="field">
+          <label for="fCurrency">Currency</label>
+          <select id="fCurrency"></select>
+        </div>
+        <div class="field">
+          <label for="fTax">Tax Rate (%)</label>
+          <input type="number" id="fTax" step="0.1" min="0" max="100" />
+        </div>
+      </div>
+    </section>
+
+    <section class="form-panel glass-card">
+      <h3>Backup File</h3>
+      <div class="panel-sub">Protects your catalog from an accidental browser cache clear.</div>
+      <div class="backup-status" id="backupStatus">Checking…</div>
+      <div class="backup-actions" id="backupActions"></div>
+      <div class="backup-divider"></div>
+      <div class="backup-manual">
+        <button type="button" class="btn btn-ghost" id="exportJsonBtn">Export Backup (.json)</button>
+        <button type="button" class="btn btn-ghost" id="importJsonBtn">Import Backup (.json)</button>
+        <input type="file" id="importJsonInput" accept=".json,application/json" style="display:none" />
+        <span class="hint">Works in any browser — a manual copy you keep yourself.</span>
+      </div>
+      <div class="backup-divider"></div>
+      <div class="backup-manual">
+        <button type="button" class="btn btn-ghost" id="cacheImagesBtn">Cache External Images Locally</button>
+        <span class="hint" id="cacheImagesStatus">Photos linked from outside URLs (e.g. a bulk CSV) load from that site every time — this downloads them once and stores them with your menu instead.</span>
+      </div>
+    </section>
+
+    <section class="form-panel glass-card">
+      <h3 id="formTitle">Add Menu Item</h3>
+      <form id="itemForm">
+        <div class="form-grid">
+          <div class="field">
+            <label for="fName">Name</label>
+            <input type="text" id="fName" required placeholder="e.g. Classic Chicken Burger" />
+          </div>
+          <div class="field">
+            <label for="fPrice">Price</label>
+            <input type="number" id="fPrice" step="0.01" min="0" required placeholder="5.47" />
+          </div>
+          <div class="field">
+            <label for="fCategory">Category</label>
+            <input type="text" id="fCategory" list="categoryList" required placeholder="Burger" />
+            <datalist id="categoryList"></datalist>
+          </div>
+
+          <div class="field full">
+            <label for="fDesc">Description (optional)</label>
+            <textarea id="fDesc" placeholder="Short description shown on the item card"></textarea>
+          </div>
+
+          <div class="field full">
+            <label>Image</label>
+            <div class="image-field">
+              <div class="image-preview" id="imgPreview">🍽️</div>
+              <button type="button" class="file-btn" id="pickImageBtn">Upload photo</button>
+              <input type="file" id="fImage" accept="image/*" />
+              <span class="image-hint">Or leave blank to use a category icon.</span>
+            </div>
+          </div>
+
+          <div class="field full">
+            <label>Event Discount (optional)</label>
+            <div class="discount-grid">
+              <div class="field">
+                <label for="fDiscountPct">Discount %</label>
+                <input type="number" id="fDiscountPct" step="1" min="0" max="95" placeholder="0" />
+              </div>
+              <div class="field">
+                <label for="fEventLabel">Event Label</label>
+                <input type="text" id="fEventLabel" placeholder="e.g. Weekend Special" />
+              </div>
+              <div class="field-check">
+                <input type="checkbox" id="fDiscountActive" />
+                <label for="fDiscountActive">Discount is active</label>
+              </div>
+            </div>
+          </div>
+
+          <div class="field full">
+            <label>Diet Type</label>
+            <div class="diet-toggle-group" id="dietToggleGroup">
+              <button type="button" class="diet-toggle-btn on" data-diet="veg"><span class="diet-mark veg"></span>Veg</button>
+              <button type="button" class="diet-toggle-btn" data-diet="nonveg"><span class="diet-mark nonveg"></span>Non-Veg</button>
+            </div>
+          </div>
+
+          <div class="field full">
+            <label>Stock &amp; Availability</label>
+            <div class="stock-grid">
+              <div class="field">
+                <label for="fStock">Stock Quantity</label>
+                <input type="number" id="fStock" min="0" step="1" placeholder="Leave blank for unlimited" />
+              </div>
+              <div class="avail-field">
+                <label class="switch">
+                  <input type="checkbox" id="fAvailable" checked />
+                  <span class="switch-track"><span class="switch-thumb"></span></span>
+                </label>
+                <span class="avail-text" id="fAvailableLabel">Available</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary" id="submitBtn">Add Item</button>
+          <button type="button" class="btn btn-ghost" id="cancelEditBtn" style="display:none">Cancel</button>
+        </div>
+      </form>
+    </section>
+
+    <div class="section-head">
+      <div>
+        <h3>Catalog</h3>
+        <div class="sub" id="catalogSub"></div>
+      </div>
+    </div>
+
+    <div class="bulk-bar">
+      <label class="bulk-select-all">
+        <input type="checkbox" id="selectAllBox" />
+        Select all
+      </label>
+      <span class="bulk-count" id="bulkCount">0 selected</span>
+      <div class="bulk-spacer"></div>
+      <button type="button" class="btn btn-ghost" id="downloadTemplateBtn">Download CSV Template</button>
+      <button type="button" class="btn btn-ghost" id="bulkUploadBtn">Bulk Upload (CSV)</button>
+      <input type="file" id="bulkUploadInput" accept=".csv,text/csv" />
+      <button type="button" class="btn btn-primary" id="bulkDeleteBtn" disabled style="background:var(--danger);color:#fff;box-shadow:none">Delete Selected</button>
+      <div class="bulk-upload-summary" id="bulkSummary"></div>
+    </div>
+
+    <div class="catalog-grid" id="catalogGrid"></div>
+  </main>
+</div>
+
+<!-- Cyclic radial nav (shared with dashboard.html) -->
+<div class="radial-backdrop" id="radialBackdrop"></div>
+<div class="radial-nav" id="radialNav">
+  <svg class="radial-track" id="radialTrack" width="0" height="0"></svg>
+  <div class="radial-items" id="radialItems"></div>
+  <button class="radial-fab" id="radialFabBtn" aria-label="Open navigation" aria-expanded="false">
+    <svg class="radial-fab-icon radial-fab-icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>
+    </svg>
+    <svg class="radial-fab-icon radial-fab-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/>
+    </svg>
+  </button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/menu-data.js"></script>
+<script src="/radial-nav.js"></script>
+<script src="/backup-sync.js"></script>
+<script>
+  let menu = loadMenu()
+  let settings = loadSettings()
+  let editingId = null
+  let pendingImage = ''
+  let selectedDiet = 'veg'
+  const selectedIds = new Set()
+
+  function setDietToggle(diet) {
+    selectedDiet = diet
+    document.querySelectorAll('#dietToggleGroup .diet-toggle-btn').forEach(btn => {
+      btn.classList.toggle('on', btn.dataset.diet === diet)
+    })
+  }
+  document.querySelectorAll('#dietToggleGroup .diet-toggle-btn').forEach(btn => {
+    btn.onclick = () => setDietToggle(btn.dataset.diet)
+  })
+
+  // ── Store settings ──
+  function renderSettingsForm() {
+    document.getElementById('fCurrency').innerHTML = CURRENCY_OPTIONS
+      .map(c => `<option value="${c.code}" ${c.code === settings.currencyCode ? 'selected' : ''}>${escapeHtml(c.label)}</option>`).join('')
+    document.getElementById('fTax').value = settings.taxPercent
+  }
+  function persistSettings() {
+    saveSettings(settings)
+    renderCatalog() // prices depend on currency/tax display
+    showToast('Store settings saved', 'ok')
+  }
+  document.getElementById('fCurrency').addEventListener('change', e => {
+    settings = { ...settings, currencyCode: e.target.value }
+    persistSettings()
+  })
+  document.getElementById('fTax').addEventListener('change', e => {
+    const v = parseFloat(e.target.value)
+    settings = { ...settings, taxPercent: isNaN(v) ? 0 : Math.max(0, Math.min(100, v)) }
+    persistSettings()
+  })
+
+  // ── Backup file (auto-linked live file, via File System Access API) ──
+  function renderBackupUi(state) {
+    const statusEl = document.getElementById('backupStatus')
+    const actions = document.getElementById('backupActions')
+
+    if (state.state === 'unsupported') {
+      statusEl.textContent = "Live file-sync isn't available in this browser or URL (needs Chrome/Edge over https:// or localhost) — use Export/Import below instead."
+      actions.innerHTML = ''
+      return
+    }
+    if (state.state === 'unlinked') {
+      statusEl.textContent = "Not linked to a file yet — your catalog only lives in this browser's storage."
+      actions.innerHTML = `
+        <button type="button" class="btn btn-primary" id="linkNewBtn">Create Backup File</button>
+        <button type="button" class="btn btn-ghost" id="linkExistingBtn">Use Existing File</button>`
+      document.getElementById('linkNewBtn').onclick = doLinkNew
+      document.getElementById('linkExistingBtn').onclick = doLinkExisting
+      return
+    }
+    if (state.state === 'reconnect') {
+      statusEl.textContent = `Linked to "${state.name}" but the browser needs permission confirmed again.`
+      actions.innerHTML = `
+        <button type="button" class="btn btn-primary" id="reconnectBtn">Reconnect</button>
+        <button type="button" class="btn btn-ghost" id="unlinkBtn">Unlink</button>`
+      document.getElementById('reconnectBtn').onclick = doReconnect
+      document.getElementById('unlinkBtn').onclick = doUnlink
+      return
+    }
+    if (state.state === 'error') {
+      statusEl.textContent = `Backup file error: ${state.error || 'unknown error'}`
+      actions.innerHTML = `<button type="button" class="btn btn-ghost" id="unlinkBtn">Unlink</button>`
+      document.getElementById('unlinkBtn').onclick = doUnlink
+      return
+    }
+    // synced
+    const when = state.at ? ` — last saved ${state.at.toLocaleTimeString()}` : ''
+    statusEl.textContent = `Auto-saving to "${state.name}"${when}`
+    actions.innerHTML = `<button type="button" class="btn btn-ghost" id="unlinkBtn">Unlink</button>`
+    document.getElementById('unlinkBtn').onclick = doUnlink
+  }
+
+  async function doLinkNew() {
+    try { await ArgoBackupSync.linkNewFile(); showToast('Backup file created — auto-saving now', 'ok') }
+    catch (err) { if (err.name !== 'AbortError') showToast('Could not create the backup file', 'danger') }
+  }
+  async function doLinkExisting() {
+    try {
+      await ArgoBackupSync.linkExistingFile()
+      menu = loadMenu(); settings = loadSettings()
+      renderSettingsForm(); renderCategoryList(); renderCatalog()
+      showToast('Backup file linked — restored its contents', 'ok')
+    } catch (err) { if (err.name !== 'AbortError') showToast('Could not link that file', 'danger') }
+  }
+  async function doReconnect() {
+    const ok = await ArgoBackupSync.reconnect()
+    showToast(ok ? 'Reconnected — auto-saving again' : 'Permission still needed', ok ? 'ok' : 'danger')
+  }
+  async function doUnlink() {
+    await ArgoBackupSync.unlink()
+    showToast('Backup file unlinked', 'danger')
+  }
+
+  ArgoBackupSync.onStatus(renderBackupUi)
+
+  // ── Manual export/import (works in every browser, no linking required) ──
+  document.getElementById('exportJsonBtn').onclick = () => {
+    downloadTextFile(
+      'argo-menu-backup.json',
+      JSON.stringify({ menu, settings, savedAt: new Date().toISOString() }, null, 2),
+      'application/json'
+    )
+  }
+  document.getElementById('importJsonBtn').onclick = () => document.getElementById('importJsonInput').click()
+  document.getElementById('importJsonInput').addEventListener('change', async e => {
+    const file = e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const data = JSON.parse(await file.text())
+      if (Array.isArray(data.menu) && data.menu.length) { menu = data.menu; saveMenu(menu) }
+      if (data.settings) { settings = { ...DEFAULT_SETTINGS, ...data.settings }; saveSettings(settings) }
+      renderSettingsForm(); renderCategoryList(); renderCatalog()
+      showToast('Backup imported', 'ok')
+    } catch {
+      showToast("That file doesn't look like a valid backup", 'danger')
+    }
+  })
+
+  // ── Cache external image URLs as local data URIs ──
+  document.getElementById('cacheImagesBtn').onclick = async () => {
+    const targets = menu.filter(item => isExternalImageUrl(item.image))
+    const statusEl = document.getElementById('cacheImagesStatus')
+    const btn = document.getElementById('cacheImagesBtn')
+    if (targets.length === 0) {
+      statusEl.textContent = 'No externally-linked photos to cache — everything already lives locally.'
+      return
+    }
+    btn.disabled = true
+    let done = 0
+    let failed = 0
+    statusEl.textContent = `Caching images… 0 / ${targets.length}`
+    await Promise.allSettled(targets.map(async item => {
+      try {
+        item.image = await cacheImageAsDataUrl(item.image)
+      } catch {
+        failed++
+      } finally {
+        done++
+        statusEl.textContent = `Caching images… ${done} / ${targets.length}`
+      }
+    }))
+    saveMenu(menu)
+    renderCatalog()
+    btn.disabled = false
+    const cached = targets.length - failed
+    statusEl.textContent = failed === 0
+      ? `Cached all ${cached} image${cached === 1 ? '' : 's'} locally.`
+      : `Cached ${cached} image${cached === 1 ? '' : 's'} locally. ${failed} couldn't be fetched (blocked by the source site) and will keep loading from their original link.`
+    showToast(cached > 0 ? `${cached} image${cached === 1 ? '' : 's'} cached locally` : 'Could not cache any images', cached > 0 ? 'ok' : 'danger')
+  }
+
+  function renderCategoryList() {
+    document.getElementById('categoryList').innerHTML = menuCategories(menu).map(c => `<option value="${escapeHtml(c)}">`).join('')
+  }
+
+  // ── Catalog + selection ──
+  function renderCatalog() {
+    const grid = document.getElementById('catalogGrid')
+    document.getElementById('catalogSub').textContent =
+      `${menu.length} item${menu.length === 1 ? '' : 's'} across ${menuCategories(menu).length} categories`
+
+    // Drop selections for items that no longer exist (e.g. after a delete elsewhere).
+    const liveIds = new Set(menu.map(m => m.id))
+    ;[...selectedIds].forEach(id => { if (!liveIds.has(id)) selectedIds.delete(id) })
+
+    if (menu.length === 0) {
+      grid.innerHTML = `<div class="empty-catalog">No menu items yet. Add your first dish above.</div>`
+      updateBulkBar()
+      return
+    }
+    grid.innerHTML = menu.map(item => `
+      <div class="cat-card ${selectedIds.has(item.id) ? 'selected' : ''}" data-id="${item.id}">
+        <input type="checkbox" class="cat-select" ${selectedIds.has(item.id) ? 'checked' : ''} />
+        ${thumbHtml(item)}
+        <div>
+          <span class="cat-badge">${escapeHtml(item.category)}</span>
+          ${discountBadgeHtml(item)}
+          ${hasTrackedStock(item) && item.stock <= 0 ? '<span class="out-of-stock-badge">Out of Stock</span>' : ''}
+        </div>
+        <div class="cat-name">${dietMarkHtml(item)} ${escapeHtml(item.name)}</div>
+        <div class="cat-price">${priceBlockHtml(item, settings)}</div>
+        <div class="cat-stock">${stockLabel(item)}</div>
+        <div class="cat-avail">
+          <label class="switch">
+            <input type="checkbox" class="avail-toggle" ${item.available !== false ? 'checked' : ''} />
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </label>
+          <span class="avail-text">${item.available !== false ? 'Available' : 'Unavailable'}</span>
+        </div>
+        <div class="cat-actions">
+          <button class="edit">Edit</button>
+          <button class="del">Delete</button>
+        </div>
+      </div>`).join('')
+
+    grid.querySelectorAll('.cat-card').forEach(card => {
+      const id = card.dataset.id
+      card.querySelector('.edit').onclick = () => startEdit(id)
+      card.querySelector('.del').onclick = () => deleteItem(id)
+      card.querySelector('.cat-select').onchange = e => {
+        if (e.target.checked) selectedIds.add(id); else selectedIds.delete(id)
+        card.classList.toggle('selected', e.target.checked)
+        updateBulkBar()
+      }
+      card.querySelector('.avail-toggle').onchange = e => {
+        const item = menu.find(m => m.id === id)
+        if (!item) return
+        item.available = e.target.checked
+        saveMenu(menu)
+        card.querySelector('.avail-text').textContent = e.target.checked ? 'Available' : 'Unavailable'
+      }
+    })
+    updateBulkBar()
+  }
+
+  function updateBulkBar() {
+    const n = selectedIds.size
+    document.getElementById('bulkCount').textContent = `${n} selected`
+    document.getElementById('bulkDeleteBtn').disabled = n === 0
+    document.getElementById('selectAllBox').checked = n > 0 && n === menu.length
+    document.getElementById('selectAllBox').indeterminate = n > 0 && n < menu.length
+  }
+
+  document.getElementById('selectAllBox').onchange = e => {
+    selectedIds.clear()
+    if (e.target.checked) menu.forEach(m => selectedIds.add(m.id))
+    renderCatalog()
+  }
+
+  document.getElementById('bulkDeleteBtn').onclick = () => {
+    const n = selectedIds.size
+    if (n === 0) return
+    if (!confirm(`Delete ${n} selected item${n === 1 ? '' : 's'} from the catalog?`)) return
+    menu = menu.filter(m => !selectedIds.has(m.id))
+    selectedIds.clear()
+    saveMenu(menu)
+    if (editingId && !menu.find(m => m.id === editingId)) resetForm()
+    renderCategoryList()
+    renderCatalog()
+    showToast(`${n} item${n === 1 ? '' : 's'} deleted`, 'danger')
+  }
+
+  // ── Bulk CSV upload ──
+  document.getElementById('downloadTemplateBtn').onclick = () => downloadTextFile('menu-template.csv', menuTemplateCsv())
+  document.getElementById('bulkUploadBtn').onclick = () => document.getElementById('bulkUploadInput').click()
+  document.getElementById('bulkUploadInput').addEventListener('change', async e => {
+    const file = e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    const text = await file.text()
+    const { items, errors } = csvToMenuItems(text)
+    const summary = document.getElementById('bulkSummary')
+    if (items.length) {
+      menu = menu.concat(items)
+      saveMenu(menu)
+      renderCategoryList()
+      renderCatalog()
+      showToast(`${items.length} item${items.length === 1 ? '' : 's'} imported`, 'ok')
+    }
+    summary.textContent = errors.length
+      ? `Imported ${items.length}. ${errors.length} row${errors.length === 1 ? '' : 's'} skipped: ${errors.slice(0, 3).join(' ')}`
+      : (items.length ? '' : 'No valid rows found in that file.')
+  })
+
+  // ── Add / edit item form ──
+  function startEdit(id) {
+    const item = menu.find(m => m.id === id)
+    if (!item) return
+    editingId = id
+    document.getElementById('fName').value = item.name
+    document.getElementById('fPrice').value = item.price
+    document.getElementById('fCategory').value = item.category
+    document.getElementById('fDesc').value = item.desc || ''
+    document.getElementById('fDiscountPct').value = item.discountPercent || ''
+    document.getElementById('fEventLabel').value = item.eventLabel || ''
+    document.getElementById('fDiscountActive').checked = !!item.discountActive
+    document.getElementById('fStock').value = hasTrackedStock(item) ? item.stock : ''
+    document.getElementById('fAvailable').checked = item.available !== false
+    document.getElementById('fAvailableLabel').textContent = item.available !== false ? 'Available' : 'Unavailable'
+    setDietToggle(isVeg(item) ? 'veg' : 'nonveg')
+    pendingImage = item.image || ''
+    updateImagePreview()
+    document.getElementById('formTitle').textContent = 'Edit Menu Item'
+    document.getElementById('submitBtn').textContent = 'Save Changes'
+    document.getElementById('cancelEditBtn').style.display = 'inline-flex'
+    document.getElementById('itemForm').scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function resetForm() {
+    editingId = null
+    pendingImage = ''
+    document.getElementById('itemForm').reset()
+    document.getElementById('fAvailableLabel').textContent = 'Available'
+    setDietToggle('veg')
+    updateImagePreview()
+    document.getElementById('formTitle').textContent = 'Add Menu Item'
+    document.getElementById('submitBtn').textContent = 'Add Item'
+    document.getElementById('cancelEditBtn').style.display = 'none'
+  }
+
+  document.getElementById('fAvailable').addEventListener('change', e => {
+    document.getElementById('fAvailableLabel').textContent = e.target.checked ? 'Available' : 'Unavailable'
+  })
+
+  function deleteItem(id) {
+    const item = menu.find(m => m.id === id)
+    if (!item || !confirm(`Remove "${item.name}" from the catalog?`)) return
+    menu = menu.filter(m => m.id !== id)
+    selectedIds.delete(id)
+    saveMenu(menu)
+    if (editingId === id) resetForm()
+    renderCategoryList()
+    renderCatalog()
+    showToast(`${item.name} removed`, 'danger')
+  }
+
+  function updateImagePreview() {
+    const preview = document.getElementById('imgPreview')
+    if (isImageSrc(pendingImage)) {
+      preview.innerHTML = `<img src="${escapeHtml(pendingImage)}" alt="" />`
+    } else {
+      const category = document.getElementById('fCategory').value.trim()
+      preview.textContent = pendingImage || categoryIcon(category)
+    }
+  }
+
+  document.getElementById('fCategory').addEventListener('input', () => { if (!isImageSrc(pendingImage)) updateImagePreview() })
+  document.getElementById('pickImageBtn').onclick = () => document.getElementById('fImage').click()
+  document.getElementById('fImage').addEventListener('change', async e => {
+    const file = e.target.files[0]
+    if (!file) return
+    pendingImage = await fileToDataUrl(file)
+    updateImagePreview()
+  })
+
+  document.getElementById('itemForm').addEventListener('submit', e => {
+    e.preventDefault()
+    const name = document.getElementById('fName').value.trim()
+    const price = parseFloat(document.getElementById('fPrice').value)
+    const category = document.getElementById('fCategory').value.trim()
+    const desc = document.getElementById('fDesc').value.trim()
+    const discountPercent = parseFloat(document.getElementById('fDiscountPct').value) || 0
+    const eventLabel = document.getElementById('fEventLabel').value.trim()
+    const discountActive = document.getElementById('fDiscountActive').checked
+    const stockRaw = document.getElementById('fStock').value.trim()
+    const stock = stockRaw === '' ? undefined : Math.max(0, Math.floor(Number(stockRaw)))
+    const available = document.getElementById('fAvailable').checked
+    const diet = selectedDiet
+    if (!name || !category || isNaN(price) || price < 0) return
+
+    if (editingId) {
+      const item = menu.find(m => m.id === editingId)
+      Object.assign(item, { name, price, category, desc, image: pendingImage, discountPercent, eventLabel, discountActive, available, diet })
+      if (stock === undefined) delete item.stock; else item.stock = stock
+      showToast(`${name} updated`, 'ok')
+    } else {
+      const newItem = { id: 'm' + Date.now(), name, price, category, desc, image: pendingImage, discountPercent, eventLabel, discountActive, available, diet }
+      if (stock !== undefined) newItem.stock = stock
+      menu.push(newItem)
+      showToast(`${name} added to catalog`, 'ok')
+    }
+    saveMenu(menu)
+    resetForm()
+    renderCategoryList()
+    renderCatalog()
+  })
+
+  document.getElementById('cancelEditBtn').onclick = resetForm
+
+  let toastTimer
+  function showToast(msg, type = '') {
+    const t = document.getElementById('toast')
+    t.textContent = msg
+    t.className = 'toast show' + (type ? ' ' + type : '')
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { t.className = 'toast' }, 3200)
+  }
+
+  renderSettingsForm()
+  renderCategoryList()
+  renderCatalog()
+  ArgoRadialNav.init(ArgoRadialNav.pages(), 'menu')
+  ArgoBackupSync.init().then(() => {
+    // init() may have restored menu/settings from a linked file if local
+    // storage looked freshly cleared — re-render to reflect that.
+    menu = loadMenu(); settings = loadSettings()
+    renderSettingsForm(); renderCategoryList(); renderCatalog()
+  })
+</script>
+</body>
+</html>
