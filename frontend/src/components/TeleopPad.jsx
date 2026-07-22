@@ -9,17 +9,19 @@ const StopIcon = () => <svg width="18" height="18" viewBox="0 0 18 18" fill="cur
 
 export default function TeleopPad({ connected, compact = false }) {
   const holdRef  = useRef(null)
-  const velRef   = useRef(null)
   const [active, setActive] = useState(null)
   const [speed, setSpeed]   = useState(0.5)
 
   useEffect(() => {
-    velRef.current = ros.topic('/cmd_vel', 'geometry_msgs/Twist')
     return () => clearInterval(holdRef.current)
   }, [])
 
+  // Build the topic fresh on every publish rather than caching it once at
+  // mount — the underlying rosbridge connection object gets torn down and
+  // replaced on every reconnect (see ros.js), which would otherwise leave
+  // a cached Topic silently publishing into a dead connection forever.
   const publish = useCallback((lx, az) => {
-    velRef.current?.publish({
+    ros.topic('/cmd_vel', 'geometry_msgs/Twist')?.publish({
       linear: { x: lx * speed, y: 0, z: 0 },
       angular: { x: 0, y: 0, z: az },
     })
@@ -35,14 +37,14 @@ export default function TeleopPad({ connected, compact = false }) {
   const release = useCallback(() => {
     setActive(null)
     clearInterval(holdRef.current)
-    velRef.current?.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } })
-  }, [])
+    publish(0, 0)
+  }, [publish])
 
   const stopNow = useCallback(() => {
     setActive(null)
     clearInterval(holdRef.current)
-    velRef.current?.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } })
-  }, [])
+    publish(0, 0)
+  }, [publish])
 
   const sz = compact ? 68 : 80
   const br = compact ? 18 : 22

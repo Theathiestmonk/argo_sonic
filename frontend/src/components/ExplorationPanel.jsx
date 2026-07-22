@@ -111,8 +111,11 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
       })
-      // Poll rosbridge every 3 s until it connects
-      startRetrying?.()
+      // Only (re)connect rosbridge if we're not already connected — forcing
+      // a reconnect here tears down and replaces the live connection object,
+      // which would silently orphan anything (like TeleopPad) that isn't
+      // listening for reconnects.
+      if (!connected) startRetrying?.()
       // Also poll launcher status every 3 s for feedback
       pollRef.current = setInterval(checkStack, 3000)
     } catch {
