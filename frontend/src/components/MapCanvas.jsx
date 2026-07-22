@@ -1,8 +1,10 @@
 import { useRef, useEffect, useCallback } from 'react'
 
-const UNK  = [80,  80, 100]
-const FREE = [210, 210, 215]
-const OCC  = [20,  18,  28]
+// True neutral greyscale (classic occupancy-grid look), tuned dark to sit
+// naturally inside the app's dark theme instead of a stark white rectangle.
+const UNK  = [50,  50,  50]
+const FREE = [222, 222, 222]
+const OCC  = [16,  16,  16]
 
 // Converts world (wx,wy) to canvas pixel given map info and canvas layout.
 function worldToCanvas(wx, wy, md, offX, offY, scale) {
@@ -59,9 +61,9 @@ export default function MapCanvas({ mapData, robotPose, labels = [], frontiers =
     ctx.clearRect(0, 0, W, H)
 
     if (!offRef.current) {
-      ctx.fillStyle = 'rgba(80,80,100,0.18)'
+      ctx.fillStyle = 'rgba(90,90,90,0.18)'
       ctx.fillRect(0, 0, W, H)
-      ctx.fillStyle = 'rgba(156,146,166,0.55)'
+      ctx.fillStyle = 'rgba(160,160,160,0.55)'
       ctx.font = '14px Inter,sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
