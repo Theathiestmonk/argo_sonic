@@ -88,7 +88,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({'ok': False, 'error': f'script not found: {script}'}, 500)
                     return
                 _proc = subprocess.Popen(
-                    ['bash', script],
+                    # --no-rviz: the robot is headless and driven entirely
+                    # through this web UI — rviz2 has no DISPLAY to attach
+                    # to, fails instantly, and the script's own trailing
+                    # `wait $RVIZ_PID` would then return immediately, making
+                    # this wrapper process exit while its background ROS
+                    # nodes keep running as orphans. That desyncs /status
+                    # (reports "stopped") from reality (stack still up).
+                    ['bash', script, '--no-rviz'],
                     cwd=_ROOT,
                     start_new_session=True,   # own process group → clean kill
                     stdout=subprocess.DEVNULL,

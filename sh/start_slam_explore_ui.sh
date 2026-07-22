@@ -18,11 +18,17 @@
 #   13. frontier_explorer     (exploration brain)
 #
 # Usage:
-#   ./start_slam_explore.sh
+#   ./start_slam_explore.sh              # full stack + RViz
+#   ./start_slam_explore.sh --no-rviz    # headless (no desktop, e.g. run via the web UI)
 #
 # Save the map when done:
 #   ros2 service call /slam_toolbox/save_map \
 #     slam_toolbox/srv/SaveMap "{name: {data: '/home/argo/maps/explored_map'}}"
+
+NO_RVIZ=false
+for arg in "$@"; do
+  [[ "$arg" == "--no-rviz" ]] && NO_RVIZ=true
+done
 
 # ── Environment ───────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -142,11 +148,14 @@ SLAM_PID=$!
 echo "[explore] Waiting 8s for SLAM to establish map frame..."
 sleep 8
 
-# ── 6. RViz (optional – comment out if running headless) ──────────────────────
-echo "[explore] 6. rviz2..."
-export DISPLAY="${DISPLAY:-:1}"
-rviz2 &
-RVIZ_PID=$!
+# ── 6. RViz (optional) ─────────────────────────────────────────────────────────
+RVIZ_PID=""
+if [ "$NO_RVIZ" = false ]; then
+  echo "[explore] 6. rviz2..."
+  export DISPLAY="${DISPLAY:-:1}"
+  rviz2 &
+  RVIZ_PID=$!
+fi
 
 # ── 7. Behavior server (wait-only: no physical recovery motion) ───────────────
 echo "[explore] 7. behavior_server..."
@@ -262,4 +271,8 @@ trap '
   exit 0
 ' INT TERM
 
-wait "$RVIZ_PID"
+if [ "$NO_RVIZ" = false ] && [ -n "$RVIZ_PID" ]; then
+  wait "$RVIZ_PID"
+else
+  wait "$SLAM_PID"
+fi
