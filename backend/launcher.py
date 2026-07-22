@@ -12,9 +12,15 @@ Run once on the robot before opening the UI:
     python3 ~/dhruvil/argo_sonic/backend/launcher.py
 
 Endpoints (CORS-open so the browser can call them directly):
-    GET  /status  →  {"running": bool, "pid": int|null}
-    POST /start   →  starts sh/start_slam_explore.sh in a new session
+    GET  /status  →  {"running": bool, "pid": int|null, "mode": str|null}
+    POST /start   →  body {"mode": "manual"|"auto"} (default "auto")
+                      "manual" → sh/start_slam_ui.sh          (SLAM only, no Nav2)
+                      "auto"   → sh/start_slam_explore_ui.sh  (SLAM + Nav2 + frontier explorer)
     POST /stop    →  kills the entire process group cleanly
+
+These *_ui.sh scripts are dedicated copies of the hand-run sh/start_slam.sh
+and sh/start_slam_explore.sh — kept separate so UI-driven launches never
+disturb the scripts used directly over SSH.
 """
 
 import json
@@ -30,12 +36,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 _HERE   = os.path.dirname(os.path.abspath(__file__))
 _ROOT   = os.path.dirname(_HERE)
 
-SCRIPT  = os.path.join(_ROOT, 'sh', 'start_slam_explore.sh')
+SLAM_SCRIPT    = os.path.join(_ROOT, 'sh', 'start_slam_ui.sh')
+EXPLORE_SCRIPT = os.path.join(_ROOT, 'sh', 'start_slam_explore_ui.sh')
 PORT    = 8888
 
 # ── State ────────────────────────────────────────────────────────────────────
 
 _proc: subprocess.Popen | None = None
+_mode: str | None = None
 _lock = threading.Lock()
 
 
@@ -51,30 +59,44 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 running = _proc is not None and _proc.poll() is None
                 pid     = _proc.pid if running else None
-            self._json({'running': running, 'pid': pid})
+                mode    = _mode if running else None
+            self._json({'running': running, 'pid': pid, 'mode': mode})
         else:
             self._json({'error': 'not found'}, 404)
 
     def do_POST(self):
-        global _proc
+        global _proc, _mode
 
         if self.path == '/start':
+            mode = 'auto'
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                if length:
+                    body = json.loads(self.rfile.read(length))
+                    if body.get('mode') == 'manual':
+                        mode = 'manual'
+            except (ValueError, json.JSONDecodeError):
+                pass
+
+            script = SLAM_SCRIPT if mode == 'manual' else EXPLORE_SCRIPT
+
             with _lock:
                 if _proc and _proc.poll() is None:
-                    self._json({'ok': True, 'status': 'already_running', 'pid': _proc.pid})
+                    self._json({'ok': True, 'status': 'already_running', 'pid': _proc.pid, 'mode': _mode})
                     return
-                if not os.path.isfile(SCRIPT):
-                    self._json({'ok': False, 'error': f'script not found: {SCRIPT}'}, 500)
+                if not os.path.isfile(script):
+                    self._json({'ok': False, 'error': f'script not found: {script}'}, 500)
                     return
                 _proc = subprocess.Popen(
-                    ['bash', SCRIPT],
+                    ['bash', script],
                     cwd=_ROOT,
                     start_new_session=True,   # own process group → clean kill
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            print(f'[launcher] stack started  pid={_proc.pid}')
-            self._json({'ok': True, 'status': 'started', 'pid': _proc.pid})
+                _mode = mode
+            print(f'[launcher] stack started  mode={mode}  pid={_proc.pid}')
+            self._json({'ok': True, 'status': 'started', 'pid': _proc.pid, 'mode': mode})
 
         elif self.path == '/stop':
             with _lock:
@@ -84,6 +106,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ProcessLookupError:
                         pass
                     _proc = None
+                _mode = None
             print('[launcher] stack stopped')
             self._json({'ok': True, 'status': 'stopped'})
 
@@ -117,9 +140,12 @@ class Handler(BaseHTTPRequestHandler):
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    print(f'[launcher] script path → {SCRIPT}')
-    if not os.path.isfile(SCRIPT):
-        print(f'[launcher] WARNING: script not found — check path above')
+    print(f'[launcher] manual script → {SLAM_SCRIPT}')
+    print(f'[launcher] auto script   → {EXPLORE_SCRIPT}')
+    if not os.path.isfile(SLAM_SCRIPT):
+        print(f'[launcher] WARNING: manual script not found — check path above')
+    if not os.path.isfile(EXPLORE_SCRIPT):
+        print(f'[launcher] WARNING: auto script not found — check path above')
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')
     try:

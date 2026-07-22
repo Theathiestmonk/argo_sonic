@@ -71,16 +71,25 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
       const r = await fetch(`${launcherUrl}/status`)
       const d = await r.json()
       setStackState(d.running ? 'running' : 'stopped')
+      if (d.running && d.mode) setMode(d.mode)
     } catch {
       setStackState('stopped') // launcher not reachable = stack not started
     }
   }
 
   const startStack = async () => {
+    if (!mode) return
     setStackState('starting')
-    showToast('Starting Argo stack — please wait…', 'info')
+    showToast(
+      mode === 'manual' ? 'Starting SLAM mapping — please wait…' : 'Starting Argo stack — please wait…',
+      'info',
+    )
     try {
-      await fetch(`${launcherUrl}/start`, { method: 'POST' })
+      await fetch(`${launcherUrl}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
       // Poll rosbridge every 3 s until it connects
       startRetrying?.()
       // Also poll launcher status every 3 s for feedback
@@ -103,17 +112,28 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     }
   }
 
-  const activateAuto = () => {
+  // Mode is picked *before* the stack launches — it decides which script
+  // the launcher runs (SLAM-only for manual, full Nav2 stack for auto) —
+  // so these are just local-state setters, not live topic toggles.
+  const selectAuto = () => {
+    if (stackState === 'running' || stackState === 'starting') return
     setMode('auto')
-    pauseTopicRef.current?.publish({ data: false })
-    showToast('Argo is now exploring automatically', 'ok')
   }
 
-  const activateManual = () => {
+  const selectManual = () => {
+    if (stackState === 'running' || stackState === 'starting') return
     setMode('manual')
-    pauseTopicRef.current?.publish({ data: true })
-    showToast('Manual mode — use controls to drive', 'info')
   }
+
+  useEffect(() => {
+    if (stackState === 'running' && mode === 'auto') {
+      pauseTopicRef.current?.publish({ data: false })
+      showToast('Argo is now exploring automatically', 'ok')
+    } else if (stackState === 'running' && mode === 'manual') {
+      showToast('Manual mode — use controls to drive', 'info')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stackState])
 
   const saveMap = () => {
     if (!connected) { showToast('Not connected to Argo', 'danger'); return }
@@ -164,6 +184,25 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
       {/* ── Left panel ── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto', paddingRight: 2 }}>
 
+        {/* Mode toggle — pick before launch, since it decides which script runs */}
+        <div className="glass-dense" style={{ padding: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div className="label-xs">How should Argo map?</div>
+            {connected && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 10px', borderRadius: 99, background: 'rgba(59,240,155,0.1)', border: '1px solid rgba(59,240,155,0.25)', color: 'var(--ok)' }}>Connected</span>}
+          </div>
+          <ModeToggle mode={mode} onAuto={selectAuto} onManual={selectManual} disabled={stackState === 'running' || isStarting} />
+          {stackState === 'running' && (
+            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
+              <strong style={{ color: '#fff' }}>Stop stack</strong> below to choose a different mode.
+            </p>
+          )}
+          {stackState !== 'running' && !isStarting && !mode && (
+            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
+              Choose how Argo should map your space, then start the stack below.
+            </p>
+          )}
+        </div>
+
         {/* Stack launch gate — show when stack not running (independent of rosbridge) */}
         {stackState !== 'running' && (
           <div className="glass-dense" style={{ padding: 20, animation: 'slideUp 0.2s ease' }}>
@@ -174,55 +213,42 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
                 <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid var(--gold)', borderTopColor: 'transparent', animation: 'spin-slow 0.9s linear infinite', flexShrink: 0 }} />
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gold-bright)' }}>Starting up…</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>SLAM, Nav2 and sensors are launching</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
+                    {mode === 'manual' ? 'SLAM and sensors are launching' : 'SLAM, Nav2 and sensors are launching'}
+                  </div>
                 </div>
               </div>
             ) : (
               <>
                 <button
                   onClick={startStack}
+                  disabled={!mode}
                   style={{
                     width: '100%', padding: '14px 0', borderRadius: 14,
                     fontSize: 14, fontWeight: 800, fontFamily: 'var(--font-heading)',
-                    background: 'linear-gradient(180deg,rgba(226,179,92,0.22) 0%,rgba(226,179,92,0.08) 100%)',
-                    border: '1px solid rgba(226,179,92,0.4)', color: 'var(--gold-bright)',
-                    boxShadow: '0 8px 28px rgba(226,179,92,0.12)',
-                    transition: 'all 0.2s', cursor: 'pointer',
+                    background: mode ? 'linear-gradient(180deg,rgba(226,179,92,0.22) 0%,rgba(226,179,92,0.08) 100%)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${mode ? 'rgba(226,179,92,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                    color: mode ? 'var(--gold-bright)' : 'var(--muted)',
+                    boxShadow: mode ? '0 8px 28px rgba(226,179,92,0.12)' : 'none',
+                    transition: 'all 0.2s', cursor: mode ? 'pointer' : 'not-allowed',
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(226,179,92,0.22)'; e.currentTarget.style.boxShadow = '0 10px 32px rgba(226,179,92,0.22)' }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'linear-gradient(180deg,rgba(226,179,92,0.22) 0%,rgba(226,179,92,0.08) 100%)'; e.currentTarget.style.boxShadow = '0 8px 28px rgba(226,179,92,0.12)' }}
+                  onMouseEnter={e => { if (mode) { e.currentTarget.style.background = 'rgba(226,179,92,0.22)'; e.currentTarget.style.boxShadow = '0 10px 32px rgba(226,179,92,0.22)' } }}
+                  onMouseLeave={e => { if (mode) { e.currentTarget.style.background = 'linear-gradient(180deg,rgba(226,179,92,0.22) 0%,rgba(226,179,92,0.08) 100%)'; e.currentTarget.style.boxShadow = '0 8px 28px rgba(226,179,92,0.12)' } }}
                 >
-                  Start Argo
+                  {mode ? 'Start Argo' : 'Choose a mode above first'}
                 </button>
                 <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 12, lineHeight: 1.65 }}>
-                  Starts SLAM, Nav2, sensors and the exploration stack on the robot automatically.
+                  {mode === 'manual'
+                    ? 'Starts SLAM and sensors only — you drive, no Nav2 required.'
+                    : 'Starts SLAM, Nav2, sensors and the exploration stack on the robot automatically.'}
                 </p>
               </>
             )}
           </div>
         )}
 
-        {/* Mode toggle — only shown once connected */}
-        <div className="glass-dense" style={{ padding: 18 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <div className="label-xs">How should Argo map?</div>
-            {connected && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 10px', borderRadius: 99, background: 'rgba(59,240,155,0.1)', border: '1px solid rgba(59,240,155,0.25)', color: 'var(--ok)' }}>Connected</span>}
-          </div>
-          <ModeToggle mode={mode} onAuto={activateAuto} onManual={activateManual} disabled={stackState !== 'running'} />
-          {stackState !== 'running' && !isStarting && (
-            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
-              Click <strong style={{ color: '#fff' }}>Start Argo</strong> above to launch SLAM, Nav2 and the exploration stack.
-            </p>
-          )}
-          {connected && !mode && (
-            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
-              Choose how Argo should map your space.
-            </p>
-          )}
-        </div>
-
         {/* Auto mode status */}
-        {mode === 'auto' && (
+        {stackState === 'running' && mode === 'auto' && (
           <div className="glass-card" style={{ padding: 22, animation: 'slideUp 0.2s ease' }}>
             <div className="label-xs" style={{ marginBottom: 16 }}>Exploration status</div>
 
@@ -257,7 +283,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
         )}
 
         {/* Manual D-pad */}
-        {mode === 'manual' && (
+        {stackState === 'running' && mode === 'manual' && (
           <div className="glass-card" style={{ padding: 24, animation: 'slideUp 0.2s ease' }}>
             <div className="label-xs" style={{ marginBottom: 20 }}>Drive controls</div>
             <TeleopPad connected={connected} />
@@ -265,7 +291,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
         )}
 
         {/* Save map + remap */}
-        {mode && (
+        {stackState === 'running' && mode && (
           <div className="glass-dense" style={{ padding: 18, animation: 'slideUp 0.22s ease' }}>
             <div className="label-xs" style={{ marginBottom: 12 }}>Save the map</div>
             <input
@@ -294,7 +320,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
         )}
 
         {/* Done */}
-        {mode && (
+        {stackState === 'running' && mode && (
           <button
             onClick={onDone}
             className="btn-primary"
@@ -305,13 +331,15 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
         )}
 
         {/* Remap / Stop stack */}
-        {mode && (
+        {stackState === 'running' && mode && (
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={() => {
-                pauseTopicRef.current?.publish({ data: true })
-                setMode(null)
-                showToast('Exploration reset — choose a mode to begin again', 'info')
+                // Mode is locked to whichever script is running until the
+                // stack is stopped — Remap just re-pauses exploration (auto
+                // mode) so the operator can go over the space again.
+                if (mode === 'auto') pauseTopicRef.current?.publish({ data: true })
+                showToast('Exploration reset — drive or explore again', 'info')
               }}
               style={{
                 flex: 1, padding: '11px 0', borderRadius: 13, fontSize: 12.5, fontWeight: 600,
