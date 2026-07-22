@@ -53,6 +53,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
   const [saving, setSaving]        = useState(false)  // map save in progress
   const pauseTopicRef = useRef(null)
   const pollRef = useRef(null)
+  const failCountRef = useRef(0)
 
   useEffect(() => {
     pauseTopicRef.current = ros.topic('/exploration/paused', 'std_msgs/Bool')
@@ -66,14 +67,34 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     return () => clearInterval(id)
   }, [])
 
+  // The fast 3 s poll kicked off by startStack() is only needed while
+  // waiting for the stack to come up — stop it once we know either way,
+  // otherwise it runs forever stacked on top of the 5 s poll above.
+  useEffect(() => {
+    if (stackState !== 'starting' && pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [stackState])
+
   const checkStack = async () => {
     try {
       const r = await fetch(`${launcherUrl}/status`)
       const d = await r.json()
+      failCountRef.current = 0
       setStackState(d.running ? 'running' : 'stopped')
       if (d.running && d.mode) setMode(d.mode)
     } catch {
-      setStackState('stopped') // launcher not reachable = stack not started
+      // A single dropped request shouldn't collapse a running session — only
+      // treat the launcher as unreachable after repeated consecutive
+      // failures. (Must use the failCountRef counter, not the stackState
+      // variable, here: this closure is shared by a setInterval set up once
+      // on mount, so any outer state it reads would be permanently stale —
+      // the ref is the only thing guaranteed to reflect the live count.)
+      failCountRef.current += 1
+      if (failCountRef.current >= 3) {
+        setStackState('stopped')
+      }
     }
   }
 
