@@ -51,6 +51,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
   const [saveName, setSaveName]   = useState('my_map')
   const [stackState, setStackState] = useState('unknown') // 'unknown'|'starting'|'running'|'stopped'
   const [saving, setSaving]        = useState(false)  // map save in progress
+  const [mapsDir, setMapsDir]      = useState(null)   // src/argo_mini/maps on the robot, from launcher /config
   const pauseTopicRef = useRef(null)
   const pollRef = useRef(null)
   const failCountRef = useRef(0)
@@ -58,6 +59,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
   useEffect(() => {
     pauseTopicRef.current = ros.topic('/exploration/paused', 'std_msgs/Bool')
     checkStack()
+    fetch(`${launcherUrl}/config`).then(r => r.json()).then(d => setMapsDir(d.maps_dir)).catch(() => {})
     return () => clearInterval(pollRef.current)
   }, [])
 
@@ -161,8 +163,9 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
 
   const saveMap = () => {
     if (!connected) { showToast('Not connected to Argo', 'danger'); return }
+    if (!mapsDir) { showToast('Maps folder not known yet — try again in a moment', 'danger'); return }
     if (saving) return
-    const path = `/home/argo/maps/${saveName.trim() || 'my_map'}`
+    const path = `${mapsDir}/${saveName.trim() || 'my_map'}`
     setSaving(true)
 
     // Step 1 — Serialize SLAM Toolbox pose graph (.posegraph + .data)

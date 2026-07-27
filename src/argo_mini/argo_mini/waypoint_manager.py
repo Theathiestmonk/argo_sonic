@@ -12,12 +12,22 @@ import threading
 import time
 import math
 
-WAYPOINTS_FILE = os.path.expanduser('~/argo_mini_ws/src/argo_mini/waypoints/waypoints.json')
+DEFAULT_WAYPOINTS_DIR = os.path.expanduser('~/argo_mini_ws/src/argo_mini/waypoints')
 
 class WaypointManager(Node):
     def __init__(self):
         super().__init__('waypoint_manager')
-        
+
+        # Each map gets its own waypoints file (<waypoints_dir>/<map_name>.json)
+        # so switching maps doesn't mix up tables saved against a different
+        # space. Override at launch, e.g.:
+        #   ros2 run argo_mini waypoint_manager --ros-args -p map_name:=office_map
+        self.declare_parameter('map_name', 'office_map')
+        self.declare_parameter('waypoints_dir', DEFAULT_WAYPOINTS_DIR)
+        map_name = self.get_parameter('map_name').value
+        waypoints_dir = self.get_parameter('waypoints_dir').value
+        self.waypoints_file = os.path.join(waypoints_dir, f'{map_name}.json')
+
         qos = QoSProfile(depth=10, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
         
         # Subscribers
@@ -80,21 +90,21 @@ class WaypointManager(Node):
         return yaw
 
     def load_waypoints(self):
-        if os.path.exists(WAYPOINTS_FILE):
+        if os.path.exists(self.waypoints_file):
             try:
-                with open(WAYPOINTS_FILE, 'r') as f:
+                with open(self.waypoints_file, 'r') as f:
                     data = json.load(f)
-                    self.get_logger().info(f'Loaded {len(data)} waypoints.')
+                    self.get_logger().info(f'Loaded {len(data)} waypoints from {self.waypoints_file}.')
                     return data
             except Exception as e:
                 self.get_logger().error(f'Error loading waypoints: {e}')
         return {}
 
     def save_waypoints(self):
-        os.makedirs(os.path.dirname(WAYPOINTS_FILE), exist_ok=True)
-        with open(WAYPOINTS_FILE, 'w') as f:
+        os.makedirs(os.path.dirname(self.waypoints_file), exist_ok=True)
+        with open(self.waypoints_file, 'w') as f:
             json.dump(self.waypoints, f, indent=2)
-        print('[Saved] Waypoints updated.')
+        print(f'[Saved] Waypoints updated → {self.waypoints_file}')
 
     def print_menu(self):
         print('\n' + '='*60)

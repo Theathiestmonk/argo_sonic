@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { ros } from './ros'
 import EnvironmentSelector from './components/EnvironmentSelector'
 import ExplorationPanel    from './components/ExplorationPanel'
-import LabelNavPanel       from './components/LabelNavPanel'
+import TablesPanel         from './components/TablesPanel'
+import SettingsPanel       from './components/SettingsPanel'
+import DashboardHome       from './components/DashboardHome'
 
 const STEPS = [
   { label: 'Choose Space',  short: 'Space' },
@@ -18,6 +20,7 @@ function launcherUrl(rosUrl) {
 
 export default function App() {
   const [step, setStep]           = useState(0)
+  const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
   const [rosUrl, setRosUrl]       = useState(() => {
     // Auto-use the same host the page was served from.
@@ -27,14 +30,13 @@ export default function App() {
   })
   const [editingUrl, setEditingUrl] = useState(false)
   const [selectedEnv, setSelectedEnv] = useState(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [selectedMap, setSelectedMap] = useState(() => localStorage.getItem('argo_selected_map') || 'office_map')
   const retryRef = useRef(null)
 
   const [mapData, setMapData]     = useState(null)
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
-  const [labels, setLabels]       = useState(() => {
-    try { return JSON.parse(localStorage.getItem('argo_labels') || '[]') } catch { return [] }
-  })
 
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
@@ -100,27 +102,27 @@ export default function App() {
 
   useEffect(() => { connect(); return () => clearInterval(retryRef.current) }, [])
 
-  useEffect(() => { localStorage.setItem('argo_labels', JSON.stringify(labels)) }, [labels])
+  useEffect(() => { localStorage.setItem('argo_selected_map', selectedMap) }, [selectedMap])
 
-  const addLabel = useCallback(label => {
-    setLabels(prev => {
-      const i = prev.findIndex(l => l.name === label.name)
-      if (i >= 0) { const n = [...prev]; n[i] = label; return n }
-      return [...prev, label]
-    })
+  // Land on the dashboard when maps already exist; first-time setup (no maps
+  // yet) has nothing to show a dashboard about, so falls through to the wizard.
+  useEffect(() => {
+    fetch(`${launcherUrl(rosUrl)}/maps`)
+      .then(r => r.json())
+      .then(d => setView((d.maps ?? []).length > 0 ? 'dashboard' : 'wizard'))
+      .catch(() => setView('wizard'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const removeLabel = useCallback(name => setLabels(prev => prev.filter(l => l.name !== name)), [])
-
-  const sendNavGoal = useCallback((wx, wy) => {
+  const sendNavGoal = useCallback((wx, wy, qz = 0, qw = 1, message = 'Argo is on its way') => {
     ros.publish('/goal_pose', 'geometry_msgs/PoseStamped', {
       header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
-      pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
+      pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: qz, w: qw } },
     })
-    showToast('Argo is on its way', 'ok')
+    showToast(message, 'ok')
   }, [showToast])
 
-  const shared = { mapData, robotPose, frontiers, labels, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
+  const shared = { mapData, robotPose, frontiers, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
@@ -173,7 +175,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Step indicator */}
+        {/* Step indicator — only relevant while running the map/table wizard */}
+        {view === 'wizard' && !showSettings && (
         <nav style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {STEPS.map((s, i) => (
             <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -206,6 +209,7 @@ export default function App() {
             </div>
           ))}
         </nav>
+        )}
 
         {/* Connection */}
         <div style={{ flexShrink: 0 }}>
@@ -251,36 +255,55 @@ export default function App() {
 
       {/* Content */}
       <main style={{ flex: 1, padding: '28px 32px 56px' }}>
-        {step === 0 && (
-          <EnvironmentSelector
-            onSelect={env => { setSelectedEnv(env); setStep(1) }}
-            onNewMap={() => { setSelectedEnv(null); setStep(1) }}
+        {view === null && (
+          <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '80px 0' }}>Loading…</div>
+        )}
+
+        {view !== null && showSettings && (
+          <SettingsPanel
+            launcherUrl={launcherUrl(rosUrl)}
+            selectedMap={selectedMap}
+            onSelectMap={setSelectedMap}
+            onClose={() => setShowSettings(false)}
+            showToast={showToast}
           />
         )}
-        {step === 1 && <ExplorationPanel {...shared} onDone={() => setStep(2)} />}
-        {step === 2 && (
+
+        {view === 'dashboard' && !showSettings && (
+          <DashboardHome
+            launcherUrl={launcherUrl(rosUrl)}
+            selectedMap={selectedMap}
+            connected={connected}
+            showToast={showToast}
+            onNavigate={sendNavGoal}
+            onOpenSettings={() => setShowSettings(true)}
+            onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
+          />
+        )}
+
+        {view === 'wizard' && !showSettings && (
           <>
-            <LabelNavPanel {...shared} onAddLabel={addLabel} onRemoveLabel={removeLabel} onNavigate={sendNavGoal} />
-            {labels.length > 0 && (
-              <div style={{ textAlign: 'center', marginTop: 28, animation: 'slideUp 0.4s ease' }}>
-                <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 14 }}>
-                  Places saved. Ready to use the full dashboard?
+            {step === 0 && (
+              <EnvironmentSelector
+                onSelect={env => { setSelectedEnv(env); setStep(1) }}
+                onNewMap={() => { setSelectedEnv(null); setStep(1) }}
+              />
+            )}
+            {step === 1 && <ExplorationPanel {...shared} onDone={() => setStep(2)} />}
+            {step === 2 && (
+              <>
+                <TablesPanel {...shared} selectedMap={selectedMap} onNavigate={sendNavGoal} />
+                <div style={{ textAlign: 'center', marginTop: 28, animation: 'slideUp 0.4s ease' }}>
+                  <button
+                    onClick={() => { setView('dashboard'); setStep(0) }}
+                    className="btn-primary"
+                    style={{ fontSize: 15, padding: '15px 32px', display: 'inline-flex' }}
+                  >
+                    Done — back to Dashboard
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                  </button>
                 </div>
-                <a
-                  href="/dashboard.html"
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 10,
-                    padding: '15px 32px', borderRadius: 16, fontSize: 15, fontWeight: 800,
-                    background: 'linear-gradient(180deg,#fff 0%,#f3ede2 100%)',
-                    color: '#1a1103', textDecoration: 'none',
-                    boxShadow: '0 12px 36px rgba(226,179,92,0.32)',
-                    fontFamily: 'var(--font-heading)',
-                  }}
-                >
-                  Open Restaurant Dashboard
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                </a>
-              </div>
+              </>
             )}
           </>
         )}
