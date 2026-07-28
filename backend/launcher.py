@@ -48,7 +48,7 @@ Endpoints (CORS-open so the browser can call them directly):
     POST /start   →  body {"mode": "manual"|"auto"|"navigate", "map": str} (default "auto")
                       "manual"   → sh/start_slam_ui.sh          (SLAM only, no Nav2 — build a map)
                       "auto"     → sh/start_slam_explore_ui.sh  (SLAM + Nav2 + frontier explorer)
-                      "navigate" → sh/start_ntfields_nav_ui.sh --map <MAPS_DIR>/<map>
+                      "navigate" → sh/start_argo_nav_ui.sh --map <MAPS_DIR>/<map>
                                     (SLAM-toolbox localization + Nav2 + depth safety
                                     shield, on a previously saved map — "map" is required)
                       If something's already running under a different mode/map than
@@ -113,7 +113,7 @@ _ROOT   = os.path.dirname(_HERE)
 
 SLAM_SCRIPT    = os.path.join(_ROOT, 'sh', 'start_slam_ui.sh')
 EXPLORE_SCRIPT = os.path.join(_ROOT, 'sh', 'start_slam_explore_ui.sh')
-NAV_SCRIPT     = os.path.join(_ROOT, 'sh', 'start_ntfields_nav_ui.sh')
+NAV_SCRIPT     = os.path.join(_ROOT, 'sh', 'start_argo_nav_ui.sh')
 MAPS_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'maps')
 WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
 MENU_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'menu')
@@ -411,6 +411,20 @@ class Handler(BaseHTTPRequestHandler):
                 if not os.path.isfile(script):
                     self._json({'ok': False, 'error': f'script not found: {script}'}, 500)
                     return
+                # This service runs as root, so a freshly-created progress
+                # file defaults to root-only-writable — fine for this
+                # process, but it then blocks anyone running the same
+                # script by hand (as themselves, over SSH) from writing to
+                # it at all, since /tmp's sticky bit means only root or the
+                # owner can even chmod it after the fact. Force it open
+                # every time so a later by-hand debugging run never hits
+                # that silently.
+                try:
+                    with open(NAV_PROGRESS_PATH, 'a'):
+                        pass
+                    os.chmod(NAV_PROGRESS_PATH, 0o666)
+                except OSError:
+                    pass
                 _proc = subprocess.Popen(
                     # --no-rviz: the robot is headless and driven entirely
                     # through this web UI — rviz2 has no DISPLAY to attach

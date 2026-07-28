@@ -76,14 +76,19 @@ browser click can never disturb an SSH session using the same script name):
 |---|---|---|---|
 | `manual` | `sh/start_slam_ui.sh` | SLAM only (robot_state_publisher, serial_bridge, rplidar, scan_relay, slam_toolbox mapping) — **no Nav2** | Building a new map, driving manually |
 | `auto` | `sh/start_slam_explore_ui.sh` | SLAM + full Nav2 + frontier_explorer | Building a new map, autonomous exploration |
-| `navigate` | `sh/start_ntfields_nav_ui.sh --map <path>` | slam_toolbox **localization** + full Nav2 + NTFields social shield/trainer/navigator (+ camera) on a **previously saved** map | Normal operation — sending the robot to tables/places |
+| `navigate` | `sh/start_argo_nav_ui.sh --map <path>` | slam_toolbox **localization** + full Nav2 + depth safety shield (+ camera) on a **previously saved** map | Normal operation — sending the robot to tables/places |
 
-`start_argo_nav_ui.sh` (the standard Nav2 + depth safety shield stack, no
-NTFields) still exists and can be run by hand the same way — `NAV_SCRIPT` in
-`launcher.py` just no longer points at it, since NTFields is the currently
-active stack. Both write to the same `/tmp/argo_nav_progress` file (see §5's
-`GET /nav_progress`), so switching `NAV_SCRIPT` back is a one-line change if
-needed.
+`start_ntfields_nav_ui.sh` also exists (NTFields social shield/trainer/
+navigator instead of the depth safety shield) but is **not currently wired
+up** — it references executables (`ntfields_social_shield`, `ntfields_trainer`,
+`ntfields_navigator`) that only exist in a separate, diverged workspace
+(`~/argo_mini_ws`), not this repo's own `install/`. This repo's own NTFields
+source (`ntfields_planner_node`/`ntfields_speed`/etc.) is a different,
+non-interchangeable implementation from the same fork point. Which one is
+actually meant to be current needs confirming before `NAV_SCRIPT` points at
+it — see the script's own header comment for the full story. Both nav
+scripts write to the same `/tmp/argo_nav_progress` file (see §5's
+`GET /nav_progress`), so switching `NAV_SCRIPT` is a one-line change either way.
 
 All three UI-launched scripts always run with `--no-rviz` when launched by
 the UI (rviz2 has no `DISPLAY` on a headless robot and would otherwise crash
@@ -91,10 +96,9 @@ immediately, desyncing `/status` from reality — see the comment in
 `launcher.py`).
 
 **Important:** `navigate` mode's `/status` reporting `"running": true` only
-means *the wrapper process launched* — `start_ntfields_nav_ui.sh` itself
+means *the wrapper process launched* — `start_argo_nav_ui.sh` itself
 takes **90+ seconds** (camera wait, costmap wait, several `lifecycle set
-configure/activate` steps, plus the NTFields trainer/navigator coming up
-afterward) before Nav2 can actually accept a goal. The
+configure/activate` steps) before Nav2 can actually accept a goal. The
 frontend (`DashboardHome.jsx`) separately confirms real readiness by polling
 `/rosapi/topics` over rosbridge for `/navigate_to_pose/_action/status` before
 unlocking "Confirm" — don't rely on `/status` alone to mean "ready for goals."
@@ -159,7 +163,7 @@ Or, for live debugging, run the script by hand instead of through the UI —
 you'll see everything in real time (as your own user, so `~/.ros/log/` this
 time), and it stays independent of the `argo-launcher` service:
 ```bash
-bash sh/start_ntfields_nav_ui.sh --map ~/my_project/argo_sonic/src/argo_mini/maps/office_map
+bash sh/start_argo_nav_ui.sh --map ~/my_project/argo_sonic/src/argo_mini/maps/office_map
 ```
 
 **Frontend (browser-side)**: DevTools (F12) → Console tab. This is where
@@ -182,7 +186,7 @@ Expect the three processes to show up and `/status` to report
 
 **Confirm the right script ran, not the wrong stack:**
 ```bash
-ps -ef | grep -E "start_slam_ui|start_slam_explore_ui|start_ntfields_nav_ui" | grep -v grep
+ps -ef | grep -E "start_slam_ui|start_slam_explore_ui|start_argo_nav_ui" | grep -v grep
 ```
 For `navigate` mode you should see `slam_toolbox`, `bt_navigator`,
 `behavior_server`, `planner_server`, `controller_server`,

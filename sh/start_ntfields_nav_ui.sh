@@ -102,6 +102,14 @@ sleep 2
 # scripts is actually running, since only one "navigate" mode process can
 # be active at a time.
 PROGRESS_FILE="/tmp/argo_nav_progress"
+# Whoever writes this file FIRST (root, via the argo-launcher systemd
+# service; or you, running this by hand over SSH) leaves it owned by that
+# user with the default umask (usually 644 — not writable by anyone else).
+# The other case then gets "Permission denied" on every single report()
+# call. world-writable is fine here — it's just a status string, not
+# anything sensitive.
+touch "$PROGRESS_FILE" 2>/dev/null || true
+chmod 666 "$PROGRESS_FILE" 2>/dev/null || true
 report()       { echo "[argo] $1";       echo "OK|$(date +%s)|$1"    > "$PROGRESS_FILE"; }
 report_error() { echo "[argo] ERROR: $1"; echo "ERROR|$(date +%s)|$1" > "$PROGRESS_FILE"; }
 report_ready() { echo "[argo] $1";        echo "READY|$(date +%s)|$1" > "$PROGRESS_FILE"; }
