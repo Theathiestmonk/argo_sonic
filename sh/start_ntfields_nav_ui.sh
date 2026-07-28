@@ -107,6 +107,40 @@ report_error() { echo "[argo] ERROR: $1"; echo "ERROR|$(date +%s)|$1" > "$PROGRE
 report_ready() { echo "[argo] $1";        echo "READY|$(date +%s)|$1" > "$PROGRESS_FILE"; }
 report "Starting NTFields nav stack..."
 
+# ── cleanup, registered on EXIT (not just INT/TERM) ─────────────────────────
+# A failed check_process/wait_for_topic below calls a plain `exit 1` — that
+# is NOT the same as receiving a signal, so a trap registered only on INT
+# TERM (the old approach, defined at the bottom of the script) never fires
+# for it, AND wouldn't even exist yet that early regardless, since a trap
+# only takes effect once bash actually executes that line. Register on EXIT
+# instead, right at the top before anything starts, so every node already
+# launched gets cleaned up no matter which way the script ends — normal
+# completion, an early failure, or a signal. INT/TERM just do a plain
+# `exit 0`, which itself triggers this EXIT trap — kept separate so the
+# body only ever runs once instead of twice.
+cleanup() {
+  echo "[argo] Shutting down..."
+  echo "STOPPED|$(date +%s)|Stack shut down" > "$PROGRESS_FILE"
+  kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID \
+       $SLAM_PID $PLANNER_PID $CONTROLLER_PID \
+       $SMOOTHER_PID $BT_PID $BEHAVIOR_PID \
+       $SHIELD_PID $TRAINER_PID $NAV_PID $RVIZ_PID \
+       ${CAM_PID:-} $CAM_TF_PID $CAM_TF2_PID 2>/dev/null || true
+  sleep 4
+  # Scoped to this process group only, not a blanket "pkill -9 -f ros2" —
+  # that pattern matches ANY process with ros2 anywhere in its command
+  # line, system-wide, which collaterally killed the independent
+  # argo-rosbridge service every time this stack stopped (it also runs via
+  # ros2 launch). backend/launcher.py spawns this script with
+  # start_new_session=True specifically so $$ is this group leader, and
+  # every node above was backgrounded with plain "&" (no setsid), so
+  # they are all still in it -- this reaches them without touching
+  # anything outside.
+  kill -9 -- -$$ 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+
 # ── lifecycle helper ───────────────────────────────────────────────────────
 lc_node() {
   local node=$1
@@ -437,28 +471,6 @@ echo "  No initial pose needed - auto-localizes."
 echo "  Press Ctrl+C to stop all nodes"
 echo "=========================================="
 echo ""
-
-trap '
-  echo "[argo] Shutting down..."
-  echo "STOPPED|$(date +%s)|Stack shut down" > "$PROGRESS_FILE"
-  kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID \
-       $SLAM_PID $PLANNER_PID $CONTROLLER_PID \
-       $SMOOTHER_PID $BT_PID $BEHAVIOR_PID \
-       $SHIELD_PID $TRAINER_PID $NAV_PID $RVIZ_PID \
-       ${CAM_PID:-} $CAM_TF_PID $CAM_TF2_PID 2>/dev/null || true
-  sleep 4
-  # Scoped to this process group only, not a blanket "pkill -9 -f ros2" —
-  # that pattern matches ANY process with ros2 anywhere in its command
-  # line, system-wide, which collaterally killed the independent
-  # argo-rosbridge service every time this stack stopped (it also runs via
-  # ros2 launch). backend/launcher.py spawns this script with
-  # start_new_session=True specifically so $$ is this group leader, and
-  # every node above was backgrounded with plain "&" (no setsid), so
-  # they are all still in it -- this reaches them without touching
-  # anything outside.
-  kill -9 -- -$$ 2>/dev/null || true
-  exit 0
-' INT TERM
 
 if [ "$NO_RVIZ" = false ] && [ -n "$RVIZ_PID" ]; then
   wait $RVIZ_PID
