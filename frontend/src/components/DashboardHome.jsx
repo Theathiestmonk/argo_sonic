@@ -61,26 +61,35 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
   // navState === 'running' only means the launcher's wrapper *process* is
   // alive — start_argo_nav_ui.sh itself takes 90+ real seconds (camera wait,
   // costmap wait, several lifecycle configure/activate steps) before Nav2 can
-  // actually accept a goal. Confirm that separately over rosbridge by
-  // checking whether /navigate_to_pose's action-status topic actually
-  // exists yet, via rosapi (standard on every rosbridge_suite install —
-  // ROS2 actions always expose <name>/_action/status as a plain topic).
+  // actually accept a goal. Confirm that separately over rosbridge.
+  //
+  // Was checking /rosapi/topics for "/navigate_to_pose/_action/status" —
+  // every ROS2 action implicitly exposes that as a topic, so this should
+  // have worked, but live testing found it unreliable: `ros2 topic list`
+  // itself inconsistently omitted that specific auto-generated topic even
+  // though `ros2 action info /navigate_to_pose` reliably confirmed the
+  // action server (bt_navigator) was genuinely up — a real discovery gap
+  // for that topic specifically, not just this component's polling being
+  // wrong. /rosapi/action_servers asks the same question ros2 action info
+  // does (does this action server actually exist), which is what actually
+  // matched reality in testing.
   const [navActionReady, setNavActionReady] = useState(false)
   useEffect(() => {
     // Also gated on `connected` — without a rosbridge WebSocket connection,
-    // /rosapi/topics can never resolve, so polling here would just silently
-    // do nothing forever instead of ever reflecting reality. The button
-    // render below (navState==='running' && !connected) tells the user the
-    // real blocker directly instead of looking like an indefinite Nav2 wait.
+    // /rosapi/action_servers can never resolve, so polling here would just
+    // silently do nothing forever instead of ever reflecting reality. The
+    // button render below (navState==='running' && !connected) tells the
+    // user the real blocker directly instead of looking like an indefinite
+    // Nav2 wait.
     if (navState !== 'running' || navMap !== selectedMap || !connected) {
       setNavActionReady(false)
       return
     }
     let cancelled = false
     const check = () => {
-      const svc = ros.service('/rosapi/topics', 'rosapi/Topics')
+      const svc = ros.service('/rosapi/action_servers', 'rosapi/ActionServers')
       svc?.callService({}, res => {
-        if (!cancelled) setNavActionReady((res.topics || []).includes('/navigate_to_pose/_action/status'))
+        if (!cancelled) setNavActionReady((res.action_servers || []).includes('/navigate_to_pose'))
       }, () => {})
     }
     check()

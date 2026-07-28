@@ -76,9 +76,23 @@ sleep 2
 # serve over GET /nav_progress, so the frontend can show the real state
 # instead of guessing from a timeout alone.
 PROGRESS_FILE="/tmp/argo_nav_progress"
-report()       { echo "[argo] $1";               echo "OK|$(date +%s)|$1"    > "$PROGRESS_FILE"; }
-report_error() { echo "[argo] ERROR: $1";         echo "ERROR|$(date +%s)|$1" > "$PROGRESS_FILE"; }
-report_ready() { echo "[argo] $1";                echo "READY|$(date +%s)|$1" > "$PROGRESS_FILE"; }
+touch "$PROGRESS_FILE" 2>/dev/null || true
+chmod 666 "$PROGRESS_FILE" 2>/dev/null || true
+# Once READY, report() becomes a no-op — earlier this only had specific
+# post-ready call sites switched from report() to plain echo (camera,
+# depth_safety_shield, RViz), but wait_for_topic/wait_for_action are SHARED
+# helpers also called again after READY (the post-ready camera-topic and
+# /cmd_vel_smoothed re-checks) and still called report() unconditionally
+# every time, silently overwriting READY back to an ordinary "still
+# waiting" message that then never got corrected again — the UI's own
+# navReady state (independent /rosapi/topics polling) was unaffected, but
+# GET /nav_progress looked permanently stuck. A flag is simpler and more
+# robust than chasing every call site individually. report_error() is
+# untouched — a genuine post-ready failure still needs to override this.
+_NAV_ALREADY_READY=false
+report()       { $_NAV_ALREADY_READY && return; echo "[argo] $1"; echo "OK|$(date +%s)|$1" > "$PROGRESS_FILE"; }
+report_error() { echo "[argo] ERROR: $1"; echo "ERROR|$(date +%s)|$1" > "$PROGRESS_FILE"; }
+report_ready() { _NAV_ALREADY_READY=true; echo "[argo] $1"; echo "READY|$(date +%s)|$1" > "$PROGRESS_FILE"; }
 report "Starting nav2 stack..."
 
 # ?? lifecycle helper ???????????????????????????????????????????????????????

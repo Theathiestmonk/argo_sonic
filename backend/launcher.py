@@ -61,16 +61,18 @@ Endpoints (CORS-open so the browser can call them directly):
                           start_argo_nav_ui.sh and start_ntfields_nav_ui.sh
                           write to the same file — only one "navigate" mode
                           process runs at a time), read from
-                          NAV_PROGRESS_PATH. Exists because launcher.py
-                          deliberately discards that
-                          script's own stdout/stderr (see POST /start's
-                          subprocess.DEVNULL) to keep this single-threaded
-                          server from being wedged by a chatty/slow node —
-                          which otherwise left the UI with nothing to show
-                          but an indefinite "waiting" spinner no matter
-                          what broke or how long it had been stuck.
-                          "status": null means the file doesn't exist yet
-                          (nothing has ever reported in).
+                          NAV_PROGRESS_PATH. "status": null means the file
+                          doesn't exist yet (nothing has ever reported in).
+    GET  /nav_log → {"log": str} — the last NAV_LOG_TAIL_LINES lines of
+                     NAV_SCRIPT's actual stdout+stderr (every ROS node's own
+                     INFO/WARN/ERROR output, not just the high-level steps
+                     /nav_progress tracks), read from NAV_LOG_PATH. A plain
+                     file (not subprocess.PIPE) is still safe for this
+                     single-threaded server — a file never needs the parent
+                     to actively drain it, so a chatty/slow node still can't
+                     wedge anything here — and means a real crash traceback
+                     shows up over HTTP instead of requiring SSH + running
+                     the script by hand to ever see it.
 
     GET  /voice/status →  {"running": bool, "pid": int|null, "action": str|null,
                            "map": str|null, "table": str|null} — is Sonic
@@ -125,6 +127,8 @@ TEST_HARNESS_SCRIPT  = os.path.join(SONIC_DIR, 'test_harness.py')
 VOICE_LOG_PATH       = os.path.join(SONIC_DIR, 'voice_session.log')
 _VOICE_ACTIONS = {'order', 'deliver', 'bill', 'room_service'}
 NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by NAV_SCRIPT (whichever nav script is active)
+NAV_LOG_PATH       = '/tmp/argo_nav_output.log'  # full stdout+stderr of the current/last NAV_SCRIPT run
+NAV_LOG_TAIL_LINES = 300
 PORT    = 8888
 
 
@@ -257,6 +261,14 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError:
                         timestamp = None
             self._json({'status': status, 'message': message, 'timestamp': timestamp})
+
+        elif self.path == '/nav_log':
+            log = ''
+            if os.path.isfile(NAV_LOG_PATH):
+                with open(NAV_LOG_PATH, 'r', errors='replace') as f:
+                    lines = f.readlines()
+                log = ''.join(lines[-NAV_LOG_TAIL_LINES:])
+            self._json({'log': log})
 
         elif self.path == '/config':
             self._json({'maps_dir': MAPS_DIR})
@@ -425,6 +437,17 @@ class Handler(BaseHTTPRequestHandler):
                     os.chmod(NAV_PROGRESS_PATH, 0o666)
                 except OSError:
                     pass
+                # Fresh log file per run ('w', not 'a') — otherwise GET
+                # /nav_log would show a previous run's output stitched onto
+                # this one with no clear boundary. Same cross-user
+                # permission reasoning as NAV_PROGRESS_PATH above.
+                try:
+                    with open(NAV_LOG_PATH, 'w'):
+                        pass
+                    os.chmod(NAV_LOG_PATH, 0o666)
+                except OSError:
+                    pass
+                nav_log_f = open(NAV_LOG_PATH, 'a')
                 _proc = subprocess.Popen(
                     # --no-rviz: the robot is headless and driven entirely
                     # through this web UI — rviz2 has no DISPLAY to attach
@@ -436,9 +459,10 @@ class Handler(BaseHTTPRequestHandler):
                     args,
                     cwd=_ROOT,
                     start_new_session=True,   # own process group → clean kill
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=nav_log_f,
+                    stderr=nav_log_f,
                 )
+                nav_log_f.close()  # child has its own fd via dup2; safe to close our copy now
                 _mode = mode
                 _map = map_name
             print(f'[launcher] stack started  mode={mode}  map={map_name}  pid={_proc.pid}')
