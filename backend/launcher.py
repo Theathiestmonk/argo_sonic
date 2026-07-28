@@ -55,6 +55,19 @@ Endpoints (CORS-open so the browser can call them directly):
                       requested, it's stopped first so the new one always reflects what
                       was actually asked for (e.g. switching which map to navigate on).
     POST /stop    →  kills the entire process group cleanly
+    GET  /nav_progress → {"status": "OK"|"ERROR"|"READY"|"STOPPED"|null,
+                          "message": str|null, "timestamp": int|null} —
+                          the current/last step sh/start_argo_nav_ui.sh
+                          reported, read from NAV_PROGRESS_PATH. Exists
+                          because launcher.py deliberately discards that
+                          script's own stdout/stderr (see POST /start's
+                          subprocess.DEVNULL) to keep this single-threaded
+                          server from being wedged by a chatty/slow node —
+                          which otherwise left the UI with nothing to show
+                          but an indefinite "waiting" spinner no matter
+                          what broke or how long it had been stuck.
+                          "status": null means the file doesn't exist yet
+                          (nothing has ever reported in).
 
     GET  /voice/status →  {"running": bool, "pid": int|null, "action": str|null,
                            "map": str|null, "table": str|null} — is Sonic
@@ -108,6 +121,7 @@ SONIC_DIR            = os.path.join(_ROOT, 'sonic')
 TEST_HARNESS_SCRIPT  = os.path.join(SONIC_DIR, 'test_harness.py')
 VOICE_LOG_PATH       = os.path.join(SONIC_DIR, 'voice_session.log')
 _VOICE_ACTIONS = {'order', 'deliver', 'bill', 'room_service'}
+NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by sh/start_argo_nav_ui.sh
 PORT    = 8888
 
 
@@ -223,6 +237,22 @@ class Handler(BaseHTTPRequestHandler):
                 mode    = _mode if running else None
                 map_    = _map if running else None
             self._json({'running': running, 'pid': pid, 'mode': mode, 'map': map_})
+
+        elif self.path == '/nav_progress':
+            status, message, timestamp = None, None, None
+            if os.path.isfile(NAV_PROGRESS_PATH):
+                with open(NAV_PROGRESS_PATH, 'r') as f:
+                    raw = f.read().strip()
+                # status|epoch_seconds|message — see sh/start_argo_nav_ui.sh's
+                # report()/report_error()/report_ready() helpers for the writer.
+                parts_ = raw.split('|', 2)
+                if len(parts_) == 3:
+                    status, ts_str, message = parts_
+                    try:
+                        timestamp = int(ts_str)
+                    except ValueError:
+                        timestamp = None
+            self._json({'status': status, 'message': message, 'timestamp': timestamp})
 
         elif self.path == '/config':
             self._json({'maps_dir': MAPS_DIR})

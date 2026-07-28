@@ -36,6 +36,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/install/setup.bash"
 
+# Must match sh/start-rosbridge.sh / start_argo_nav_ui.sh's RMW setting or
+# nodes started by each simply can't discover each other at all — see the
+# comment there for why Cyclone DDS over the Fast-DDS default.
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
 SHARE="$SCRIPT_DIR/install/argo_mini/share/argo_mini"
 NAV_CONFIG=$SHARE/config/nav2.yaml
 EXPLORE_CONFIG=$SHARE/config/exploration_nav2.yaml

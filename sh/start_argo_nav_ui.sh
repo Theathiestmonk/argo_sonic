@@ -26,6 +26,13 @@ MAP_BASE="${MAP_BASE/#\~/$HOME}"
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/install/setup.bash"
 
+# Fast-DDS (ROS2 Humble's default RMW) is known to be less reliable under
+# discovery/service-call load than Cyclone DDS on this many concurrent nodes
+# on Jetson-class ARM hardware — seen firsthand as intermittent lifecycle
+# service-call timeouts here. Must match sh/start-rosbridge.sh's setting or
+# nodes started by each simply can't discover each other at all.
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
 CAMERA_SDK_PATH=~/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CAMERA_SDK_PATH/ascamera/libs/lib/aarch64-linux-gnu
 
@@ -59,6 +66,21 @@ ros2 daemon stop 2>/dev/null || true
 ros2 daemon start
 sleep 2
 
+# ?? progress reporting ??????????????????????????????????????????????????????
+# launcher.py spawns this script with its stdout/stderr going to DEVNULL (a
+# slow/chatty node can't be allowed to wedge the single-threaded HTTP
+# server) — which means when something fails partway through, the UI has
+# historically had nothing to show but an indefinite "Waiting for Nav2"
+# spinner, no matter how long it's actually been stuck or what broke. Write
+# the current step to a well-known file backend/launcher.py can read and
+# serve over GET /nav_progress, so the frontend can show the real state
+# instead of guessing from a timeout alone.
+PROGRESS_FILE="/tmp/argo_nav_progress"
+report()       { echo "[argo] $1";               echo "OK|$(date +%s)|$1"    > "$PROGRESS_FILE"; }
+report_error() { echo "[argo] ERROR: $1";         echo "ERROR|$(date +%s)|$1" > "$PROGRESS_FILE"; }
+report_ready() { echo "[argo] $1";                echo "READY|$(date +%s)|$1" > "$PROGRESS_FILE"; }
+report "Starting nav2 stack..."
+
 # ?? lifecycle helper ???????????????????????????????????????????????????????
 lc_node() {
   local node=$1
@@ -76,16 +98,16 @@ wait_for_topic() {
   local timeout=${2:-30}
   local start=$(date +%s)
 
-  echo "[argo] Waiting for topic $topic (timeout: ${timeout}s)..."
+  report "Waiting for topic $topic (timeout: ${timeout}s)..."
   while true; do
     if ros2 topic list 2>/dev/null | grep -q "^${topic}$"; then
-      echo "[argo] ? Topic $topic is available"
+      echo "[argo] Topic $topic is available"
       return 0
     fi
 
     local elapsed=$(($(date +%s) - start))
     if [ $elapsed -ge $timeout ]; then
-      echo "[argo] ? ERROR: Topic $topic not available after ${timeout}s"
+      report_error "Topic $topic not available after ${timeout}s"
       return 1
     fi
 
@@ -99,16 +121,16 @@ wait_for_action() {
   local timeout=${2:-30}
   local start=$(date +%s)
 
-  echo "[argo] Waiting for action $action (timeout: ${timeout}s)..."
+  report "Waiting for action $action (timeout: ${timeout}s)..."
   while true; do
     if ros2 action list 2>/dev/null | grep -q "^${action}$"; then
-      echo "[argo] ? Action $action is available"
+      echo "[argo] Action $action is available"
       return 0
     fi
 
     local elapsed=$(($(date +%s) - start))
     if [ $elapsed -ge $timeout ]; then
-      echo "[argo] ? ERROR: Action $action not available after ${timeout}s"
+      report_error "Action $action not available after ${timeout}s"
       return 1
     fi
 
@@ -121,21 +143,21 @@ check_process() {
   local pid=$1
   local name=$2
   if ! kill -0 "$pid" 2>/dev/null; then
-    echo "[argo] ? ERROR: Process $name (PID $pid) has crashed!"
+    report_error "Process $name (PID $pid) has crashed!"
     return 1
   fi
   return 0
 }
 
 # ?? 1. Robot state publisher ???????????????????????????????????????????????
-echo "[argo] Starting robot_state_publisher..."
+report "Starting robot_state_publisher..."
 ros2 launch argo_mini robot_state_publisher.launch.py &
 RSP_PID=$!
 sleep 5
 
 # ?? 2. Camera TF bridge ????????????????????????????????????????????????????
 # Publish camera frame directly under base_link (from URDF: x=0.2575, z=0.170)
-echo "[argo] Starting camera TF bridge..."
+report "Starting camera TF bridge..."
 ros2 run tf2_ros static_transform_publisher \
   --x 0.2575 --y 0.0 --z 0.170 \
   --roll 0.0 --pitch 0.0 --yaw 0.0 \
@@ -154,7 +176,7 @@ sleep 5
 # ?? 3. Serial bridge ??????????????????????????????????????????????????????
 # left_tick_scale=2.1714: calibrated wheel ratio (right ticks 2.17x faster)
 # fixed_dac=106: constant DAC ? consistent tick rate ? cleaner odometry
-echo "[argo] Starting serial_bridge..."
+report "Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
   -p port:=/dev/ttyUSB1 \
   -p baud:=115200 \
@@ -163,7 +185,7 @@ SERIAL_PID=$!
 sleep 5
 
 # ?? 4. RPLidar A1 ?????????????????????????????????????????????????????????
-echo "[argo] Starting rplidar..."
+report "Starting rplidar..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
   -p serial_port:=/dev/ttyUSB0 \
   -p serial_baudrate:=115200 \
@@ -174,7 +196,7 @@ LIDAR_PID=$!
 sleep 5
 
 # ?? 5. Scan relay ??????????????????????????????????????????????????????????
-echo "[argo] Starting scan_relay..."
+report "Starting scan_relay..."
 ros2 run argo_mini scan_relay &
 RELAY_PID=$!
 sleep 4
@@ -182,7 +204,7 @@ sleep 4
 # ?? 6. SLAM Toolbox ? localization mode ???????????????????????????????????
 # Replaces map_server + AMCL: serves /map AND broadcasts map?odom TF.
 # Relocalizes automatically on first scan ? no initial pose click needed.
-echo "[argo] Starting slam_toolbox localization (map: $MAP_BASE)..."
+report "Starting slam_toolbox localization (map: $MAP_BASE)..."
 ros2 run slam_toolbox localization_slam_toolbox_node --ros-args \
   --params-file "$SLAM_CONFIG" \
   -p map_file_name:="$MAP_BASE" &
@@ -190,7 +212,7 @@ SLAM_PID=$!
 sleep 7
 
 # ?? 7. Behavior server ????????????????????????????????????????????????????
-echo "[argo] Starting behavior_server..."
+report "Starting behavior_server..."
 ros2 run nav2_behaviors behavior_server --ros-args \
   --params-file $NAV_CONFIG \
   -r cmd_vel:=/cmd_vel_raw &
@@ -200,14 +222,14 @@ sleep 7
 lc_node /behavior_server
 
 # ?? 8. Planner server ?????????????????????????????????????????????????????
-echo "[argo] Starting planner_server..."
+report "Starting planner_server..."
 ros2 run nav2_planner planner_server --ros-args --params-file $NAV_CONFIG &
 PLANNER_PID=$!
 sleep 5
 lc_node /planner_server
 
 # ?? 9. Controller server ? /cmd_vel_raw ???????????????????????????????????
-echo "[argo] Starting controller_server..."
+report "Starting controller_server..."
 ros2 run nav2_controller controller_server --ros-args \
   --params-file $NAV_CONFIG \
   -r cmd_vel:=/cmd_vel_raw &
@@ -225,7 +247,7 @@ wait_for_topic "local_costmap/costmap_raw" 15
 wait_for_topic "global_costmap/costmap_raw" 15
 
 # ?? 10. Velocity smoother /cmd_vel_raw ? /cmd_vel_smoothed ????????????????
-echo "[argo] Starting velocity_smoother..."
+report "Starting velocity_smoother..."
 ros2 run nav2_velocity_smoother velocity_smoother --ros-args \
   --params-file $NAV_CONFIG \
   -r cmd_vel:=/cmd_vel_raw \
@@ -235,23 +257,24 @@ sleep 5
 lc_node /velocity_smoother
 
 # ?? Wait for action servers to be ready before BT tries to load ??????????????
-echo "[argo] Waiting for action servers..."
+report "Waiting for action servers..."
 wait_for_action "/compute_path_to_pose" 30
 wait_for_action "/follow_path" 30
 wait_for_action "/backup" 30
 sleep 5
 
 # ?? 11. BT Navigator ??????????????????????????????????????????????????????
-echo "[argo] Starting bt_navigator..."
+report "Starting bt_navigator..."
 ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG &
 BT_PID=$!
 sleep 7
 lc_node /bt_navigator
+report_ready "Nav2 fully activated - ready for goals"
 
 # ?? 12. Depth camera (optional) ???????????????????????????????????????????
 CAM_PID=""
 if [ "$NO_CAM" = false ]; then
-  echo "[argo] Starting HP60C camera..."
+  report "Starting HP60C camera..."
   (
     cd $CAMERA_SDK_PATH
     source install/setup.bash
@@ -262,9 +285,9 @@ if [ "$NO_CAM" = false ]; then
 
   # Wait for camera to publish depth data
   if wait_for_topic "/ascamera_hp60c/camera_publisher/depth0/points" 15; then
-    echo "[argo] ? Camera ready"
+    echo "[argo] Camera ready"
   else
-    echo "[argo] ? WARNING: Camera not publishing depth data"
+    echo "[argo] WARNING: Camera not publishing depth data"
     echo "[argo]   Check: USB connection, SDK libraries, camera permissions"
     # Don't exit?safety shield can run with STALE state (pass-through)
   fi
@@ -274,14 +297,14 @@ fi
 
 # ?? 13. Velocity smoother check ????????????????????????????????
 if ! wait_for_topic "/cmd_vel_smoothed" 10; then
-  echo "[argo] ? ERROR: Velocity smoother not publishing!"
+  report_error "Velocity smoother not publishing!"
   kill $SMOOTHER_PID 2>/dev/null || true
   exit 1
 fi
-echo "[argo] ? Velocity smoother ready"
+echo "[argo] Velocity smoother ready"
 
 # ?? 14. Depth safety shield /cmd_vel_smoothed ? /cmd_vel ??????????????????
-echo "[argo] Starting depth_safety_shield..."
+report "Starting depth_safety_shield..."
 ros2 run argo_mini depth_safety_shield --ros-args \
   -p stop_distance:=0.60 \
   -p tunnel_width:=0.30 \
@@ -295,18 +318,19 @@ ros2 run argo_mini depth_safety_shield --ros-args \
 SHIELD_PID=$!
 sleep 7
 
-# Verify safety shield is running
+# Verify safety shield is running — check_process already calls
+# report_error internally on failure, so the progress file reflects this
+# without a separate call here.
 if check_process $SHIELD_PID "depth_safety_shield"; then
-  echo "[argo] ? Safety shield ready"
+  echo "[argo] Safety shield ready"
 else
-  echo "[argo] ? ERROR: Safety shield failed to start"
   exit 1
 fi
 
 # ── 15. RViz (optional) ───────────────────────────────────────────────────
 RVIZ_PID=""
 if [ "$NO_RVIZ" = false ]; then
-  echo "[argo] Starting RViz..."
+  report "Starting RViz..."
   export DISPLAY=:1
   rviz2 &
   RVIZ_PID=$!
@@ -333,6 +357,7 @@ echo ""
 
 trap '
   echo "[argo] Shutting down..."
+  echo "STOPPED|$(date +%s)|Stack shut down" > "$PROGRESS_FILE"
   kill $RSP_PID $SERIAL_PID $LIDAR_PID $RELAY_PID \
        $SLAM_PID $PLANNER_PID $CONTROLLER_PID \
        $SMOOTHER_PID $BT_PID $BEHAVIOR_PID $SHIELD_PID $RVIZ_PID \

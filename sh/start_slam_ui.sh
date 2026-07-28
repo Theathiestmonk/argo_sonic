@@ -21,6 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/install/setup.bash"
 
+# Must match sh/start-rosbridge.sh's RMW setting or nodes started by each
+# simply can't discover each other at all.
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
 SLAM_CONFIG="$SCRIPT_DIR/install/argo_mini/share/argo_mini/config/slam_mapping.yaml"
 
 # ── USB permissions ────────────────────────────────────────────────────────

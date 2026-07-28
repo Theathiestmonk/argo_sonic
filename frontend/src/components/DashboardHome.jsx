@@ -90,6 +90,29 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
 
   const navReady = navState === 'running' && navMap === selectedMap && navActionReady
 
+  // Real step-by-step progress from sh/start_argo_nav_ui.sh itself (see
+  // backend/launcher.py's GET /nav_progress) — without this, a failure
+  // partway through the ~90s+ startup looked identical to it just still
+  // being slow: an indefinite "Waiting for Nav2" spinner with no way to
+  // tell which node broke or that it broke at all, short of SSHing in.
+  const [navProgress, setNavProgress] = useState({ status: null, message: null })
+  useEffect(() => {
+    if (navState !== 'running' || navMap !== selectedMap) {
+      setNavProgress({ status: null, message: null })
+      return
+    }
+    let cancelled = false
+    const check = () => {
+      fetch(`${launcherUrl}/nav_progress`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setNavProgress(d) })
+        .catch(() => {})
+    }
+    check()
+    const id = setInterval(check, 2000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [navState, navMap, selectedMap, launcherUrl])
+
   const checkNav = useCallback(() => {
     fetch(`${launcherUrl}/status`)
       .then(r => r.json())
@@ -445,6 +468,25 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
                 Not connected to rosbridge
               </button>
+            ) : navState === 'running' && navMap === selectedMap && navProgress.status === 'ERROR' ? (
+              // sh/start_argo_nav_ui.sh itself reported a specific failed
+              // step (see GET /nav_progress) — show exactly what broke
+              // instead of leaving this looking identical to "still
+              // starting", which used to mean the only way to find out
+              // something had failed, or what, was to SSH in and dig
+              // through process lists and hidden log files by hand.
+              <button
+                onClick={stopNav}
+                title={`${navProgress.message} — click to stop`}
+                style={{
+                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
+                  background: 'rgba(255,94,94,0.08)', border: '1px solid rgba(255,94,94,0.3)', color: 'var(--danger)',
+                  display: 'flex', alignItems: 'center', gap: 8, maxWidth: 340,
+                }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Failed: {navProgress.message}</span>
+              </button>
             ) : navState === 'running' && navMap === selectedMap ? (
               // Wrapper process is up AND rosbridge is connected, but Nav2's
               // own ~90s+ lifecycle chain (camera wait, costmap wait, several
@@ -458,11 +500,13 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
                 style={{
                   padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
                   background: 'rgba(127,168,232,0.1)', border: '1px solid rgba(127,168,232,0.3)', color: 'var(--blue)',
-                  display: 'flex', alignItems: 'center', gap: 8,
+                  display: 'flex', alignItems: 'center', gap: 8, maxWidth: 340,
                 }}
               >
                 <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid currentColor', borderTopColor: 'transparent', animation: 'spin-slow 0.8s linear infinite', flexShrink: 0 }} />
-                Waiting for Nav2 (~1–2 min)…
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {navProgress.message || 'Waiting for Nav2 (~1–2 min)…'}
+                </span>
               </button>
             ) : (
               <button
