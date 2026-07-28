@@ -775,6 +775,14 @@
     menu = loadMenu(); settings = loadSettings()
     renderSettingsForm(); renderCategoryList(); renderCatalog()
   })
+  // Pull the backend's copy (backend/launcher.py, if running) so this page reflects
+  // whatever's actually live — including any stock/availability changes an order taken
+  // through the sonic/ voice agent may have just made — not a stale local snapshot.
+  refreshMenuFromBackend().then(ok => {
+    if (!ok) return
+    menu = loadMenu(); settings = loadSettings()
+    renderSettingsForm(); renderCategoryList(); renderCatalog()
+  })
 </script>
 </body>
 </html>

@@ -11,6 +11,8 @@ Manages conversation state:
 from dataclasses import dataclass, field
 from typing import Optional
 
+from order_cart import OrderCart
+
 
 @dataclass
 class ConversationContext:
@@ -20,6 +22,16 @@ class ConversationContext:
     last_intent: Optional[str] = None
     slots: dict = field(default_factory=dict)          # {place, room, item, temperature...}
     turn_count: int = 0
+
+    # ── Order-taking (restaurant) ────────────────────────────────────────
+    table_id: Optional[str] = None    # set by the test harness / real arrival trigger
+    map_name: Optional[str] = None    # which waypoints/orders file this table belongs to
+    taking_order: bool = False        # True while actively collecting items for this table
+    awaiting_confirmation: bool = False  # True once the customer's said "done" and heard
+                                          # the order read back — next turn either confirms
+                                          # (submits) or, if it's something else, cancels back
+                                          # to normal item editing (see main.py's _handle_order_turn)
+    cart: OrderCart = field(default_factory=OrderCart)
 
     # ── History management ──────────────────────────────────────────────
     def add_user(self, text: str):

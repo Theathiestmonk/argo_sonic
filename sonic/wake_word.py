@@ -50,10 +50,12 @@ def load_model():
         return None
 
     try:
-        model = Model(
-            wakeword_models=[config.WAKE_WORD_MODEL_PATH],
-            inference_framework="onnx",
-        )
+        # inference_framework isn't a real Model() param in the installed
+        # openwakeword version (0.4.0) — it auto-detects from the model
+        # file's own extension (.onnx here), passing it explicitly used to
+        # fall through **kwargs into an internal AudioFeatures() call that
+        # doesn't recognize it either, crashing load_model() entirely.
+        model = Model(wakeword_model_paths=[config.WAKE_WORD_MODEL_PATH])
         print(f"  [WakeWord] ✅ Loaded model: {config.WAKE_WORD_MODEL_PATH}")
         return model
     except Exception as e:

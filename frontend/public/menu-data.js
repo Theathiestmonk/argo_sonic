@@ -2,6 +2,49 @@
 // Persisted to localStorage so items added in Menu Settings show up on the Order page.
 const MENU_STORAGE_KEY = 'argo_menu'
 
+// Backend mirror (backend/launcher.py's GET/POST /menu) — the same host this page was
+// served from, port 8888, matching frontend/src/App.jsx's launcherUrl() convention. This
+// is what lets a separate process (the sonic/ voice agent) see the same menu staff edit
+// here: every save below also POSTs here, and menu.html pulls this on load so a Jetson
+// running both this page and Sonic always shows one real, current stock/availability
+// picture instead of two independently-drifting copies (localStorage vs whatever Sonic
+// last fetched).
+const LAUNCHER_URL = `${location.protocol}//${location.hostname}:8888`
+
+function _syncToBackendFireAndForget() {
+  try {
+    const menu = JSON.parse(localStorage.getItem(MENU_STORAGE_KEY) || 'null') || []
+    const settings = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || 'null') || DEFAULT_SETTINGS
+    fetch(`${LAUNCHER_URL}/menu`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ menu, settings, savedAt: new Date().toISOString() }),
+    }).catch(() => {}) // launcher.py not running is a normal, expected state — never block on it
+  } catch {}
+}
+
+// Pulls the backend's copy into localStorage, if reachable — call once on page load
+// before rendering (see menu.html's init sequence, same pattern already used for
+// ArgoBackupSync.init()). Short timeout since a missing/unreachable launcher.py is
+// routine (e.g. testing purely in a browser with no robot backend running at all),
+// not an error worth waiting on.
+async function refreshMenuFromBackend() {
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 1500)
+    const res = await fetch(`${LAUNCHER_URL}/menu`, { signal: ctrl.signal })
+    clearTimeout(timer)
+    if (!res.ok) return false
+    const data = await res.json()
+    if (!Array.isArray(data.menu) || !data.menu.length) return false
+    saveMenu(data.menu)
+    saveSettings({ ...DEFAULT_SETTINGS, ...(data.settings || {}) })
+    return true
+  } catch {
+    return false
+  }
+}
+
 const DEFAULT_MENU = [
   { id: 'm1', name: 'Classic Chicken Burger',      category: 'Burger',    price: 5.47, image: '🍔', desc: 'Grilled chicken, lettuce and house sauce in a soft bun.', stock: 25, available: true, diet: 'nonveg' },
   { id: 'm2', name: 'Double Chicken Cheese Burger', category: 'Burger',    price: 6.10, image: '🍔', desc: 'Double patty with melted cheese and pickles.', stock: 18, available: true, diet: 'nonveg' },
@@ -30,6 +73,7 @@ function loadMenu() {
 function saveMenu(items) {
   localStorage.setItem(MENU_STORAGE_KEY, JSON.stringify(items))
   window.dispatchEvent(new CustomEvent('argo:data-saved'))
+  _syncToBackendFireAndForget()
 }
 
 function menuCategories(items) {
@@ -154,6 +198,7 @@ function loadSettings() {
 function saveSettings(settings) {
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
   window.dispatchEvent(new CustomEvent('argo:data-saved'))
+  _syncToBackendFireAndForget()
 }
 
 function currencySymbol(settings) {

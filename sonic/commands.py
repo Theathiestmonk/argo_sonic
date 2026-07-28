@@ -150,8 +150,14 @@ COMMANDS = [
         "scenario": "restaurant",
         "examples": ["we are ready to order", "can we order now", "take our order", "i'd like to order"],
         "bot_response": "Great! I'll note your order. Tell me what you'd like.",
-        "action": "take_order",
-        "after_dialog": "Your order is on the way.",
+        # No action/after_dialog here on purpose — this used to fire take_order()
+        # (a full kitchen hand-off sequence) immediately on this trigger phrase,
+        # before any item was even known, then speak "Your order is on the way."
+        # The actual hand-off now happens once the order is finalized (main.py's
+        # order-taking branch, triggered by REQUEST_BILL or a closing cue) —
+        # this line's only job is to open the ordering flow.
+        "action": "none",
+        "after_dialog": None,
     },
     {
         "intent": "SHOW_MENU",

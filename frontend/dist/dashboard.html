@@ -82,14 +82,6 @@
   .brand-name { font-family: var(--font-heading); font-weight: 800; font-size: 16px; }
   .brand-sub { color: var(--muted); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; }
 
-  .nav-links { display: flex; align-items: center; gap: 2px; }
-  .nav-links a {
-    padding: 9px 14px; border-radius: var(--radius-md); font-size: 13px; font-weight: 600;
-    color: var(--muted); text-decoration: none; border: 1px solid transparent; transition: all 0.2s;
-  }
-  .nav-links a:hover { color: #fff; background: rgba(255,255,255,0.04); }
-  .nav-links a.active { color: var(--gold-bright); background: rgba(226,179,92,0.08); border-color: rgba(226,179,92,0.25); }
-
   .nav-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .setup-btn {
     padding: 9px 16px; border-radius: var(--radius-md); font-size: 12.5px; font-weight: 700;
@@ -266,8 +258,108 @@
     .rail { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border-glass); }
     .stats { grid-template-columns: repeat(2,1fr); }
     .bottom-grid { grid-template-columns: 1fr; }
-    .nav-links { display: none; }
   }
+
+  /* ── Cyclic radial nav (bottom-left FAB) ─────────────────────────────────── */
+  .radial-backdrop {
+    position: fixed; inset: 0; z-index: 55; pointer-events: none; touch-action: none;
+    background: rgba(4,3,6,0.32); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+    opacity: 0; transition: opacity 0.3s ease;
+  }
+  .radial-backdrop.open { opacity: 1; pointer-events: auto; }
+  @media (max-width: 700px) {
+    .radial-backdrop { background: rgba(4,3,6,0.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  }
+
+  .radial-nav {
+    position: fixed;
+    /* The anchor point (0,0) below is the FAB's true CENTER, not a corner — the FAB and
+       every item are centered on it via negative margins, so this single point is all
+       that has to move to reposition the whole nav (e.g. bottom-left vs bottom-center). */
+    left: calc(clamp(20px, 3.5vw, 34px) + var(--fab-size) / 2);
+    bottom: calc(clamp(20px, 3.5vw, 34px) + var(--fab-size) / 2);
+    width: 0; height: 0; z-index: 60;
+    --fab-size: clamp(56px, 7vw, 74px);
+    --icon-size: clamp(52px, 6.5vw, 74px);
+  }
+  @media (max-width: 700px) {
+    /* On small screens the arc becomes a centered semicircle (see RADIAL_MOBILE_BREAKPOINT
+       in the script), so the FAB itself moves to bottom-center to give it room either side. */
+    .radial-nav {
+      left: 50%;
+      bottom: calc(clamp(18px, 5vw, 28px) + var(--fab-size) / 2);
+      transform: translateX(-50%);
+    }
+  }
+
+  .radial-fab {
+    position: absolute; left: 0; bottom: 0; width: var(--fab-size); height: var(--fab-size); border-radius: 50%;
+    margin: 0 0 calc(var(--fab-size) / -2) calc(var(--fab-size) / -2);
+    background: var(--glass-dense); border: 1px solid var(--border-glass); color: var(--text);
+    display: grid; place-items: center; box-shadow: var(--shadow-fluid);
+    backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+  }
+  .radial-fab:hover { border-color: rgba(226,179,92,0.4); color: var(--gold-bright); }
+  .radial-fab-icon {
+    grid-area: 1 / 1; width: 38%; height: 38%;
+    transition: opacity 0.2s ease, transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .radial-fab-icon-close { opacity: 0; transform: rotate(-45deg) scale(0.5); }
+  .radial-nav.open .radial-fab { border-color: rgba(226,179,92,0.5); color: var(--gold-bright); }
+  .radial-nav.open .radial-fab-icon-menu { opacity: 0; transform: rotate(45deg) scale(0.5); }
+  .radial-nav.open .radial-fab-icon-close { opacity: 1; transform: rotate(0deg) scale(1); }
+
+  .radial-track { display: none; position: absolute; left: 0; bottom: 0; overflow: visible; pointer-events: none; }
+  .radial-track path {
+    fill: none; stroke: rgba(226,179,92,0.28); stroke-width: 1.5; stroke-dasharray: 3 6; stroke-linecap: round;
+    opacity: 0; transition: opacity 0.3s ease 0.05s;
+  }
+  .radial-nav.open .radial-track path { opacity: 1; }
+
+  .radial-items { position: absolute; left: 0; bottom: 0; width: 0; height: 0; }
+  .radial-item {
+    position: absolute; left: 0; bottom: 0; width: var(--icon-size); height: var(--icon-size);
+    margin: 0 0 calc(var(--icon-size) / -2) calc(var(--icon-size) / -2);
+    border-radius: 50%; display: grid; place-items: center;
+    transform: translate(0, 0) scale(0.3); opacity: 0; pointer-events: none;
+    transition: transform 0.45s cubic-bezier(0.22,1,0.36,1), opacity 0.3s ease;
+  }
+  .radial-nav.open .radial-item {
+    transform: translate(var(--dx), var(--dy)) scale(1); opacity: 1; pointer-events: auto;
+    transition-delay: var(--delay);
+  }
+  .radial-icon {
+    position: relative; width: 100%; height: 100%; border-radius: 50%;
+    background: var(--glass-dense); border: 1px solid var(--border-glass); color: var(--muted);
+    display: grid; place-items: center; box-shadow: var(--shadow-fluid); z-index: 1;
+    transition: all 0.25s ease;
+  }
+  .radial-icon svg { width: 44%; height: 44%; }
+  .radial-item:hover .radial-icon { color: #fff; border-color: rgba(255,255,255,0.25); }
+  .radial-item.focused:not(.active) .radial-icon {
+    border-color: rgba(255,255,255,0.55); box-shadow: 0 0 0 3px rgba(255,255,255,0.16), var(--shadow-fluid);
+  }
+  .radial-item.active .radial-icon {
+    background: linear-gradient(180deg,#fff 0%,#f3ede2 100%); color: #1a1103;
+    border-color: rgba(226,179,92,0.6);
+    box-shadow: 0 0 0 4px rgba(226,179,92,0.16), 0 8px 24px rgba(226,179,92,0.4);
+  }
+  .radial-glow {
+    position: absolute; inset: -16px; border-radius: 50%; z-index: 0; opacity: 0; pointer-events: none;
+    background: radial-gradient(circle, rgba(255,212,133,0.55) 0%, rgba(226,179,92,0.18) 45%, rgba(226,179,92,0) 72%);
+  }
+  .radial-item.active .radial-glow { opacity: 1; animation: flashPulse 1.9s ease-in-out infinite; }
+  @keyframes flashPulse {
+    0%, 100% { opacity: 0.55; transform: scale(0.94); }
+    50% { opacity: 1; transform: scale(1.12); }
+  }
+  .radial-tip {
+    position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%) translateX(-4px);
+    padding: 6px 12px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    background: rgba(12,9,18,0.92); border: 1px solid var(--border-glass); color: var(--text);
+    opacity: 0; pointer-events: none; transition: all 0.2s ease; z-index: 2;
+  }
+  .radial-item:hover .radial-tip, .radial-item.focused .radial-tip { opacity: 1; transform: translateY(-50%) translateX(0); }
 </style>
 </head>
 <body>
@@ -289,13 +381,6 @@
         <div class="brand-sub">Restaurant Dashboard</div>
       </div>
     </div>
-
-    <nav class="nav-links">
-      <a href="#" class="active">Overview</a>
-      <a href="#">Places</a>
-      <a href="#">Activity</a>
-      <a href="#">Settings</a>
-    </nav>
 
     <div class="nav-right">
       <a href="/" class="setup-btn">
@@ -352,7 +437,7 @@
 
     <!-- Main -->
     <main class="main">
-      <div class="page-top">
+      <div class="page-top" id="overviewSection">
         <div>
           <h2 id="greeting">Good day</h2>
           <p>Here's what's happening right now.</p>
@@ -385,7 +470,7 @@
       </section>
 
       <!-- Saved places grid -->
-      <section>
+      <section id="placesSection">
         <div class="section-head">
           <div>
             <h3>Saved Places</h3>
@@ -399,7 +484,7 @@
       </section>
 
       <!-- Activity + Alerts -->
-      <section class="bottom-grid">
+      <section class="bottom-grid" id="activitySection">
         <div class="panel">
           <h3>Recent Activity</h3>
           <div class="sub">What Argo has done today.</div>
@@ -418,6 +503,21 @@
       </section>
     </main>
   </div>
+</div>
+
+<!-- Cyclic radial nav -->
+<div class="radial-backdrop" id="radialBackdrop"></div>
+<div class="radial-nav" id="radialNav">
+  <svg class="radial-track" id="radialTrack" width="0" height="0"></svg>
+  <div class="radial-items" id="radialItems"></div>
+  <button class="radial-fab" id="radialFabBtn" aria-label="Open navigation" aria-expanded="false">
+    <svg class="radial-fab-icon radial-fab-icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>
+    </svg>
+    <svg class="radial-fab-icon radial-fab-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/>
+    </svg>
+  </button>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -590,6 +690,229 @@
     clearTimeout(toastTimer)
     toastTimer = setTimeout(() => { t.className = 'toast' }, 3200)
   }
+
+  // ── Cyclic radial nav ────────────────────────────────────────────────────
+  // A page list of any length can be plugged in here — RADIAL_MAX_VISIBLE below
+  // caps how many are ever rendered at once, so a "full circle" of pages still
+  // only shows the current windowed slice around whatever is focused.
+  const RADIAL_PAGES = [
+    { id: 'overview', label: 'Overview', target: '#overviewSection',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg>' },
+    { id: 'places', label: 'Places', target: '#placesSection',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>' },
+    { id: 'activity', label: 'Activity', target: '#activitySection',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 8 4-16 2 8h6"/></svg>' },
+    { id: 'order', label: 'Order', href: '/order.html',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18M16 10a4 4 0 0 1-8 0"/></svg>' },
+    { id: 'menu', label: 'Menu', href: '/menu.html',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>' },
+    { id: 'settings', label: 'Settings', href: '/',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>' },
+  ]
+  const RADIAL_MAX_VISIBLE = 4     // window size — only this many icons of the full page list render at once.
+  // Kept equal to the real page count on purpose: fitting more full-size icons across
+  // this arc without overlap needs a bigger radius, which is what previously stranded
+  // the ring far from the FAB and made the gap inconsistent between page counts. Capping
+  // here means the ring geometry — and the FAB-to-icon distance — never has to change.
+  const RADIAL_MOBILE_BREAKPOINT = 700
+
+  let radialActivePage = 'overview'
+  let radialFocusIndex = 0      // keyboard cursor into RADIAL_PAGES; independent of the committed active page
+  let radialOpen = false
+
+  function radialIsMobile() {
+    return window.innerWidth <= RADIAL_MOBILE_BREAKPOINT
+  }
+
+  // Desktop: a quarter-arc tucked close to the FAB, which sits in the corner.
+  // Mobile: the FAB moves to bottom-center (see CSS), so the arc opens into a full
+  // semicircle above it — 0° (right) through 180° (left) — instead of being squeezed
+  // into one corner's worth of angle.
+  function radialArcRange() {
+    return radialIsMobile() ? { start: 0, end: 180 } : { start: 6, end: 90 }
+  }
+
+  function radialFabSizePx() {
+    return Math.max(56, Math.min(74, window.innerWidth * 0.07))
+  }
+
+  // Every visible icon sits on ONE circle centered on the FAB — same radius for every
+  // item, so the gap from the button is identical and consistent, and as small as this
+  // arc/icon-count combination allows without icons overlapping.
+  function computeRadialGeometry(m, arc) {
+    const fabR = radialFabSizePx() / 2
+    const iconSize = Math.max(52, Math.min(74, window.innerWidth * 0.065))
+    const gap = 22
+    const attachFloor = fabR + 26 + iconSize / 2   // as close as the FAB itself allows
+
+    if (m < 2) return { radius: attachFloor, iconSize }
+
+    const halfStepRad = (arc.end - arc.start) / (m - 1) / 2 * Math.PI / 180
+    const minRadius = (iconSize + gap) / (2 * Math.sin(halfStepRad))
+    return { radius: Math.max(attachFloor, minRadius), iconSize }
+  }
+
+  function radialAngleFor(i, n, arc) {
+    if (n === 1) return arc.start
+    return arc.start + (arc.end - arc.start) * (i / (n - 1))
+  }
+
+  // Cyclic window of page indices around radialFocusIndex, wrapping like a dial.
+  function radialVisibleIndices() {
+    const n = RADIAL_PAGES.length
+    if (n <= RADIAL_MAX_VISIBLE) return RADIAL_PAGES.map((_, i) => i)
+    const half = Math.floor(RADIAL_MAX_VISIBLE / 2)
+    const idx = []
+    for (let k = -half; k < RADIAL_MAX_VISIBLE - half; k++) {
+      idx.push(((radialFocusIndex + k) % n + n) % n)
+    }
+    return idx
+  }
+
+  function buildRadialNav(stagger) {
+    const itemsWrap = document.getElementById('radialItems')
+    itemsWrap.innerHTML = ''
+    const indices = radialVisibleIndices()
+    const m = indices.length
+    const arc = radialArcRange()
+    const { radius, iconSize } = computeRadialGeometry(m, arc)
+    document.getElementById('radialNav').style.setProperty('--icon-size', iconSize.toFixed(1) + 'px')
+    // The FAB and every item are centered (via negative margins) on this container's
+    // (0,0) anchor point, so item positions are simply points on a circle around it —
+    // no offset needed for the FAB's own size.
+    const points = []
+
+    indices.forEach((pageIdx, pos) => {
+      const p = RADIAL_PAGES[pageIdx]
+      const deg = radialAngleFor(pos, m, arc)
+      const rad = deg * Math.PI / 180
+      const dx = radius * Math.cos(rad)
+      const dy = -radius * Math.sin(rad)
+      points.push({ dx, dy })
+
+      const btn = document.createElement('button')
+      btn.className = 'radial-item'
+        + (p.id === radialActivePage ? ' active' : '')
+        + (pageIdx === radialFocusIndex ? ' focused' : '')
+      btn.style.setProperty('--dx', dx.toFixed(1) + 'px')
+      btn.style.setProperty('--dy', dy.toFixed(1) + 'px')
+      btn.style.setProperty('--delay', stagger ? (pos * 40) + 'ms' : '0ms')
+      btn.innerHTML = `<span class="radial-glow"></span><span class="radial-icon">${p.icon}</span><span class="radial-tip">${p.label}</span>`
+      btn.onclick = () => { radialFocusIndex = pageIdx; goToRadialPage(p) }
+      itemsWrap.appendChild(btn)
+    })
+
+    // Decorative dashed trail connecting the items (matches the sketch's "selected pages" curve).
+    // SVG y-axis increases downward, same convention as the dx/dy pairs above, so no flip is needed.
+    const track = document.getElementById('radialTrack')
+    if (points.length > 1) {
+      const pad = 40
+      const minX = Math.min(0, ...points.map(p => p.dx)) - pad
+      const maxX = Math.max(0, ...points.map(p => p.dx)) + pad
+      const minY = Math.min(0, ...points.map(p => p.dy)) - pad
+      const maxY = Math.max(0, ...points.map(p => p.dy)) + pad
+      const w = maxX - minX, h = maxY - minY
+      track.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`)
+      track.setAttribute('width', w)
+      track.setAttribute('height', h)
+      track.style.left = minX + 'px'
+      track.style.bottom = (-maxY) + 'px'
+      const d = points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.dx.toFixed(1)} ${pt.dy.toFixed(1)}`).join(' ')
+      track.innerHTML = `<path d="${d}"/>`
+    }
+  }
+
+  function goToRadialPage(p) {
+    radialActivePage = p.id
+    closeRadial()
+    if (p.href) { window.location.href = p.href; return }
+    document.querySelector(p.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // Moves the keyboard cursor only — like spinning a rotary dial before it registers.
+  // ArrowRight steps toward the lower/horizontal end of the arc (down, toward the FAB);
+  // ArrowLeft steps toward the upper/vertical end (up-left).
+  function moveRadialFocus(step) {
+    const n = RADIAL_PAGES.length
+    radialFocusIndex = ((radialFocusIndex + step) % n + n) % n
+    buildRadialNav(false)
+  }
+
+  function confirmRadialFocus() {
+    goToRadialPage(RADIAL_PAGES[radialFocusIndex])
+  }
+
+  function openRadial() {
+    radialOpen = true
+    radialFocusIndex = Math.max(0, RADIAL_PAGES.findIndex(p => p.id === radialActivePage))
+    buildRadialNav(true)
+    document.getElementById('radialNav').classList.add('open')
+    document.getElementById('radialBackdrop').classList.add('open')
+    document.getElementById('radialFabBtn').setAttribute('aria-expanded', 'true')
+  }
+  function closeRadial() {
+    radialOpen = false
+    document.getElementById('radialNav').classList.remove('open')
+    document.getElementById('radialBackdrop').classList.remove('open')
+    document.getElementById('radialFabBtn').setAttribute('aria-expanded', 'false')
+  }
+
+  document.getElementById('radialFabBtn').onclick = () => { radialOpen ? closeRadial() : openRadial() }
+  document.addEventListener('click', e => {
+    if (radialOpen && !document.getElementById('radialNav').contains(e.target)) closeRadial()
+  })
+  document.addEventListener('keydown', e => {
+    if (!radialOpen) return
+    if (e.key === 'ArrowRight') { e.preventDefault(); moveRadialFocus(-1) }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); moveRadialFocus(1) }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); confirmRadialFocus() }
+    else if (e.key === 'Escape') { closeRadial() }
+  })
+  let radialResizeTimer
+  window.addEventListener('resize', () => {
+    clearTimeout(radialResizeTimer)
+    radialResizeTimer = setTimeout(() => buildRadialNav(false), 150)
+  })
+
+  // Swipe-to-rotate on touch devices — there's no arrow-key equivalent on mobile,
+  // so a drag across the dimmed backdrop spins the focus ring the same way the
+  // keyboard does. A tap (no real movement) still falls through to the existing
+  // click-outside-to-close handler; tapping an icon still confirms it immediately.
+  const radialBackdropEl = document.getElementById('radialBackdrop')
+  let radialTouchActive = false
+  let radialTouchStartX = 0, radialTouchStartY = 0
+  const RADIAL_SWIPE_THRESHOLD = 32
+  const RADIAL_SWIPE_MOVE_GUARD = 6
+
+  radialBackdropEl.addEventListener('touchstart', e => {
+    if (!radialOpen || e.touches.length !== 1) return
+    radialTouchActive = true
+    radialTouchStartX = e.touches[0].clientX
+    radialTouchStartY = e.touches[0].clientY
+  }, { passive: true })
+
+  radialBackdropEl.addEventListener('touchmove', e => {
+    if (!radialTouchActive) return
+    const t = e.touches[0]
+    const dx = t.clientX - radialTouchStartX
+    const dy = t.clientY - radialTouchStartY
+    // Only claim the gesture (and block page scroll) once it's clearly a drag, not a tap.
+    if (Math.abs(dx) > RADIAL_SWIPE_MOVE_GUARD || Math.abs(dy) > RADIAL_SWIPE_MOVE_GUARD) e.preventDefault()
+  }, { passive: false })
+
+  radialBackdropEl.addEventListener('touchend', e => {
+    if (!radialTouchActive) return
+    radialTouchActive = false
+    const t = e.changedTouches[0]
+    const dx = t.clientX - radialTouchStartX
+    const dy = t.clientY - radialTouchStartY
+    if (Math.abs(dx) < RADIAL_SWIPE_THRESHOLD && Math.abs(dy) < RADIAL_SWIPE_THRESHOLD) return
+    const primary = Math.abs(dx) > Math.abs(dy) ? dx : dy
+    if (primary < 0) moveRadialFocus(1)    // swipe left/up — same as ArrowLeft
+    else moveRadialFocus(-1)               // swipe right/down — same as ArrowRight
+  })
+
+  buildRadialNav(false)
 
   // ── Init ──────────────────────────────────────────────────────────────────
   loadLabels()

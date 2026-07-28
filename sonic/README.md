@@ -39,23 +39,31 @@ sonic_streaming/
 ├── commands.py                # all 79 intents across 5 scenarios
 ├── dispatcher.py                # mock robot actions (ROS2-ready stubs)
 ├── conversation.py                # context, history, slot tracking
-├── models/
-│   └── Hi_Sonic.onnx                # your trained wake word model
-└── requirements.txt
+├── menu_client.py                 # fetches the shared menu, checks availability
+├── order_cart.py                  # structured {id, name, qty, price} cart
+├── test_harness.py                # simulated table-arrival test driver
+└── models/
+    └── Hi_Sonic.onnx                # your trained wake word model
 ```
+
+Dependencies now live in one combined file at the repo root — see
+`../requirements.txt` (covers this and `settings-dashboard/backend/` too).
 
 ---
 
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+cd ..    # repo root
+python3 -m venv venv && venv/bin/pip install -r requirements.txt
 ```
 
-Edit `config.py`:
-```python
-GROQ_API_KEY   = "gsk_..."     # free at console.groq.com
-SARVAM_API_KEY = "sk_..."      # dashboard.sarvam.ai
+Create a `.env` file in this folder (`sonic/.env`, gitignored — `config.py`
+loads it via `python-dotenv`, it does not read hardcoded values from
+`config.py` itself):
+```
+GROQ_API_KEY=gsk_...     # free at console.groq.com
+SARVAM_API_KEY=sk_...    # dashboard.sarvam.ai
 ```
 
 Make sure `models/Hi_Sonic.onnx` exists (already placed for you).

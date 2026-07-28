@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Groq (LLM) ──────────────────────────────────────────────────────────────
-GROQ_API_KEY     = os.environ.get("GROQ_API_KEY")   # free at console.groq.com
+GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "")   # free at console.groq.com
 GROQ_URL         = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL       = "llama-3.1-8b-instant"
 GROQ_TEMPERATURE = 0.72
@@ -23,7 +23,7 @@ SARVAM_STT_MODEL = "saarika:v2.5"
 
 # ── Sarvam TTS ───────────────────────────────────────────────────────────────
 # IMPORTANT: regenerate your Sarvam key if you ever shared it publicly.
-SARVAM_API_KEY     = os.environ.get("SARVAM_API_KEY")
+SARVAM_API_KEY     = os.environ.get("SARVAM_API_KEY", "")
 SARVAM_TTS_URL     = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_MODEL   = "bulbul:v3"
 SARVAM_SPEAKER     = "shubh"       # neutral friendly male, bulbul:v3 default
@@ -53,6 +53,12 @@ MIC_WAKE_WINDOW       = 4.0   # seconds
 # If the user doesn't say anything within this window → go back to
 # wake-word mode and wait for "Hey Sonic" again.
 MIC_FOLLOW_UP_WINDOW  = 5.0   # seconds  ← the fix you requested
+
+# ── Backend (backend/launcher.py — menu + per-table orders) ─────────────────
+# Sonic runs on the same Jetson as the rest of Argo, so localhost is correct
+# here (unlike the browser's launcherUrl(), which derives from whatever host
+# the page was loaded from — Sonic has no "page" to derive that from).
+LAUNCHER_URL = "http://localhost:8888"
 
 # ── Scenarios ────────────────────────────────────────────────────────────────
 # These are the selectable modes. "general" is always active on top of

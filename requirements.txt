@@ -1,0 +1,20 @@
+# Argo Sonic — combined Python dependencies for every Python service in this
+# repo. backend/launcher.py needs nothing here (stdlib only, by design — see
+# its own module docstring). frontend/ and settings-dashboard/frontend/ are
+# Node/npm projects (see their package.json), not part of this file.
+#
+# Install once from the repo root:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# ── sonic/ (voice agent) ──────────────────────────────────────────────────
+requests>=2.31.0
+numpy
+python-dotenv
+sounddevice>=0.4.6
+soundfile>=0.12.1
+openwakeword
+
+# ── settings-dashboard/backend/ (Jetson WiFi/Bluetooth/System settings API) ──
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+pydantic>=2.5,<3.0
