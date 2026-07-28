@@ -321,7 +321,15 @@ trap '
        $SMOOTHER_PID $BT_PID $BEHAVIOR_PID $SHIELD_PID $RVIZ_PID \
        ${CAM_PID:-} $CAM_TF_PID $CAM_TF2_PID 2>/dev/null || true
   sleep 4
-  pkill -9 -f ros2 2>/dev/null || true
+  # Was "pkill -9 -f ros2" -- matches ANY process with ros2 anywhere in its
+  # command line, system-wide, which collaterally kills the independent
+  # argo-rosbridge systemd service too (it also runs via ros2 launch).
+  # Scope the stragglers-still-alive fallback to just this process group
+  # instead: backend/launcher.py spawns this script with start_new_session
+  # equal to True specifically so $$ is that group leader, and every node
+  # above was backgrounded with plain ampersand (no setsid), so they are all
+  # still in it -- this reaches them without touching anything outside.
+  kill -9 -- -$$ 2>/dev/null || true
   exit 0
 ' INT TERM
 
