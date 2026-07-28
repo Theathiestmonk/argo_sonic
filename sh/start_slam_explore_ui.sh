@@ -56,6 +56,18 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
 done
 sleep 5
 
+# ── Reset the ros2 CLI daemon ─────────────────────────────────────────────────
+# ros2 lifecycle set (used below by lc_node) goes through a shared background
+# daemon for discovery caching. A stale daemon makes every lifecycle
+# transition below fail with "xmlrpc.client.Fault: RuntimeError: !rclpy.ok()"
+# and the stack never activates, with no indication why — confirmed on this
+# same lc_node pattern in start_argo_nav_ui.sh. Force a fresh daemon on every
+# launch instead of trusting whatever state it's already in.
+echo "[explore] Resetting ros2 daemon..."
+ros2 daemon stop 2>/dev/null || true
+ros2 daemon start
+sleep 2
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 lc_node() {
   local node=$1

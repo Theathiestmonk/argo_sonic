@@ -46,6 +46,19 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
 done
 sleep 5
 
+# ?? reset the ros2 CLI daemon ?????????????????????????????????????????????
+# ros2 lifecycle set (used below by lc_node) goes through a shared background
+# daemon for discovery caching. If that daemon is ever left stale (e.g. from
+# a previous run's process group being torn down uncleanly), every lifecycle
+# transition below fails with a confusing "xmlrpc.client.Fault: RuntimeError:
+# !rclpy.ok()" and the whole stack never activates, with no indication why —
+# this cost real debugging time once already. Force a fresh daemon on every
+# launch instead of hoping whatever state it's already in is healthy.
+echo "[argo] Resetting ros2 daemon..."
+ros2 daemon stop 2>/dev/null || true
+ros2 daemon start
+sleep 2
+
 # ?? lifecycle helper ???????????????????????????????????????????????????????
 lc_node() {
   local node=$1
@@ -184,11 +197,6 @@ ros2 run nav2_behaviors behavior_server --ros-args \
 BEHAVIOR_PID=$!
 sleep 7
 
-# Wait for costmap topics before activating
-echo "[argo] Waiting for costmap topics..."
-wait_for_topic "local_costmap/costmap_raw" 15
-wait_for_topic "global_costmap/costmap_raw" 15
-
 lc_node /behavior_server
 
 # ?? 8. Planner server ?????????????????????????????????????????????????????
@@ -206,6 +214,15 @@ ros2 run nav2_controller controller_server --ros-args \
 CONTROLLER_PID=$!
 sleep 5
 lc_node /controller_server
+
+# global_costmap (planner_server) and local_costmap (controller_server) only
+# exist once those nodes are activated, which lc_node above just did — this
+# used to run BEFORE either node was even started (right after
+# behavior_server), so both checks failed every single run, unconditionally.
+# Confirm now, at the point where they can actually be true.
+echo "[argo] Confirming costmap topics..."
+wait_for_topic "local_costmap/costmap_raw" 15
+wait_for_topic "global_costmap/costmap_raw" 15
 
 # ?? 10. Velocity smoother /cmd_vel_raw ? /cmd_vel_smoothed ????????????????
 echo "[argo] Starting velocity_smoother..."
