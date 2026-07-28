@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 
 // True neutral greyscale (classic occupancy-grid look), tuned dark to sit
 // naturally inside the app's dark theme instead of a stark white rectangle.
@@ -13,9 +13,17 @@ function worldToCanvas(wx, wy, md, offX, offY, scale) {
   return [offX + col * scale, offY + row * scale]
 }
 
-export default function MapCanvas({ mapData, robotPose, labels = [], frontiers = [], clickable = false, onMapClick }) {
+export default function MapCanvas({
+  mapData, robotPose, labels = [], frontiers = [], clickable = false, onMapClick,
+  // poseEstimateMode mirrors RViz's "2D Pose Estimate" tool — click-drag
+  // instead of a plain click, since a pose needs a heading too, not just a
+  // position. Mutually exclusive with `clickable`'s plain-click "add table"
+  // behavior (see handleClick/handleMouseDown below).
+  poseEstimateMode = false, onPoseEstimate,
+}) {
   const canvasRef  = useRef(null)
   const offRef     = useRef(null)   // { img: ImageBitmap, md: mapData }
+  const [drag, setDrag] = useState(null)   // { startWX, startWY, curWX, curWY } while dragging a pose estimate
 
   // Rebuild the offscreen bitmap whenever the map data changes.
   useEffect(() => {
@@ -116,16 +124,35 @@ export default function MapCanvas({ mapData, robotPose, labels = [], frontiers =
       ctx.restore()
     }
 
+    // Pose-estimate drag preview — a green arrow from where the click
+    // started (position) to wherever the pointer currently is (heading),
+    // same visual idea as RViz's own "2D Pose Estimate" tool.
+    if (drag) {
+      const [sx, sy] = toC(drag.startWX, drag.startWY)
+      const [cx, cy] = toC(drag.curWX, drag.curWY)
+      ctx.strokeStyle = '#3bf09b'; ctx.lineWidth = 3; ctx.lineCap = 'round'
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(cx, cy); ctx.stroke()
+      ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2)
+      ctx.fillStyle = '#3bf09b'; ctx.fill()
+    }
+
     if (clickable) {
       ctx.fillStyle = 'rgba(255,255,255,0.04)'
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click map to place label', W - 12, H - 10)
     }
+    if (poseEstimateMode) {
+      ctx.fillStyle = 'rgba(59,240,155,0.6)'
+      ctx.font = '12px Inter,sans-serif'
+      ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
+      ctx.fillText('Click where Argo is, drag toward where it’s facing', W - 12, H - 10)
+    }
   })
 
-  const handleClick = useCallback(e => {
-    if (!clickable || !onMapClick || !offRef.current) return
+  // Shared canvas-pixel → world-meters conversion — used by the plain
+  // "add table" click and by the pose-estimate drag, which both need it.
+  const eventToWorld = useCallback(e => {
     const canvas = canvasRef.current
     const rect   = canvas.getBoundingClientRect()
     const { md } = offRef.current
@@ -139,12 +166,39 @@ export default function MapCanvas({ mapData, robotPose, labels = [], frontiers =
     const cx = (e.clientX - rect.left) * cssScaleX - offX
     const cy = (e.clientY - rect.top)  * cssScaleY - offY
 
-    const col  = cx / scale
-    const row  = md.height - 1 - cy / scale
-    const wx   = md.origin.x + col * md.resolution
-    const wy   = md.origin.y + row * md.resolution
-    onMapClick({ wx, wy })
-  }, [clickable, onMapClick])
+    const col = cx / scale
+    const row = md.height - 1 - cy / scale
+    return { wx: md.origin.x + col * md.resolution, wy: md.origin.y + row * md.resolution }
+  }, [])
+
+  const handleClick = useCallback(e => {
+    if (poseEstimateMode || !clickable || !onMapClick || !offRef.current) return
+    onMapClick(eventToWorld(e))
+  }, [clickable, onMapClick, poseEstimateMode, eventToWorld])
+
+  const handleMouseDown = useCallback(e => {
+    if (!poseEstimateMode || !offRef.current) return
+    const { wx, wy } = eventToWorld(e)
+    setDrag({ startWX: wx, startWY: wy, curWX: wx, curWY: wy })
+  }, [poseEstimateMode, eventToWorld])
+
+  const handleMouseMove = useCallback(e => {
+    if (!poseEstimateMode || !drag || !offRef.current) return
+    const { wx, wy } = eventToWorld(e)
+    setDrag(d => d && { ...d, curWX: wx, curWY: wy })
+  }, [poseEstimateMode, drag, eventToWorld])
+
+  const handleMouseUp = useCallback(() => {
+    if (!poseEstimateMode || !drag) return
+    const { startWX, startWY, curWX, curWY } = drag
+    const dx = curWX - startWX, dy = curWY - startWY
+    // Too short a drag to mean anything as a heading — keep whatever
+    // heading the robot already has instead of snapping it to a garbage
+    // near-zero-length direction.
+    const theta = Math.hypot(dx, dy) > 0.05 ? Math.atan2(dy, dx) : (robotPose?.theta ?? 0)
+    onPoseEstimate?.({ wx: startWX, wy: startWY, theta })
+    setDrag(null)
+  }, [poseEstimateMode, drag, onPoseEstimate, robotPose])
 
   return (
     <canvas
@@ -152,10 +206,14 @@ export default function MapCanvas({ mapData, robotPose, labels = [], frontiers =
       width={760}
       height={520}
       onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={() => poseEstimateMode && setDrag(null)}
       style={{
         width: '100%', height: '100%',
         borderRadius: 16,
-        cursor: clickable ? 'crosshair' : 'default',
+        cursor: (clickable || poseEstimateMode) ? 'crosshair' : 'default',
         background: '#08060e',
         display: 'block',
       }}

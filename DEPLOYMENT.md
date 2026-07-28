@@ -29,6 +29,23 @@ sudo bash sh/install-services.sh
 ```
 This builds the frontend, installs `rosbridge_server` if missing, and creates/enables the three systemd services above.
 
+**`set -e` at the top means the script stops dead at the first failed step** — no partial "well, 2 out of 3 services got installed" state, so seeing it stop early doesn't mean anything after the failure point is in effect yet. Re-run it after fixing whatever failed. Two errors you may hit on a Jetson specifically:
+
+- **Step 1 (frontend build) fails with `Cannot find module '@rollup/rollup-linux-arm64-gnu'`** — `frontend/node_modules`/`package-lock.json` were most likely installed on a different-architecture machine (e.g. an x86 dev laptop) and then copied/pulled onto the Jetson. This is a known npm optional-dependencies bug (npm/cli#4828) where the wrong platform's native binary gets resolved. Fix by installing fresh **on the Jetson itself**:
+  ```bash
+  cd ~/my_project/argo_sonic/frontend
+  rm -rf node_modules package-lock.json
+  npm install
+  npm run build   # confirm it succeeds standalone before re-running the installer
+  ```
+
+- **Step 2 (installing `rosbridge_server`) fails with `Could not get lock /var/lib/dpkg/lock-frontend`** — some other process is holding the apt/dpkg lock, almost always `packagekitd` (GNOME Software's background update-checker, which ships on Ubuntu desktop images and runs on its own schedule — nothing you did triggered it). Since the Jetson here is a robot, not a desktop anyone uses GNOME Software on, the clean permanent fix is to stop it from running at all:
+  ```bash
+  sudo systemctl stop packagekit
+  sudo systemctl mask packagekit   # mask (not just stop) so it can't restart itself later
+  ```
+  (`sudo unmask packagekit` reverses it, if the GUI is ever needed again.) Never delete the lock file or kill the holding process forcibly — that can corrupt dpkg's state mid-transaction.
+
 ## 3. Deploying an update
 
 ```bash

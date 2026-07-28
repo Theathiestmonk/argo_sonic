@@ -122,6 +122,33 @@ export default function App() {
     showToast(message, 'ok')
   }, [showToast])
 
+  // The UI equivalent of RViz's "2D Pose Estimate" tool — amcl/slam_toolbox's
+  // localization mode has no idea where the robot actually is on a saved map
+  // until told, and the robot is headless (no RViz/DISPLAY, see DEPLOYMENT.md
+  // §4) so this is otherwise a manual SSH+RViz step every time "navigate"
+  // mode restarts. Same topic, message type, and covariance RViz itself
+  // publishes, so amcl/slam_toolbox-localization behave exactly as if it
+  // came from RViz.
+  const sendInitialPose = useCallback((wx, wy, theta) => {
+    const qz = Math.sin(theta / 2)
+    const qw = Math.cos(theta / 2)
+    ros.publish('/initialpose', 'geometry_msgs/PoseWithCovarianceStamped', {
+      header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
+      pose: {
+        pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: qz, w: qw } },
+        covariance: [
+          0.25, 0, 0, 0, 0, 0,
+          0, 0.25, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0.06853891945200942,
+        ],
+      },
+    })
+    showToast('Robot position set — localizing…', 'info')
+  }, [showToast])
+
   const shared = { mapData, robotPose, frontiers, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
 
   return (
@@ -276,6 +303,9 @@ export default function App() {
             connected={connected}
             showToast={showToast}
             onNavigate={sendNavGoal}
+            onSetInitialPose={sendInitialPose}
+            mapData={mapData}
+            robotPose={robotPose}
             onOpenSettings={() => setShowSettings(true)}
             onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
           />

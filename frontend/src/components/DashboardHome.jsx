@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ros } from '../ros'
 import RadialNav from './RadialNav'
+import MapCanvas from './MapCanvas'
 
 // Faithful React port of frontend/public/dashboard.html's layout and copy —
 // same rail (Argo Status → What do you need → Where should Argo go → Send
@@ -35,8 +36,9 @@ const TABLE_ACTIONS = [
   ['Room service', 'Room Service'],
 ]
 
-export default function DashboardHome({ launcherUrl, selectedMap, connected, showToast, onNavigate, onAddMap, onOpenSettings }) {
+export default function DashboardHome({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings }) {
   const [tables, setTables]         = useState({})
+  const [showSetPose, setShowSetPose] = useState(false)
   const [selectedTask, setSelectedTask] = useState('Deliver')
   const [selectedDest, setSelectedDest] = useState(null)
   const [curPos, setCurPos]         = useState('Home')
@@ -478,6 +480,27 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
                 {navState === 'starting' ? 'Starting…' : `Start Navigating on ${selectedMap}`}
               </button>
             )}
+
+            {/* Nav2's localization has no idea where the robot actually is
+                until told — normally an RViz "2D Pose Estimate" step, but
+                the robot is headless (no RViz/DISPLAY). Only offered once
+                navReady is genuinely true (the same real-readiness check
+                gating the buttons above), since setting a pose before the
+                action server exists would just be silently ignored. */}
+            {navReady && (
+              <button
+                onClick={() => setShowSetPose(true)}
+                title="Tell Nav2 where Argo is actually standing right now"
+                style={{
+                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
+                  background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.28)', color: 'var(--gold-bright)',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2 12 6M12 18 12 22M2 12 6 12M18 12 22 12"/><circle cx="12" cy="12" r="5"/></svg>
+                Set Robot Position
+              </button>
+            )}
             <div style={{ padding: '9px 16px', borderRadius: 99, fontSize: 13, fontWeight: 600, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', color: 'var(--muted)' }}>{time}</div>
           </div>
         </div>
@@ -645,6 +668,45 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
       </main>
 
       <RadialNav pages={radialPages} activePage="overview" />
+
+      {showSetPose && (
+        <div
+          onClick={() => setShowSetPose(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="glass-dense"
+            style={{ width: '100%', maxWidth: 820, padding: 22, animation: 'slideUp 0.2s ease' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+              <div>
+                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 16 }}>Set Robot Position</div>
+                <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6, maxWidth: 560 }}>
+                  Click the map where Argo is actually standing, then drag in the direction it's facing before releasing — same as RViz's "2D Pose Estimate" tool.
+                </p>
+              </div>
+              <button onClick={() => setShowSetPose(false)} style={{ color: 'var(--muted)', padding: 4, flexShrink: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div style={{ height: 440, marginTop: 12 }}>
+              <MapCanvas
+                mapData={mapData}
+                robotPose={robotPose}
+                poseEstimateMode
+                onPoseEstimate={({ wx, wy, theta }) => {
+                  onSetInitialPose?.(wx, wy, theta)
+                  setShowSetPose(false)
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
