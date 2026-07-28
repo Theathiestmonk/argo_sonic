@@ -48,7 +48,7 @@ Endpoints (CORS-open so the browser can call them directly):
     POST /start   →  body {"mode": "manual"|"auto"|"navigate", "map": str} (default "auto")
                       "manual"   → sh/start_slam_ui.sh          (SLAM only, no Nav2 — build a map)
                       "auto"     → sh/start_slam_explore_ui.sh  (SLAM + Nav2 + frontier explorer)
-                      "navigate" → sh/start_argo_nav_ui.sh --map <MAPS_DIR>/<map>
+                      "navigate" → sh/start_ntfields_nav_ui.sh --map <MAPS_DIR>/<map>
                                     (SLAM-toolbox localization + Nav2 + depth safety
                                     shield, on a previously saved map — "map" is required)
                       If something's already running under a different mode/map than
@@ -57,9 +57,12 @@ Endpoints (CORS-open so the browser can call them directly):
     POST /stop    →  kills the entire process group cleanly
     GET  /nav_progress → {"status": "OK"|"ERROR"|"READY"|"STOPPED"|null,
                           "message": str|null, "timestamp": int|null} —
-                          the current/last step sh/start_argo_nav_ui.sh
-                          reported, read from NAV_PROGRESS_PATH. Exists
-                          because launcher.py deliberately discards that
+                          the current/last step NAV_SCRIPT reported (both
+                          start_argo_nav_ui.sh and start_ntfields_nav_ui.sh
+                          write to the same file — only one "navigate" mode
+                          process runs at a time), read from
+                          NAV_PROGRESS_PATH. Exists because launcher.py
+                          deliberately discards that
                           script's own stdout/stderr (see POST /start's
                           subprocess.DEVNULL) to keep this single-threaded
                           server from being wedged by a chatty/slow node —
@@ -110,7 +113,7 @@ _ROOT   = os.path.dirname(_HERE)
 
 SLAM_SCRIPT    = os.path.join(_ROOT, 'sh', 'start_slam_ui.sh')
 EXPLORE_SCRIPT = os.path.join(_ROOT, 'sh', 'start_slam_explore_ui.sh')
-NAV_SCRIPT     = os.path.join(_ROOT, 'sh', 'start_argo_nav_ui.sh')
+NAV_SCRIPT     = os.path.join(_ROOT, 'sh', 'start_ntfields_nav_ui.sh')
 MAPS_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'maps')
 WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
 MENU_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'menu')
@@ -121,7 +124,7 @@ SONIC_DIR            = os.path.join(_ROOT, 'sonic')
 TEST_HARNESS_SCRIPT  = os.path.join(SONIC_DIR, 'test_harness.py')
 VOICE_LOG_PATH       = os.path.join(SONIC_DIR, 'voice_session.log')
 _VOICE_ACTIONS = {'order', 'deliver', 'bill', 'room_service'}
-NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by sh/start_argo_nav_ui.sh
+NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by NAV_SCRIPT (whichever nav script is active)
 PORT    = 8888
 
 
@@ -243,8 +246,9 @@ class Handler(BaseHTTPRequestHandler):
             if os.path.isfile(NAV_PROGRESS_PATH):
                 with open(NAV_PROGRESS_PATH, 'r') as f:
                     raw = f.read().strip()
-                # status|epoch_seconds|message — see sh/start_argo_nav_ui.sh's
-                # report()/report_error()/report_ready() helpers for the writer.
+                # status|epoch_seconds|message — see start_argo_nav_ui.sh's or
+                # start_ntfields_nav_ui.sh's report()/report_error()/
+                # report_ready() helpers for the writer (identical format).
                 parts_ = raw.split('|', 2)
                 if len(parts_) == 3:
                     status, ts_str, message = parts_

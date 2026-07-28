@@ -271,10 +271,20 @@ sleep 7
 lc_node /bt_navigator
 report_ready "Nav2 fully activated - ready for goals"
 
+# Everything from here on is plain echo, not report() — the steps below
+# (camera, velocity-smoother re-check, depth_safety_shield, RViz) used to
+# call report() too, which overwrote the READY status above with an
+# ordinary "still starting" message and never set it back, making the UI
+# look permanently stuck on "Starting depth_safety_shield..." even once
+# Nav2 itself had genuinely finished activating. report_error() calls
+# below are untouched — a real failure at these later steps is still
+# worth surfacing, this is only about not clobbering READY with routine
+# progress notes.
+
 # ?? 12. Depth camera (optional) ???????????????????????????????????????????
 CAM_PID=""
 if [ "$NO_CAM" = false ]; then
-  report "Starting HP60C camera..."
+  echo "[argo] Starting HP60C camera..."
   (
     cd $CAMERA_SDK_PATH
     source install/setup.bash
@@ -304,7 +314,7 @@ fi
 echo "[argo] Velocity smoother ready"
 
 # ?? 14. Depth safety shield /cmd_vel_smoothed ? /cmd_vel ??????????????????
-report "Starting depth_safety_shield..."
+echo "[argo] Starting depth_safety_shield..."
 ros2 run argo_mini depth_safety_shield --ros-args \
   -p stop_distance:=0.60 \
   -p tunnel_width:=0.30 \
@@ -330,7 +340,7 @@ fi
 # ── 15. RViz (optional) ───────────────────────────────────────────────────
 RVIZ_PID=""
 if [ "$NO_RVIZ" = false ]; then
-  report "Starting RViz..."
+  echo "[argo] Starting RViz..."
   export DISPLAY=:1
   rviz2 &
   RVIZ_PID=$!
