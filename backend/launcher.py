@@ -48,20 +48,24 @@ Endpoints (CORS-open so the browser can call them directly):
     POST /start   →  body {"mode": "manual"|"auto"|"navigate", "map": str} (default "auto")
                       "manual"   → sh/start_slam_ui.sh          (SLAM only, no Nav2 — build a map)
                       "auto"     → sh/start_slam_explore_ui.sh  (SLAM + Nav2 + frontier explorer)
-                      "navigate" → sh/start_argo_nav_ui.sh --map <MAPS_DIR>/<map>
-                                    (SLAM-toolbox localization + Nav2 + depth safety
-                                    shield, on a previously saved map — "map" is required)
+                      "navigate" → python3 argo_sonic_nav.py --map <MAPS_DIR>/<map> --no-rviz
+                                    (SLAM-toolbox localization + Nav2 with the
+                                    NTFields physics-informed planner in place of
+                                    nav2_planner, on a previously saved map —
+                                    "map" is required; needs a pretrained
+                                    ~/ntfields_models/<map>.pt for that map)
                       If something's already running under a different mode/map than
                       requested, it's stopped first so the new one always reflects what
                       was actually asked for (e.g. switching which map to navigate on).
     POST /stop    →  kills the entire process group cleanly
     GET  /nav_progress → {"status": "OK"|"ERROR"|"READY"|"STOPPED"|null,
                           "message": str|null, "timestamp": int|null} —
-                          the current/last step NAV_SCRIPT reported (both
-                          start_argo_nav_ui.sh and start_ntfields_nav_ui.sh
-                          write to the same file — only one "navigate" mode
-                          process runs at a time), read from
-                          NAV_PROGRESS_PATH. "status": null means the file
+                          the current/last step NAV_SCRIPT reported
+                          (argo_sonic_nav.py, and the two now-unused
+                          sh/start_argo_nav_ui.sh / start_ntfields_nav_ui.sh,
+                          all write to the same file in this same format —
+                          only one "navigate" mode process runs at a time),
+                          read from NAV_PROGRESS_PATH. "status": null means the file
                           doesn't exist yet (nothing has ever reported in).
     GET  /nav_log → {"log": str} — the last NAV_LOG_TAIL_LINES lines of
                      NAV_SCRIPT's actual stdout+stderr (every ROS node's own
@@ -115,7 +119,14 @@ _ROOT   = os.path.dirname(_HERE)
 
 SLAM_SCRIPT    = os.path.join(_ROOT, 'sh', 'start_slam_ui.sh')
 EXPLORE_SCRIPT = os.path.join(_ROOT, 'sh', 'start_slam_explore_ui.sh')
-NAV_SCRIPT     = os.path.join(_ROOT, 'sh', 'start_argo_nav_ui.sh')
+# NTFields nav stack, at the repo root (not sh/) — this is a Python launcher,
+# not a bash script, so it's invoked with the interpreter, not `bash`, in
+# the "navigate" branch below. Uses ntfields_planner_node, which is this
+# repo's own NTFields implementation (confirmed by checking which
+# executables are actually built where — see this file's own POST /start
+# NAV_SCRIPT history/comments and argo_sonic_nav.py's header for the story
+# of why start_argo_nav_ui.sh / start_ntfields_nav_ui.sh aren't used here).
+NAV_SCRIPT     = os.path.join(_ROOT, 'argo_sonic_nav.py')
 MAPS_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'maps')
 WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
 MENU_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'menu')
@@ -250,9 +261,9 @@ class Handler(BaseHTTPRequestHandler):
             if os.path.isfile(NAV_PROGRESS_PATH):
                 with open(NAV_PROGRESS_PATH, 'r') as f:
                     raw = f.read().strip()
-                # status|epoch_seconds|message — see start_argo_nav_ui.sh's or
-                # start_ntfields_nav_ui.sh's report()/report_error()/
-                # report_ready() helpers for the writer (identical format).
+                # status|epoch_seconds|message — see argo_sonic_nav.py's
+                # report_progress() (or sh/start_argo_nav_ui.sh's
+                # report()/report_error()/report_ready()) for the writer.
                 parts_ = raw.split('|', 2)
                 if len(parts_) == 3:
                     status, ts_str, message = parts_
@@ -403,7 +414,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({'ok': False, 'error': 'navigate mode requires a valid "map" name'}, 400)
                     return
                 script = NAV_SCRIPT
-                args = ['bash', script, '--map', os.path.join(MAPS_DIR, map_name), '--no-rviz']
+                args = ['python3', script, '--map', os.path.join(MAPS_DIR, map_name), '--no-rviz']
             else:
                 script = SLAM_SCRIPT if mode == 'manual' else EXPLORE_SCRIPT
                 args = ['bash', script, '--no-rviz']

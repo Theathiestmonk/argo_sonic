@@ -11,6 +11,12 @@ from pathlib import Path
 WHEEL_RADIUS = 0.0762
 WHEEL_BASE   = 0.41
 
+# Repo root, derived from this file's own location — not hardcoded to
+# ~/argo_sonic, since this checkout can (and on the actual robot, does)
+# live somewhere else, e.g. ~/my_project/argo_sonic. Matches the sh/*.sh
+# scripts' own SCRIPT_DIR convention for the same reason.
+REPO_ROOT = str(Path(__file__).resolve().parent)
+
 if hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 os.environ['PYTHONIOENCODING'] = 'utf-8'
@@ -113,6 +119,22 @@ def _telem_reader(proc):
                 telem['rpm_l'] = float(m.group(1))
                 telem['rpm_r'] = float(m.group(2))
 
+# backend/launcher.py discards this script's stdout/stderr into a plain log
+# file (see GET /nav_log) — fine for a human tailing it, but the live TUI
+# above is full-screen ANSI redraws, not a clean step trail. Write the
+# current step here too, same "status|epoch|message" format
+# sh/start_argo_nav_ui.sh's report()/report_error()/report_ready() use, so
+# the Dashboard's live progress button keeps working no matter which nav
+# script is actually running.
+PROGRESS_FILE = "/tmp/argo_nav_progress"
+
+def report_progress(status, message):
+    try:
+        with open(PROGRESS_FILE, "w") as f:
+            f.write(f"{status}|{int(time.time())}|{message}\n")
+    except OSError:
+        pass
+
 def log(msg, kind="info"):
     ts    = datetime.now().strftime("%H:%M:%S")
     icon  = ICONS.get(kind, ICONS["info"])
@@ -120,6 +142,8 @@ def log(msg, kind="info"):
     line  = f"  {DIM}{GRAY}{ts}{RS}  {icon}  {color}{msg}{RS}"
     with log_lock:
         log_lines.append(line)
+    if kind in ("run", "fail"):
+        report_progress("ERROR" if kind == "fail" else "OK", msg)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  UI drawing
@@ -202,7 +226,7 @@ def ui_loop():
 #  ROS environment
 # ──────────────────────────────────────────────────────────────────────────────
 def build_env(home):
-    ws  = f"{home}/argo_sonic"
+    ws  = REPO_ROOT
     cmd = (
         "source /opt/ros/humble/setup.bash && "
         f"source {ws}/install/setup.bash && env"
@@ -342,15 +366,29 @@ def step_done(name):
 # ──────────────────────────────────────────────────────────────────────────────
 def cleanup(sig=None, frame=None):
     stop_ui.set()
+    report_progress("STOPPED", "Stack shut down")
     log("Shutting down – terminating all nodes...", "warn")
     time.sleep(0.3)
-    for name, p in pids.items():
+    for _name, p in pids.items():
         try:
             os.killpg(os.getpgid(p.pid), signal.SIGTERM)
         except Exception:
             pass
     time.sleep(1)
-    subprocess.run(["pkill", "-9", "-f", "ros2"], capture_output=True)
+    # Was "pkill -9 -f ros2" here — matches ANY process with ros2 anywhere
+    # in its command line, system-wide. On this same robot that collaterally
+    # killed the independent argo-rosbridge systemd service (it also runs
+    # via "ros2 launch") every time a nav stack stopped — confirmed and
+    # fixed once already in sh/start_argo_nav_ui.sh. Each child here got its
+    # own session via preexec_fn=os.setsid, so there's no single shared
+    # process group to sweep the way that script's trap does; instead,
+    # SIGKILL specifically the children this script itself started, by
+    # their own pgid, as the "still alive after SIGTERM" fallback.
+    for _name, p in pids.items():
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except Exception:
+            pass
     sys.stdout.write("\033[?25h\033[0m\n")
     sys.exit(0)
 
@@ -362,7 +400,7 @@ def select_map(home: str, default: str) -> str:
     Print a numbered list of available maps and return the chosen map_base path.
     Called only when --map is not supplied on the command line.
     """
-    maps_dir   = Path(home) / "argo_sonic/src/argo_mini/maps"
+    maps_dir   = Path(REPO_ROOT) / "src/argo_mini/maps"
     models_dir = Path(home) / "ntfields_models"
 
     entries = []
@@ -437,22 +475,32 @@ def main():
 
     parser = argparse.ArgumentParser(description="Argo Sonic NTFields Navigation Launcher")
     parser.add_argument("--no-cam", action="store_true", help="Skip depth camera")
+    parser.add_argument("--no-rviz", action="store_true", help="Headless (run via the web UI) — no DISPLAY on the robot")
     parser.add_argument("--map",
                         default=None,
                         help="Map base path or name (no extension). Omit to get a selector.")
     args = parser.parse_args()
 
-    home   = str(Path.home())
-    no_cam = args.no_cam
+    home    = str(Path.home())
+    no_cam  = args.no_cam
+    no_rviz = args.no_rviz
 
     if args.map:
         raw = args.map.replace("~", home)
         # bare name (no path separator) → resolve into maps directory
         if os.sep not in raw:
-            raw = str(Path(home) / "argo_sonic/src/argo_mini/maps" / raw)
+            raw = str(Path(REPO_ROOT) / "src/argo_mini/maps" / raw)
         map_base = str(Path(raw).with_suffix(""))
-    else:
+    elif sys.stdin.isatty():
         map_base = select_map(home, default="office_map")
+    else:
+        # No --map and no terminal to prompt on (e.g. launched headlessly by
+        # backend/launcher.py) — select_map()'s input() would hang forever
+        # waiting for stdin that will never arrive, identical to the "no TTY"
+        # issue DEPLOYMENT.md already documents for sonic/'s voice session
+        # subprocess. Fail fast with a clear reason instead.
+        print(f"{RED}--map is required when not running in an interactive terminal{RS}")
+        sys.exit(1)
 
     signal.signal(signal.SIGINT,  cleanup)
     signal.signal(signal.SIGTERM, cleanup)
@@ -478,7 +526,7 @@ def main():
     env = build_env(home)
     log("Environment ready", "ok")
 
-    ws           = f"{home}/argo_sonic"
+    ws           = REPO_ROOT
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
     slam_cfg     = f"{ws}/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
     ntfields_cfg = f"{ws}/install/argo_mini/share/argo_mini/config/ntfields.yaml"
@@ -568,6 +616,7 @@ def main():
     launch("BT Navigator",
            f"ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file {nav_cfg}", env)
     time.sleep(5); lc_node("/bt_navigator", env); step_done("BT Navigator")
+    report_progress("READY", "Nav2 fully activated - ready for goals")
 
     # ── 12. Depth Camera ──────────────────────────────────────────────────────
     if not no_cam:
@@ -596,9 +645,12 @@ def main():
     launch("Safety Shield", "ros2 run argo_mini safety_shield", env)
     time.sleep(3); step_done("Safety Shield")
 
-    # ── RViz ──────────────────────────────────────────────────────────────────
-    env["DISPLAY"] = ":1"
-    launch("RViz", "rviz2", env)
+    # ── RViz (optional) ──────────────────────────────────────────────────────
+    if not no_rviz:
+        env["DISPLAY"] = ":1"
+        launch("RViz", "rviz2", env)
+    else:
+        log("RViz skipped  (--no-rviz)", "warn")
 
     step_name = f"{GREEN}All Systems Nominal{RS}"
     log("----------------------------------------------------", "sys")

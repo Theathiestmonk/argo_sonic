@@ -121,7 +121,14 @@ wait_for_topic() {
 
     local elapsed=$(($(date +%s) - start))
     if [ $elapsed -ge $timeout ]; then
-      report_error "Topic $topic not available after ${timeout}s"
+      # Plain echo, not report_error — some callers (camera depth topic,
+      # costmap topics, action servers below) explicitly treat this
+      # timeout as a non-fatal warning and keep going, so unconditionally
+      # flipping the UI to an ERROR state here was wrong for those cases.
+      # The one caller that DOES treat this as fatal (the final
+      # /cmd_vel_smoothed check) already calls report_error itself right
+      # after checking this function's return value.
+      echo "[argo] ERROR: Topic $topic not available after ${timeout}s"
       return 1
     fi
 
@@ -144,7 +151,9 @@ wait_for_action() {
 
     local elapsed=$(($(date +%s) - start))
     if [ $elapsed -ge $timeout ]; then
-      report_error "Action $action not available after ${timeout}s"
+      # See wait_for_topic's comment — plain echo, not report_error; none
+      # of this function's callers currently treat the timeout as fatal.
+      echo "[argo] ERROR: Action $action not available after ${timeout}s"
       return 1
     fi
 
