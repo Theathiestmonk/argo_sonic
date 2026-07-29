@@ -173,6 +173,13 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
   }
 
   const stopNav = async () => {
+    // All four status-pill states in the header (navigating / rosbridge
+    // unreachable / error / still starting up) wire onClick straight to
+    // this function, and read as passive status text rather than a
+    // button — so a single misclick (e.g. tapping the "waiting for
+    // Nav2" spinner out of impatience) used to kill the stack instantly,
+    // including mid-startup before it ever had a chance to finish.
+    if (!window.confirm('Stop the navigation stack now?')) return
     try {
       await fetch(`${launcherUrl}/stop`, { method: 'POST' })
       setNavState('stopped'); setNavMap(null)
