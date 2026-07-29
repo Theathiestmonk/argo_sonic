@@ -269,11 +269,35 @@ SERIAL_LEFT_TICK_SCALE = 0.66
 
 
 def _estop_locked():
-    """Kill serial_bridge by name — it may be running as a child of the nav
-    stack's own process tree, not something this file spawned itself, so
-    there's no single tracked Popen to signal the way _stop_locked() does.
-    Caller must hold _serial_lock."""
+    """Send explicit zero-velocity commands before killing serial_bridge —
+    confirmed as a real bug otherwise: the ESP32 firmware just keeps
+    executing whatever RPM it last received (serial_bridge.py has no
+    hardware-side timeout of its own), and serial_bridge's OWN safety net
+    for this — its 1s watchdog timer, and the `ser.write(b"S\\n")` in
+    main()'s finally: block on clean shutdown — both live inside the
+    process being killed. SIGKILL can't be caught, so neither ever runs;
+    the motors just kept going after the process died.
+
+    A SINGLE zero Twist isn't enough either: serial_bridge.py ramps
+    commanded RPM toward the target by at most _RPM_RAMP (5.0) per message
+    received, not per second, so one message only steps speed down a
+    little — confirmed the same way via TeleopPad.jsx's stopNow()/release()
+    having the identical bug. `-r 10 -t 12` sends 12 zero commands at 10Hz
+    (~1.2s) in one process, enough to ramp down from VMAX (~50 RPM) to
+    genuine zero regardless of current speed, before serial_bridge is
+    killed. Caller must hold _serial_lock."""
     global _serial_proc, _serial_estopped
+    zero_cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        f"source {_ROOT}/install/setup.bash && "
+        "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        "ros2 topic pub -r 10 -t 12 /cmd_vel geometry_msgs/msg/Twist "
+        "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'"
+    )
+    try:
+        subprocess.run(['bash', '-c', zero_cmd], capture_output=True, timeout=8)
+    except subprocess.TimeoutExpired:
+        pass  # still fall through to the kill below regardless
     subprocess.run(['pkill', '-9', '-f', 'serial_bridge'], capture_output=True)
     _serial_proc = None
     _serial_estopped = True

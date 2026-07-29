@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { ros } from '../ros'
 import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
+import TeleopPad from './TeleopPad'
 
 // Faithful React port of frontend/public/dashboard.html's layout and copy —
 // same rail (Argo Status → What do you need → Where should Argo go → Send
@@ -517,6 +518,19 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
               <button onClick={stopVoice} className="btn-ghost" style={{ padding: '4px 10px', fontSize: 11.5 }}>Stop</button>
             </div>
           )}
+        </div>
+
+        {/* Manual drive — same TeleopPad already used in ExplorationPanel/
+            TablesPanel, just not previously wired into this dashboard view.
+            Publishes straight to /cmd_vel (what serial_bridge actually
+            subscribes to). Buttons are already self-disabling via the
+            `connected` prop; if serial_bridge itself isn't running (e.g.
+            still e-stopped, not yet resumed) a press is a harmless no-op —
+            no subscriber, nothing happens — so no need to gate this on
+            estop state specifically. */}
+        <div className="glass-card" style={{ padding: 20, marginTop: 16 }}>
+          <div className="label-xs" style={{ marginBottom: 16 }}>Drive Controls</div>
+          <TeleopPad connected={connected} compact />
         </div>
       </aside>
 

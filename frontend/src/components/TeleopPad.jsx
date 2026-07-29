@@ -7,13 +7,26 @@ const ChLeft  = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none
 const ChRight = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><polyline points="9 4 17 12 9 20"  stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
 const StopIcon = () => <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><rect x="2" y="2" width="14" height="14" rx="3"/></svg>
 
+// serial_bridge.py ramps commanded RPM toward the target by at most
+// _RPM_RAMP (5.0) per /cmd_vel message received, not per second — so a
+// single zero-velocity publish only steps speed down a little, not to a
+// full stop. At VMAX=0.4 m/s (~50 RPM), fully ramping down needs roughly
+// 50/5 = 10 messages; STOP_REPEAT_MS/STOP_REPEAT_COUNT below send enough
+// zero commands, at the same 80ms cadence press() already uses, to
+// actually reach zero regardless of current speed — confirmed as a real
+// bug otherwise (a single stopNow()/release() call left the robot still
+// moving, just slightly slower).
+const STOP_REPEAT_MS    = 80
+const STOP_REPEAT_COUNT = 15   // 1.2s of zero commands — comfortably covers the worst-case ramp-down
+
 export default function TeleopPad({ connected, compact = false }) {
   const holdRef  = useRef(null)
+  const stopRef  = useRef(null)
   const [active, setActive] = useState(null)
   const [speed, setSpeed]   = useState(0.5)
 
   useEffect(() => {
-    return () => clearInterval(holdRef.current)
+    return () => { clearInterval(holdRef.current); clearInterval(stopRef.current) }
   }, [])
 
   // Build the topic fresh on every publish rather than caching it once at
@@ -27,8 +40,19 @@ export default function TeleopPad({ connected, compact = false }) {
     })
   }, [speed])
 
+  const publishStopUntilZero = useCallback(() => {
+    clearInterval(stopRef.current)
+    let count = 0
+    publish(0, 0)
+    stopRef.current = setInterval(() => {
+      publish(0, 0)
+      if (++count >= STOP_REPEAT_COUNT) clearInterval(stopRef.current)
+    }, STOP_REPEAT_MS)
+  }, [publish])
+
   const press = useCallback((dir, lx, az) => {
     if (!connected) return
+    clearInterval(stopRef.current)
     setActive(dir)
     publish(lx, az)
     holdRef.current = setInterval(() => publish(lx, az), 80)
@@ -37,14 +61,14 @@ export default function TeleopPad({ connected, compact = false }) {
   const release = useCallback(() => {
     setActive(null)
     clearInterval(holdRef.current)
-    publish(0, 0)
-  }, [publish])
+    publishStopUntilZero()
+  }, [publishStopUntilZero])
 
   const stopNow = useCallback(() => {
     setActive(null)
     clearInterval(holdRef.current)
-    publish(0, 0)
-  }, [publish])
+    publishStopUntilZero()
+  }, [publishStopUntilZero])
 
   const sz = compact ? 68 : 80
   const br = compact ? 18 : 22
