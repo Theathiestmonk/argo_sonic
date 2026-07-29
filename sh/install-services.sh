@@ -14,7 +14,18 @@
 set -e
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-WHOAMI="$(whoami)"
+# Prefer $SUDO_USER over `whoami` — this script needs sudo for several
+# individual steps (apt-get, tee /etc/systemd/..., systemctl), so it's
+# commonly run as `sudo ./install-services.sh` for convenience, which makes
+# a bare `whoami` return "root" for the WHOLE script, not just the
+# privileged steps. Baking User=root into the services then breaks anything
+# that resolves paths via $HOME (e.g. argo_sonic_nav.py's ntfields_models
+# lookup expects the real operator's home, /home/argo/ntfields_models, not
+# /root — confirmed as the cause of a real "model not found" failure on
+# argo-desktop). $SUDO_USER is only set when invoked via sudo, so a direct
+# non-sudo run (e.g. `bash install-services.sh` as the argo user, with sudo
+# prompts per privileged line) still falls back to plain `whoami` correctly.
+WHOAMI="${SUDO_USER:-$(whoami)}"
 PYTHON="$(which python3)"
 NPM="$(which npm)"
 ROS_SETUP="/opt/ros/humble/setup.bash"

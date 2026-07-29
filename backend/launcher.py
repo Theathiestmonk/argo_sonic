@@ -97,6 +97,18 @@ Endpoints (CORS-open so the browser can call them directly):
                            session must never contend with or depend on
                            whether the nav stack is running).
 
+    GET  /estop/status →  {"estopped": bool} — is serial_bridge currently
+                           killed via /estop?
+    POST /estop        →  emergency stop: immediately kills serial_bridge
+                           (cuts motor commands/power) by process name,
+                           independent of the rest of the nav stack (SLAM,
+                           planner, etc. keep running) — for when the robot
+                           is physically misbehaving and needs motors cut
+                           right now, not a graceful stop of everything.
+    POST /estop/resume →  relaunches serial_bridge directly to resume manual
+                           control after an /estop, without restarting the
+                           whole nav stack.
+
 These *_ui.sh scripts are dedicated copies of the hand-run sh/start_slam.sh
 and sh/start_slam_explore.sh — kept separate so UI-driven launches never
 disturb the scripts used directly over SSH.
@@ -236,6 +248,57 @@ def _voice_stop_locked():
         except ProcessLookupError:
             pass
     _voice_proc, _voice_action, _voice_map, _voice_table = None, None, None, None
+
+
+# Independent again, on purpose — an operator hitting emergency-stop on the
+# motor driver must work regardless of whatever state the nav stack or voice
+# session are in, and must never be blocked waiting on either of their locks.
+# serial_bridge isn't tracked as its own subprocess by this file under normal
+# operation (it's one of many children argo_sonic_nav.py itself launches and
+# tracks), so /estop can't just kill "the" tracked Popen — it kills by name,
+# matching this file's own established pkill convention elsewhere. /estop/resume
+# then relaunches it directly (bypassing the rest of the nav stack entirely),
+# so an operator can recover from a stuck/misbehaving motor driver without
+# having to restart the whole stack (SLAM, planner, etc. all keep running).
+_serial_proc: subprocess.Popen | None = None
+_serial_estopped = False
+_serial_lock = threading.Lock()
+SERIAL_PORT = '/dev/ttyUSB1'
+SERIAL_BAUD = 115200
+SERIAL_LEFT_TICK_SCALE = 0.66
+
+
+def _estop_locked():
+    """Kill serial_bridge by name — it may be running as a child of the nav
+    stack's own process tree, not something this file spawned itself, so
+    there's no single tracked Popen to signal the way _stop_locked() does.
+    Caller must hold _serial_lock."""
+    global _serial_proc, _serial_estopped
+    subprocess.run(['pkill', '-9', '-f', 'serial_bridge'], capture_output=True)
+    _serial_proc = None
+    _serial_estopped = True
+
+
+def _estop_resume_locked():
+    """Relaunch serial_bridge directly, sourcing the same ROS environment
+    argo_sonic_nav.py's own build_env() does. Caller must hold _serial_lock."""
+    global _serial_proc, _serial_estopped
+    cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        f"source {_ROOT}/install/setup.bash && "
+        "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        "ros2 run argo_mini serial_bridge --ros-args "
+        f"-p port:={SERIAL_PORT} -p baud:={SERIAL_BAUD} "
+        f"-p left_tick_scale:={SERIAL_LEFT_TICK_SCALE}"
+    )
+    _serial_proc = subprocess.Popen(
+        ['bash', '-c', cmd],
+        cwd=_ROOT,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    _serial_estopped = False
 
 
 # ── HTTP handler ─────────────────────────────────────────────────────────────
@@ -389,6 +452,10 @@ class Handler(BaseHTTPRequestHandler):
                 map_    = _voice_map if running else None
                 table   = _voice_table if running else None
             self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table})
+
+        elif self.path == '/estop/status':
+            with _serial_lock:
+                self._json({'estopped': _serial_estopped})
 
         else:
             self._json({'error': 'not found'}, 404)
@@ -614,6 +681,18 @@ class Handler(BaseHTTPRequestHandler):
                 _voice_stop_locked()
             print('[launcher] voice session stopped')
             self._json({'ok': True, 'status': 'stopped'})
+
+        elif self.path == '/estop':
+            with _serial_lock:
+                _estop_locked()
+            print('[launcher] EMERGENCY STOP — serial_bridge killed')
+            self._json({'ok': True, 'status': 'estopped'})
+
+        elif self.path == '/estop/resume':
+            with _serial_lock:
+                _estop_resume_locked()
+            print(f'[launcher] serial_bridge resumed  pid={_serial_proc.pid}')
+            self._json({'ok': True, 'status': 'resumed', 'pid': _serial_proc.pid})
 
         else:
             self._json({'error': 'not found'}, 404)

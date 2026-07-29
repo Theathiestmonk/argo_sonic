@@ -37,6 +37,13 @@ export default function App() {
   const [mapData, setMapData]     = useState(null)
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
+  // Map-frame localized pose (slam_toolbox's /pose), kept separate from
+  // robotPose above (which is /odom — the odom frame drifts from the map
+  // frame over time, so it isn't safe to compare against a map-frame nav
+  // goal for arrival detection). A ref, not state, since this updates fast
+  // and arrival-checking doesn't need a re-render on every tick.
+  const mapPoseRef = useRef(null)
+  const arrivalWatch = useRef(null) // { intervalId, timeoutId } while awaiting arrival
 
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
@@ -76,6 +83,13 @@ export default function App() {
       })
       subRefs.current.frontiers = t
     }
+    if (!subRefs.current.pose) {
+      const t = ros.topic('/pose', 'geometry_msgs/msg/PoseWithCovarianceStamped', { throttle_rate: 200 })
+      t?.subscribe(msg => {
+        mapPoseRef.current = { x: msg.pose.pose.position.x, y: msg.pose.pose.position.y }
+      })
+      subRefs.current.pose = t
+    }
   }, [])
 
   const connect = useCallback(() => {
@@ -114,12 +128,44 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const sendNavGoal = useCallback((wx, wy, qz = 0, qw = 1, message = 'Argo is on its way') => {
+  // How close (meters) to the goal counts as "arrived". Nav2's own goal
+  // tolerance settles somewhere near this range, not exactly on the point.
+  const ARRIVAL_RADIUS = 0.35
+  // Safety fallback if the robot never quite settles within ARRIVAL_RADIUS
+  // (e.g. an obstacle forces a slightly-off final pose) — fires onArrival
+  // anyway rather than waiting forever, same reasoning as every other
+  // timeout added elsewhere in this system.
+  const ARRIVAL_MAX_WAIT_MS = 90000
+
+  const sendNavGoal = useCallback((wx, wy, qz = 0, qw = 1, message = 'Argo is on its way', onArrival) => {
     ros.publish('/goal_pose', 'geometry_msgs/PoseStamped', {
       header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
       pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: qz, w: qw } },
     })
     showToast(message, 'ok')
+
+    // Real arrival detection via the localized map-frame pose, replacing
+    // the fixed-timer "assume arrived" the caller used to rely on — that
+    // fired the same fake-success message whether or not Nav2 actually got
+    // there, exactly the kind of gap the backend side of this session has
+    // been fixing (bt_navigator/planner activation no longer silently
+    // reported READY on failure either).
+    if (onArrival) {
+      clearInterval(arrivalWatch.current?.intervalId)
+      clearTimeout(arrivalWatch.current?.timeoutId)
+      const finish = () => {
+        clearInterval(intervalId)
+        clearTimeout(timeoutId)
+        arrivalWatch.current = null
+        onArrival()
+      }
+      const intervalId = setInterval(() => {
+        const p = mapPoseRef.current
+        if (p && Math.hypot(p.x - wx, p.y - wy) <= ARRIVAL_RADIUS) finish()
+      }, 300)
+      const timeoutId = setTimeout(finish, ARRIVAL_MAX_WAIT_MS)
+      arrivalWatch.current = { intervalId, timeoutId }
+    }
   }, [showToast])
 
   // The UI equivalent of RViz's "2D Pose Estimate" tool — amcl/slam_toolbox's

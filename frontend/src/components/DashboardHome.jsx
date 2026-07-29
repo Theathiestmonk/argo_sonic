@@ -252,6 +252,24 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
 
+  // Mirrors voiceStatus's polling pattern — independent state, own endpoint,
+  // so the E-Stop button's label always reflects the actual backend state
+  // rather than an optimistic local guess (e.g. after a page refresh, or if
+  // another operator on a different device already hit it).
+  const [estopped, setEstopped] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/estop/status`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setEstopped(!!d.estopped) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
+
   // Orders Sonic has taken — same poll TablesPanel.jsx uses, so a finished
   // order shows up here on the Dashboard too, not only on the Tables page.
   useEffect(() => {
@@ -330,47 +348,73 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
     const dest = destinations.find(d => d.name === destName)
     if (!dest) return
 
+    const action = TASK_TO_ACTION[task]
+    const startVoiceSession = () => {
+      if (!action || !dest.key || dest.key === '0') return   // '0' = Home — no table context, never voice-trigger
+      if (voiceStatus.running && voiceStatus.table !== dest.key) {
+        showToast(`Sonic is busy with another table — wait for that session to finish`, 'warn')
+        return
+      }
+      fetch(`${launcherUrl}/voice/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, map: selectedMap, table: dest.key }),
+      })
+        .then(r => r.json())
+        .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger') })
+        .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
+    }
+    const updateArrivedUI = () => {
+      setCurPos(destName)
+      setCurStatus('Arrived')
+      showToast(`Argo arrived at ${destName}`, 'ok')
+    }
+
     const live = connected && navReady
     setCurStatus('Moving')
     setTaskLabel(`${task} → ${destName}`)
     if (live) {
-      onNavigate(dest.x, dest.y, dest.qz, dest.qw, `Argo is heading to ${destName}`)
+      // Sonic used to fire the instant this button was clicked, regardless
+      // of whether the robot had actually reached the table yet — customers
+      // could get greeted by a robot that was still ten meters away. Now
+      // gated on onNavigate's real arrival detection (see App.jsx's
+      // sendNavGoal) instead of a flat click-time trigger.
+      onNavigate(dest.x, dest.y, dest.qz, dest.qw, `Argo is heading to ${destName}`,
+        () => { updateArrivedUI(); startVoiceSession() })
     } else {
       // No real rosbridge/Nav2 to send a goal to — never block the click for
       // this (testing without a robot connected is a normal, expected state,
-      // not an error) — just say plainly that this trip is simulated.
+      // not an error) — just say plainly that this trip is simulated. No
+      // real arrival to wait for either, so keep the original flat-timer
+      // simulated trip (10s) with Sonic firing immediately, same as this
+      // has always worked for testing without a robot present.
       showToast(`Argo is heading to ${destName} (simulated — no live robot connection)`, 'info')
+      startVoiceSession()
+      setTimeout(updateArrivedUI, 10000)
     }
     addActivity(destName, task)
-
-    const action = TASK_TO_ACTION[task]
-    if (action && dest.key && dest.key !== '0') {   // '0' = Home — no table context, never voice-trigger
-      if (voiceStatus.running && voiceStatus.table !== dest.key) {
-        showToast(`Sonic is busy with another table — wait for that session to finish`, 'warn')
-      } else {
-        fetch(`${launcherUrl}/voice/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, map: selectedMap, table: dest.key }),
-        })
-          .then(r => r.json())
-          .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger') })
-          .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
-      }
-    }
-
-    // Live nav has real (if still optimistic) feedback to wait on; with no
-    // connection at all there's nothing to wait on, so treat "arrived" as a
-    // simple simulated travel time instead — 10s, not the live case's 1.8s.
-    setTimeout(() => {
-      setCurPos(destName)
-      setCurStatus('Arrived')
-      showToast(`Argo arrived at ${destName}`, 'ok')
-    }, live ? 1800 : 10000)
   }, [selectedDest, selectedTask, destinations, onNavigate, showToast, addActivity, connected, navReady, selectedMap, launcherUrl, voiceStatus])
 
   const stopVoice = () => {
     fetch(`${launcherUrl}/voice/stop`, { method: 'POST' }).catch(() => {})
+  }
+
+  // No confirm() dialog here on purpose, unlike stopNav() — this is a real
+  // emergency stop (cuts motor commands immediately if the robot is
+  // physically misbehaving); a confirmation dialog would defeat the point
+  // of "immediately". Kills only serial_bridge, not the rest of the nav
+  // stack (SLAM/planner/etc. keep running), so resuming doesn't require a
+  // full restart.
+  const estop = () => {
+    fetch(`${launcherUrl}/estop`, { method: 'POST' })
+      .then(() => { setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
+      .catch(() => showToast('Could not reach launcher for E-STOP', 'danger'))
+  }
+
+  const estopResume = () => {
+    fetch(`${launcherUrl}/estop/resume`, { method: 'POST' })
+      .then(() => { setEstopped(false); showToast('Motors resumed', 'ok') })
+      .catch(() => showToast('Could not reach launcher to resume motors', 'danger'))
   }
 
   const recall = () => { setSelectedDest('Home'); sendArgo('Home') }
@@ -484,6 +528,19 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
             <p style={{ color: 'var(--muted)', fontSize: 14, marginTop: 4 }}>Here's what's happening right now.</p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              onClick={estopped ? estopResume : estop}
+              title={estopped ? 'Resume serial_bridge / motor control' : 'Immediately cut motor commands — SLAM/planner keep running'}
+              style={{
+                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
+                background: estopped ? 'rgba(59,240,155,0.12)' : 'rgba(255,65,65,0.12)',
+                border: estopped ? '1px solid rgba(59,240,155,0.4)' : '1px solid rgba(255,65,65,0.45)',
+                color: estopped ? 'var(--ok)' : 'var(--danger)',
+                display: 'flex', alignItems: 'center', gap: 7,
+              }}
+            >
+              {estopped ? '▶ Resume Motors' : '🛑 E-STOP'}
+            </button>
             <button
               onClick={onAddMap}
               style={{

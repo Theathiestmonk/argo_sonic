@@ -4,7 +4,7 @@ Argo Sonic – NTFields Navigation Launcher
 Usage: python3 argo_sonic_nav.py [--no-cam] [--map /path/to/map]
 """
 
-import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math
+import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math, select
 from datetime import datetime
 from pathlib import Path
 
@@ -262,6 +262,17 @@ def build_env(home):
         k, _, v = line.partition("=")
         if k:
             env[k] = v
+    # A failed `source` (e.g. {ws}/install/setup.bash doesn't exist because
+    # this checkout was never colcon-built) makes the whole `&&` chain
+    # short-circuit before reaching `env`, so r.stdout is empty and this
+    # dict ends up missing PATH entirely — which used to surface many steps
+    # later as a bare "FileNotFoundError: 'ros2'" traceback from an
+    # unrelated-looking line, instead of pointing at the actual cause here.
+    if "PATH" not in env:
+        log(f"Failed to source ROS2 workspace at {ws}/install/setup.bash "
+            f"(missing or not built — run 'colcon build' there?)", "fail")
+        report_progress("ERROR", f"Workspace not built: {ws}/install/setup.bash not found")
+        cleanup()
     sdk = f"{home}/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2"
     env["LD_LIBRARY_PATH"] = (
         env.get("LD_LIBRARY_PATH", "") +
@@ -298,8 +309,23 @@ def launch_with_telem(name, cmd, env):
     threading.Thread(target=_telem_reader, args=(p,), daemon=True).start()
     return p
 
-def runcmd(cmd, env):
-    return subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True)
+def runcmd(cmd, env, timeout=10):
+    """subprocess.run with a hard timeout. The outer polling loops
+    (wait_lifecycle_state, wait_topic, wait_action) all have their own
+    deadlines, but the individual command that actually SENDS a lifecycle
+    transition (e.g. `ros2 lifecycle set /controller_server configure`)
+    previously had none — if that single call hung (e.g. a DDS
+    discovery/service-call issue, the same class of problem found with
+    rosapi/rosbridge earlier), the whole script blocked on that one line
+    forever, with nothing able to recover from it. A timed-out call is
+    treated as a plain failure (nonzero returncode, empty output) so every
+    existing caller's `r.returncode == 0` / `target in r.stdout` checks
+    keep working unchanged."""
+    try:
+        return subprocess.run(cmd, shell=True, env=env, capture_output=True,
+                               text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="timed out")
 
 def wait_topic(topic, env, timeout=30):
     log(f"Waiting for topic  {topic}", "info")
@@ -452,6 +478,19 @@ def cleanup(sig=None, frame=None):
     sys.stdout.write("\033[?25h\033[0m\n")
     sys.exit(0)
 
+def ntfields_models_dir(home: str) -> Path:
+    """Where trained NTFields .pt models live. Path.home() alone is fragile
+    here — it reflects whichever user/UID actually runs this process, which
+    doesn't always match wherever the models were actually trained/copied to
+    (confirmed on argo-desktop: the systemd service ran as root, so
+    Path.home() was /root, while the real models sit under
+    /home/argo/ntfields_models, owned by argo — a "model not found" failure
+    that had nothing to do with the model actually being missing). Setting
+    NTFIELDS_MODELS_DIR overrides this outright, independent of which user
+    ends up running the process."""
+    override = os.environ.get("NTFIELDS_MODELS_DIR")
+    return Path(override) if override else Path(home) / "ntfields_models"
+
 # ──────────────────────────────────────────────────────────────────────────────
 #  Map selector  (runs before TUI – normal terminal, print/input work fine)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -461,7 +500,7 @@ def select_map(home: str, default: str) -> str:
     Called only when --map is not supplied on the command line.
     """
     maps_dir   = Path(REPO_ROOT) / "src/argo_mini/maps"
-    models_dir = Path(home) / "ntfields_models"
+    models_dir = ntfields_models_dir(home)
 
     entries = []
     seen    = set()
@@ -496,10 +535,20 @@ def select_map(home: str, default: str) -> str:
         print(f"{BORDER}|{RS}{content}{pad2}{BORDER}|{RS}")
 
     print(f"{BORDER}+{'-'*(W-2)}+{RS}")
-    print(f"  {DIM}Select [1-{len(entries)}]  default={default_idx+1} ({entries[default_idx][0]}): {RS}", end="", flush=True)
+    print(f"  {DIM}Select [1-{len(entries)}]  default={default_idx+1} ({entries[default_idx][0]}) — auto-select in 5s: {RS}", end="", flush=True)
 
+    # input() has no native timeout — select.select() on stdin waits for
+    # input with a deadline instead of blocking forever, so a run left
+    # unattended at this prompt falls through to the default map after 5s
+    # instead of hanging indefinitely. (Validated separately on
+    # argo_sonic_nav1.py before porting here.)
     try:
-        raw = input().strip()
+        ready, _, _ = select.select([sys.stdin], [], [], 5.0)
+        if ready:
+            raw = sys.stdin.readline().strip()
+        else:
+            print(f"\n{YELLOW}No input in 5s — using default.{RS}")
+            raw = ""
     except (EOFError, KeyboardInterrupt):
         print()
         sys.exit(0)
@@ -654,7 +703,7 @@ def main():
            (f"ros2 run argo_mini ntfields_planner_node --ros-args "
             f"--params-file {ntfields_cfg}"), env)
     time.sleep(6)   # Python node + torch import needs extra startup time
-    ntfields_model = str(Path(home) / "ntfields_models" / f"{Path(map_base).name}.pt")
+    ntfields_model = str(ntfields_models_dir(home) / f"{Path(map_base).name}.pt")
     ntfields_ok = lc_ntfields("/planner_server", env, model_path=ntfields_model)
     step_done("NTFields Planner")
 
