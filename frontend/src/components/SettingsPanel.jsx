@@ -4,12 +4,22 @@ import MapWaypointViewer from './MapWaypointViewer'
 
 export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, onClose, showToast }) {
   const [maps, setMaps] = useState(null) // null = loading
+  // Separate from `maps` — a map can exist (yaml/pgm + slam_toolbox's own
+  // posegraph/data, always alongside it under the same base name) without
+  // having a trained NTFields model yet, or after the model's gone stale
+  // relative to a re-saved map. argo_sonic_nav.py's own by-hand menu
+  // already shows this; the UI-launched path skipped it entirely until now.
+  const [ntfieldsModels, setNtfieldsModels] = useState(null)
 
   useEffect(() => {
     fetch(`${launcherUrl}/maps`)
       .then(r => r.json())
       .then(d => setMaps(d.maps ?? []))
       .catch(() => setMaps([]))
+    fetch(`${launcherUrl}/ntfields_models`)
+      .then(r => r.json())
+      .then(d => setNtfieldsModels(d.models ?? []))
+      .catch(() => setNtfieldsModels([]))
   }, [launcherUrl])
 
   return (
@@ -40,6 +50,7 @@ export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, o
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
           {maps.map(name => {
             const sel = selectedMap === name
+            const hasModel = ntfieldsModels?.includes(name) ?? null // null = still loading
             return (
               <button
                 key={name}
@@ -61,6 +72,22 @@ export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, o
                 }}>
                   {name}
                 </div>
+
+                {/* NTFields model availability — argo_sonic_nav.py's planner
+                    silently degrades to a non-functional state if this is
+                    missing rather than refusing to start, so surfacing it
+                    here (before a table visit is already underway) matters. */}
+                {hasModel !== null && (
+                  <div style={{
+                    marginTop: 6, fontSize: 10.5, fontWeight: 700, padding: '3px 8px',
+                    borderRadius: 99, display: 'inline-block',
+                    background: hasModel ? 'rgba(59,240,155,0.1)' : 'rgba(255,159,67,0.12)',
+                    border: `1px solid ${hasModel ? 'rgba(59,240,155,0.28)' : 'rgba(255,159,67,0.3)'}`,
+                    color: hasModel ? 'var(--ok)' : '#ff9f43',
+                  }}>
+                    {hasModel ? 'NTFields model ready' : 'No NTFields model'}
+                  </div>
+                )}
 
                 {sel && (
                   <div style={{

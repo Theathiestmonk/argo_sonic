@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Argo · Order</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/radial-nav.css">
+
+<style>
+  .order-content { display: flex; gap: 24px; align-items: flex-start; }
+  .order-catalog { flex: 1; min-width: 0; }
+  .bill-panel {
+    width: 420px; flex-shrink: 0; position: sticky; top: 92px;
+    display: flex; flex-direction: column; padding: 24px; max-height: calc(100vh - 118px);
+  }
+
+  .main { padding: 32px 36px 90px; }
+
+  /* Search row */
+  .search-row { display: flex; gap: 10px; margin-bottom: 20px; }
+  .search-box {
+    flex: 1; display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    background: var(--glass); border: 1px solid var(--border-glass); border-radius: var(--radius-md);
+    backdrop-filter: blur(20px);
+  }
+  .search-box svg { flex-shrink: 0; color: var(--muted); width: 16px; height: 16px; }
+  .search-box input { flex: 1; background: none; border: 0; outline: 0; color: var(--text); font-size: 14px; }
+  .search-box input::placeholder { color: var(--muted); }
+
+  /* Category tabs */
+  .cat-tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
+  .cat-tab {
+    display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 14px;
+    background: var(--glass); border: 1px solid var(--border-glass); color: var(--muted);
+    font-size: 13px; font-weight: 700; backdrop-filter: blur(20px);
+  }
+  .cat-tab:hover { color: #fff; border-color: rgba(255,255,255,0.2); }
+  .cat-tab.on { background: rgba(226,179,92,0.15); color: var(--gold-bright); border-color: rgba(226,179,92,0.4); }
+
+  /* Veg / Non-veg + Available / Unavailable filters */
+  .filter-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .filter-group {
+    display: flex; gap: 6px; background: var(--glass); border: 1px solid var(--border-glass);
+    border-radius: 14px; padding: 6px; backdrop-filter: blur(20px);
+  }
+  .filter-chip {
+    padding: 7px 14px; border-radius: 10px; font-size: 12px; font-weight: 700; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .filter-chip:hover { color: #fff; }
+  .filter-chip.on { background: rgba(226,179,92,0.15); color: var(--gold-bright); }
+
+  /* Veg / Non-veg — the familiar square-with-a-dot mark */
+  .diet-mark {
+    display: inline-block; width: 11px; height: 11px; border: 1.5px solid; border-radius: 3px;
+    position: relative; vertical-align: middle; flex-shrink: 0;
+  }
+  .diet-mark::after { content: ""; position: absolute; inset: 2.5px; border-radius: 50%; }
+  .diet-mark.veg { border-color: #2ecc71; }
+  .diet-mark.veg::after { background: #2ecc71; }
+  .diet-mark.nonveg { border-color: #e74c3c; }
+  .diet-mark.nonveg::after { background: #e74c3c; }
+
+  h3.section-title { font-family: var(--font-heading); font-size: 17px; font-weight: 700; margin-bottom: 16px; }
+
+  /* Item grid — fixed column counts (not auto-fill) so it never grows past
+     4 columns on wide monitors, stepping down gracefully on narrower ones. */
+  .item-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  @media (max-width: 980px)  { .item-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 650px)  { .item-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 420px)  { .item-grid { grid-template-columns: repeat(1, 1fr); } }
+  /* Solid black-gradient card — no glass blur/backdrop-filter. */
+  .item-card {
+    background: linear-gradient(165deg, #1b1620 0%, #0c0a10 100%);
+    border: 1px solid var(--border-glass); border-radius: var(--radius-lg);
+    padding: 16px; box-shadow: 0 20px 46px rgba(0,0,0,0.55);
+    position: relative; overflow: hidden; transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s;
+  }
+  .item-card:hover { transform: translateY(-4px); border-color: rgba(226,179,92,0.3); box-shadow: 0 26px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(226,179,92,0.12); }
+  .item-card.in-cart { border-color: rgba(59,240,155,0.5); box-shadow: 0 0 0 2px rgba(59,240,155,0.22), 0 20px 46px rgba(0,0,0,0.55); }
+  .item-card.in-cart:hover { box-shadow: 0 0 0 2px rgba(59,240,155,0.3), 0 26px 60px rgba(0,0,0,0.6); }
+  .item-card .qty-pill {
+    position: absolute; top: 12px; right: 12px; z-index: 2; min-width: 22px; height: 22px; padding: 0 6px;
+    border-radius: 99px; background: var(--ok); color: #06331f; font-size: 11.5px; font-weight: 800;
+    display: grid; place-items: center;
+  }
+  /* Dim the photo + text, not the badge — a translucent badge sitting
+     directly on a bright food photo (e.g. orange juice) was unreadable
+     regardless of card opacity, so the badge gets its own solid backdrop
+     instead of inheriting a washed-out tint from whatever's behind it. */
+  .item-card.unavailable .item-thumb img { filter: grayscale(0.6) brightness(0.55); }
+  .item-card.unavailable .item-thumb.placeholder-thumb { filter: grayscale(0.5) brightness(0.75); }
+  .item-card.unavailable .item-name,
+  .item-card.unavailable .item-desc,
+  .item-card.unavailable .item-price { opacity: 0.55; }
+  .item-card .unavailable-badge {
+    position: absolute; top: 12px; right: 12px; z-index: 3;
+    padding: 5px 11px; border-radius: 99px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+    background: rgba(10,6,7,0.88); color: #ff9a9a; border: 1px solid rgba(255,94,94,0.55);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  }
+  .add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .add-btn:disabled:hover { transform: none; }
+
+  .item-thumb {
+    width: 100%; aspect-ratio: 1.3/1; border-radius: 16px; margin-bottom: 12px; overflow: hidden;
+    background: radial-gradient(120% 120% at 30% 20%, rgba(255,255,255,0.05), rgba(255,255,255,0) 60%), linear-gradient(160deg, rgba(226,179,92,0.1), rgba(123,63,212,0.08));
+  }
+  .item-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .item-thumb.placeholder-thumb {
+    display: grid; place-items: center;
+    background: radial-gradient(120% 120% at 30% 20%, rgba(255,255,255,0.08), rgba(255,255,255,0) 60%), linear-gradient(160deg, rgba(226,179,92,0.16), rgba(123,63,212,0.12));
+  }
+  .thumb-badge {
+    width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 22px;
+    background: rgba(226,179,92,0.14); box-shadow: inset 0 0 0 1px rgba(226,179,92,0.3);
+  }
+
+  .discount-badge {
+    display: inline-block; font-size: 9.5px; padding: 3px 9px; border-radius: 99px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em; background: rgba(59,240,155,0.14); color: var(--ok);
+    border: 1px solid rgba(59,240,155,0.3); margin-bottom: 7px;
+  }
+  .item-name { font-family: var(--font-heading); font-size: 15px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 7px; }
+  .item-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; min-height: 33px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .item-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+  .item-price { font-family: var(--font-heading); font-weight: 800; font-size: 15px; display: flex; gap: 7px; align-items: baseline; }
+  .item-price .price-now { color: var(--gold-bright); }
+  .item-price .price-was { color: var(--muted); font-weight: 600; font-size: 11.5px; text-decoration: line-through; }
+  .add-btn {
+    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    background: linear-gradient(180deg,#fff 0%,#f3ede2 100%); color: #1a1103; box-shadow: 0 8px 20px rgba(226,179,92,0.3);
+    font-size: 18px; font-weight: 800; flex-shrink: 0;
+  }
+  .add-btn:hover { transform: scale(1.08); }
+
+  .empty-items { grid-column: 1/-1; text-align: center; padding: 56px 20px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+  .empty-items a { color: var(--gold-bright); text-decoration: none; font-weight: 700; border-bottom: 1px solid rgba(226,179,92,0.3); }
+  .empty-items .clear-filters-btn { margin: 14px auto 0; padding: 9px 20px; font-size: 12.5px; }
+
+  /* Bill panel */
+  .bill-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .bill-head h3 { font-family: var(--font-heading); font-size: 18px; font-weight: 800; }
+  .bill-head span { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .bill-list { flex: 1; overflow-y: auto; margin: 14px 0; display: flex; flex-direction: column; gap: 10px; }
+  .bill-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 10px; line-height: 1.7; }
+
+  .bill-line {
+    position: relative; display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 14px;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass);
+  }
+  .bill-remove {
+    position: absolute; top: 10px; right: 10px; z-index: 2;
+    width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(255,255,255,0.06); border: 1px solid var(--border-glass); color: var(--muted);
+    font-size: 12px; font-weight: 700;
+  }
+  .bill-remove:hover { background: rgba(255,94,94,0.14); border-color: rgba(255,94,94,0.4); color: var(--danger); }
+  .bill-row-top { display: flex; align-items: center; gap: 14px; padding-right: 30px; }
+  .item-thumb.bill-thumb { width: 72px; height: 72px; aspect-ratio: unset; border-radius: 14px; flex-shrink: 0; margin-bottom: 0; }
+  .item-thumb.bill-thumb .thumb-badge { width: 42px; height: 42px; font-size: 21px; }
+  .bill-info { flex: 1; min-width: 0; }
+  .bill-name {
+    font-size: 16px; font-weight: 700; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .bill-price { font-size: 13.5px; color: var(--muted); margin-top: 4px; display: flex; gap: 7px; }
+  .bill-price .price-was { text-decoration: line-through; }
+  .bill-price .price-now { color: var(--gold-bright); font-weight: 700; }
+  .qty-ctrl { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .qty-btn {
+    width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); color: #fff; font-size: 17px; font-weight: 800;
+    flex-shrink: 0;
+  }
+  .qty-btn:hover { background: rgba(255,255,255,0.1); }
+  .qty-input {
+    width: 46px; height: 34px; border-radius: 9px; text-align: center; font-size: 15px; font-weight: 700;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); color: #fff; -moz-appearance: textfield;
+  }
+  .qty-input::-webkit-outer-spin-button, .qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .qty-input:focus { outline: 0; border-color: rgba(226,179,92,0.4); }
+
+  .bill-summary { border-top: 1px dashed rgba(255,255,255,0.12); padding-top: 16px; }
+  .bill-summary .row { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); padding: 5px 0; }
+  .bill-summary .row.total { font-family: var(--font-heading); font-size: 17px; font-weight: 800; color: var(--text); padding-top: 10px; border-top: 1px solid var(--border-glass); margin-top: 6px; }
+  .place-order-btn { width: 100%; margin-top: 16px; }
+
+  @media (max-width: 980px) {
+    .order-content { flex-direction: column; }
+    .bill-panel { width: 100%; position: static; max-height: none; }
+  }
+
+  /* On large monitors, give the whole bill panel a bit more breathing room
+     to match everything else reading bigger there. */
+  @media (min-width: 1440px) {
+    .bill-panel { width: 460px; padding: 26px; }
+    .bill-head h3 { font-size: 20px; }
+    .bill-head span { font-size: 13px; }
+    .bill-summary .row { font-size: 14px; }
+    .bill-summary .row.total { font-size: 19px; }
+    .place-order-btn { padding: 15px 16px; font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="ambient">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+  <div class="blob blob-3"></div>
+</div>
+
+<div class="shell">
+  <header class="topnav">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <div class="brand-name">Argo</div>
+        <div class="brand-sub">Order</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="order-content">
+      <div class="order-catalog">
+        <div class="search-row">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input type="text" id="searchInput" placeholder="Search items here..." />
+          </div>
+        </div>
+
+        <div class="cat-tabs" id="catTabs"></div>
+
+        <div class="filter-row">
+          <div class="filter-group" id="dietFilterGroup">
+            <button class="filter-chip on" data-diet="all">All</button>
+            <button class="filter-chip" data-diet="veg"><span class="diet-mark veg"></span>Veg</button>
+            <button class="filter-chip" data-diet="nonveg"><span class="diet-mark nonveg"></span>Non-Veg</button>
+          </div>
+          <div class="filter-group" id="availFilterGroup">
+            <button class="filter-chip on" data-avail="all">All</button>
+            <button class="filter-chip" data-avail="available">Available</button>
+            <button class="filter-chip" data-avail="unavailable">Unavailable</button>
+          </div>
+        </div>
+
+        <h3 class="section-title">Choose Items</h3>
+        <div class="item-grid" id="itemGrid"></div>
+      </div>
+
+      <aside class="bill-panel glass-card">
+        <div class="bill-head"><h3>Bill</h3><span id="itemCount">0 items</span></div>
+        <div class="bill-list" id="billList"></div>
+        <div class="bill-summary">
+          <div class="row"><span>Sub Total</span><span id="subTotal">0.00</span></div>
+          <div class="row"><span id="taxLabel">Tax</span><span id="taxAmt">0.00</span></div>
+          <div class="row total"><span>Total</span><span id="grandTotal">0.00</span></div>
+          <button class="btn btn-primary place-order-btn" id="placeOrderBtn" disabled>Place Order</button>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<!-- Cyclic radial nav (shared with dashboard.html) -->
+<div class="radial-backdrop" id="radialBackdrop"></div>
+<div class="radial-nav" id="radialNav">
+  <svg class="radial-track" id="radialTrack" width="0" height="0"></svg>
+  <div class="radial-items" id="radialItems"></div>
+  <button class="radial-fab" id="radialFabBtn" aria-label="Open navigation" aria-expanded="false">
+    <svg class="radial-fab-icon radial-fab-icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>
+    </svg>
+    <svg class="radial-fab-icon radial-fab-icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/>
+    </svg>
+  </button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/menu-data.js"></script>
+<script src="/radial-nav.js"></script>
+<script src="/backup-sync.js"></script>
+<script>
+  let menu = loadMenu()
+  let settings = loadSettings()
+  let activeCategory = 'All'
+  let activeDiet = 'all'
+  let activeAvail = 'all'
+  let searchTerm = ''
+  const cart = {} // id -> qty
+
+  function renderCatTabs() {
+    const cats = ['All', ...menuCategories(menu)]
+    const wrap = document.getElementById('catTabs')
+    wrap.innerHTML = cats.map(c => `
+      <button class="cat-tab ${c === activeCategory ? 'on' : ''}" data-cat="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join('')
+    wrap.querySelectorAll('.cat-tab').forEach(btn => {
+      btn.onclick = () => { activeCategory = btn.dataset.cat; renderCatTabs(); renderItems() }
+    })
+  }
+
+  document.querySelectorAll('#dietFilterGroup .filter-chip').forEach(btn => {
+    btn.onclick = () => {
+      activeDiet = btn.dataset.diet
+      document.querySelectorAll('#dietFilterGroup .filter-chip').forEach(b => b.classList.toggle('on', b === btn))
+      renderItems()
+    }
+  })
+  document.querySelectorAll('#availFilterGroup .filter-chip').forEach(btn => {
+    btn.onclick = () => {
+      activeAvail = btn.dataset.avail
+      document.querySelectorAll('#availFilterGroup .filter-chip').forEach(b => b.classList.toggle('on', b === btn))
+      renderItems()
+    }
+  })
+
+  function filteredItems() {
+    return menu.filter(i => {
+      const inCat = activeCategory === 'All' || i.category === activeCategory
+      const inSearch = !searchTerm || i.name.toLowerCase().includes(searchTerm)
+      const inDiet = activeDiet === 'all' || (activeDiet === 'veg' ? isVeg(i) : !isVeg(i))
+      const available = isAvailable(i)
+      const inAvail = activeAvail === 'all' || (activeAvail === 'available' ? available : !available)
+      return inCat && inSearch && inDiet && inAvail
+    })
+  }
+
+  function clearAllFilters() {
+    activeCategory = 'All'
+    activeDiet = 'all'
+    activeAvail = 'all'
+    searchTerm = ''
+    document.getElementById('searchInput').value = ''
+    document.querySelectorAll('#dietFilterGroup .filter-chip').forEach(b => b.classList.toggle('on', b.dataset.diet === 'all'))
+    document.querySelectorAll('#availFilterGroup .filter-chip').forEach(b => b.classList.toggle('on', b.dataset.avail === 'all'))
+    renderCatTabs()
+    renderItems()
+  }
+
+  function renderItems() {
+    const grid = document.getElementById('itemGrid')
+    const items = filteredItems()
+    if (items.length === 0) {
+      // Two different situations, two different messages: a genuinely empty
+      // catalog vs. filters/search that just don't match anything right now
+      // (a customer shouldn't be told to go add menu items in Settings).
+      if (menu.length === 0) {
+        grid.innerHTML = `<div class="empty-items">No items on the menu yet.<br/>Please check back soon.</div>`
+      } else {
+        grid.innerHTML = `<div class="empty-items">No items match your search or filters.<br/><button type="button" class="btn btn-ghost clear-filters-btn" id="clearFiltersBtn">Clear filters</button></div>`
+        document.getElementById('clearFiltersBtn').onclick = clearAllFilters
+      }
+      return
+    }
+    grid.innerHTML = items.map(item => {
+      const available = isAvailable(item)
+      return `
+      <div class="item-card ${cart[item.id] ? 'in-cart' : ''} ${available ? '' : 'unavailable'}" data-id="${item.id}">
+        ${cart[item.id] ? `<span class="qty-pill">${cart[item.id]}</span>` :
+          !available ? `<span class="unavailable-badge">${hasTrackedStock(item) && item.stock <= 0 ? 'Out of stock' : 'Unavailable'}</span>` : ''}
+        ${thumbHtml(item)}
+        ${discountBadgeHtml(item)}
+        <div class="item-name">${dietMarkHtml(item)} ${escapeHtml(item.name)}</div>
+        <div class="item-desc">${escapeHtml(item.desc || '')}</div>
+        <div class="item-foot">
+          <div class="item-price">${priceBlockHtml(item, settings)}</div>
+          <button class="add-btn" data-id="${item.id}" ${available ? '' : 'disabled'}>+</button>
+        </div>
+      </div>`
+    }).join('')
+    grid.querySelectorAll('.add-btn').forEach(btn => {
+      btn.onclick = () => { if (!btn.disabled) addToCart(btn.dataset.id) }
+    })
+  }
+
+  function addToCart(id) {
+    cart[id] = (cart[id] || 0) + 1
+    renderItems()
+    renderBill()
+  }
+  function decFromCart(id) {
+    if (!cart[id]) return
+    cart[id] -= 1
+    if (cart[id] <= 0) delete cart[id]
+    renderItems()
+    renderBill()
+  }
+  function removeFromCart(id) {
+    delete cart[id]
+    renderItems()
+    renderBill()
+  }
+  // Typing a quantity directly (e.g. "30") beats tapping + thirty times.
+  function setQty(id, rawValue) {
+    const n = Math.floor(Number(rawValue))
+    if (!Number.isFinite(n) || n <= 0) { removeFromCart(id); return }
+    cart[id] = Math.min(999, n)
+    renderItems()
+    renderBill()
+  }
+
+  function renderBill() {
+    const list = document.getElementById('billList')
+    const ids = Object.keys(cart)
+    const items = ids.map(id => ({ item: menu.find(m => m.id === id), qty: cart[id] })).filter(x => x.item)
+
+    document.getElementById('itemCount').textContent = items.reduce((n, x) => n + x.qty, 0) + ' items'
+
+    if (items.length === 0) {
+      list.innerHTML = `<div class="bill-empty">No items yet.<br/>Tap + on a dish to add it here.</div>`
+    } else {
+      list.innerHTML = items.map(({ item, qty }) => `
+        <div class="bill-line" data-id="${item.id}">
+          <button class="bill-remove" aria-label="Remove ${escapeHtml(item.name)}">✕</button>
+          <div class="bill-row-top">
+            ${thumbHtml(item, 'bill-thumb')}
+            <div class="bill-info">
+              <div class="bill-name">${escapeHtml(item.name)}</div>
+              <div class="bill-price">${priceBlockHtml(item, settings)}</div>
+            </div>
+          </div>
+          <div class="qty-ctrl">
+            <button class="qty-btn dec">−</button>
+            <input type="number" class="qty-input" min="1" max="999" value="${qty}" />
+            <button class="qty-btn inc">+</button>
+          </div>
+        </div>`).join('')
+      list.querySelectorAll('.bill-line').forEach(line => {
+        const id = line.dataset.id
+        line.querySelector('.inc').onclick = () => addToCart(id)
+        line.querySelector('.dec').onclick = () => decFromCart(id)
+        line.querySelector('.bill-remove').onclick = () => removeFromCart(id)
+        const qtyInput = line.querySelector('.qty-input')
+        qtyInput.addEventListener('change', () => setQty(id, qtyInput.value))
+        qtyInput.addEventListener('keydown', e => { if (e.key === 'Enter') qtyInput.blur() })
+      })
+    }
+
+    const subTotal = items.reduce((sum, x) => sum + effectivePrice(x.item) * x.qty, 0)
+    const tax = subTotal * (settings.taxPercent / 100)
+    const total = subTotal + tax
+    document.getElementById('taxLabel').textContent = `Tax (${settings.taxPercent}%)`
+    document.getElementById('subTotal').textContent = formatMoney(subTotal, settings)
+    document.getElementById('taxAmt').textContent = formatMoney(tax, settings)
+    document.getElementById('grandTotal').textContent = formatMoney(total, settings)
+    document.getElementById('placeOrderBtn').disabled = items.length === 0
+  }
+
+  document.getElementById('placeOrderBtn').onclick = () => {
+    if (Object.keys(cart).length === 0) return
+    const total = document.getElementById('grandTotal').textContent
+    showToast(`Order placed — ${total}`, 'ok')
+    Object.keys(cart).forEach(id => delete cart[id])
+    renderBill()
+  }
+
+  document.getElementById('searchInput').addEventListener('input', e => {
+    searchTerm = e.target.value.trim().toLowerCase()
+    renderItems()
+  })
+
+  // Pick up catalog/settings changes made in Menu Settings, including from another tab.
+  window.addEventListener('storage', e => {
+    if (e.key === MENU_STORAGE_KEY) {
+      menu = loadMenu()
+      renderCatTabs()
+      renderItems()
+      renderBill()
+    } else if (e.key === SETTINGS_STORAGE_KEY) {
+      settings = loadSettings()
+      renderItems()
+      renderBill()
+    }
+  })
+
+  let toastTimer
+  function showToast(msg, type = '') {
+    const t = document.getElementById('toast')
+    t.textContent = msg
+    t.className = 'toast show' + (type ? ' ' + type : '')
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { t.className = 'toast' }, 3200)
+  }
+
+  renderCatTabs()
+  renderItems()
+  renderBill()
+  ArgoRadialNav.init(ArgoRadialNav.pages(), 'order')
+  // Read-only participant: if storage looks freshly cleared and a backup
+  // file was linked from Menu Settings, restore from it before rendering.
+  ArgoBackupSync.init().then(() => {
+    menu = loadMenu(); settings = loadSettings()
+    renderCatTabs(); renderItems(); renderBill()
+  })
+</script>
+</body>
+</html>
