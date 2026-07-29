@@ -50,12 +50,23 @@ def load_model():
         return None
 
     try:
-        # inference_framework isn't a real Model() param in the installed
-        # openwakeword version (0.4.0) — it auto-detects from the model
-        # file's own extension (.onnx here), passing it explicitly used to
-        # fall through **kwargs into an internal AudioFeatures() call that
-        # doesn't recognize it either, crashing load_model() entirely.
-        model = Model(wakeword_model_paths=[config.WAKE_WORD_MODEL_PATH])
+        # inference_framework IS a real Model() param on the installed
+        # openwakeword version (0.6.0) — confirmed directly from that
+        # version's own source (model.py): it's a plain constructor kwarg
+        # defaulting to "tflite", with NO auto-detection from the model
+        # file's own extension at all (the comment this replaced was wrong,
+        # written against an older 0.4.0 API). Since tflite-runtime is also
+        # installed, the default silently stayed on "tflite" and then
+        # rejected our .onnx model outright: "The tflite inference
+        # framework is selected, but onnx models were provided!" — a real,
+        # confirmed bug, not a missing-dependency issue. Passing
+        # inference_framework="onnx" explicitly fixes it. Also switched
+        # wakeword_model_paths → wakeword_models, this version's current
+        # (non-deprecated) parameter name for the same thing.
+        model = Model(
+            wakeword_models=[config.WAKE_WORD_MODEL_PATH],
+            inference_framework="onnx",
+        )
         print(f"  [WakeWord] ✅ Loaded model: {config.WAKE_WORD_MODEL_PATH}")
         return model
     except Exception as e:
