@@ -679,10 +679,31 @@ class Handler(BaseHTTPRequestHandler):
                 # rotation. DEVNULL previously swallowed this entirely, which
                 # made "why did the session end with no order?" undiagnosable
                 # from either side (crash? exception? no mic hardware?).
-                log_f = open(VOICE_LOG_PATH, 'a')
-                log_f.write(f"\n{'='*70}\n[{datetime.datetime.now().isoformat()}] "
-                            f"action={action} map={map_name} table={table_id}\n{'='*70}\n")
-                log_f.flush()
+                #
+                # Confirmed real bug on argo-desktop: this file was created
+                # back when argo-launcher ran as root (before the fix for the
+                # ntfields_models path issue switched it to User=argo), so it
+                # was root-owned and unwritable by 'argo' — open() raised an
+                # uncaught PermissionError here, which aborted this one
+                # request's connection ungracefully (the server itself kept
+                # running fine for everything else). The browser then saw a
+                # broken connection and reported "Could not reach launcher"
+                # for what was actually a file-permission problem several
+                # layers away. chmod after creating/opening it once (same
+                # pattern as NAV_PROGRESS_PATH/NAV_LOG_PATH above) fixes this
+                # from recurring; falling back to DEVNULL if that still fails
+                # means a logging permission hiccup can never block Sonic
+                # from actually starting.
+                try:
+                    with open(VOICE_LOG_PATH, 'a'):
+                        pass
+                    os.chmod(VOICE_LOG_PATH, 0o666)
+                    log_f = open(VOICE_LOG_PATH, 'a')
+                    log_f.write(f"\n{'='*70}\n[{datetime.datetime.now().isoformat()}] "
+                                f"action={action} map={map_name} table={table_id}\n{'='*70}\n")
+                    log_f.flush()
+                except OSError:
+                    log_f = subprocess.DEVNULL
                 _voice_proc = subprocess.Popen(
                     args,
                     cwd=SONIC_DIR,             # sonic/*.py use bare `import config` etc, not package-relative
@@ -694,7 +715,8 @@ class Handler(BaseHTTPRequestHandler):
                     stdout=log_f,
                     stderr=log_f,
                 )
-                log_f.close()  # child has its own fd via dup2; safe to close our copy now
+                if log_f is not subprocess.DEVNULL:
+                    log_f.close()  # child has its own fd via dup2; safe to close our copy now
                 _voice_action, _voice_map, _voice_table = action, map_name, table_id
             print(f'[launcher] voice session started  action={action}  map={map_name}  table={table_id}  pid={_voice_proc.pid}')
             self._json({'ok': True, 'status': 'started', 'pid': _voice_proc.pid,
