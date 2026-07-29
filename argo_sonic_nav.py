@@ -127,8 +127,12 @@ def _telem_reader(proc):
 # the Dashboard's live progress button keeps working no matter which nav
 # script is actually running.
 PROGRESS_FILE = "/tmp/argo_nav_progress"
+_progress_ready = False   # set True once "READY" is reported — see below
 
 def report_progress(status, message):
+    global _progress_ready
+    if status == "READY":
+        _progress_ready = True
     try:
         with open(PROGRESS_FILE, "w") as f:
             f.write(f"{status}|{int(time.time())}|{message}\n")
@@ -142,8 +146,17 @@ def log(msg, kind="info"):
     line  = f"  {DIM}{GRAY}{ts}{RS}  {icon}  {color}{msg}{RS}"
     with log_lock:
         log_lines.append(line)
-    if kind in ("run", "fail"):
-        report_progress("ERROR" if kind == "fail" else "OK", msg)
+    if kind == "fail":
+        report_progress("ERROR", msg)
+    elif kind == "run" and not _progress_ready:
+        # Steps after BT Navigator (camera, PC restamper, safety shield,
+        # RViz) still call log(..., "run") too — without this guard they'd
+        # silently overwrite the READY status reported right after BT
+        # Navigator activates, making the UI look permanently stuck on
+        # "Starting Safety Shield" even once Nav2 itself was genuinely
+        # ready — this exact bug already happened once on
+        # sh/start_argo_nav_ui.sh and cost real debugging time there too.
+        report_progress("OK", msg)
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  UI drawing
@@ -231,6 +244,14 @@ def build_env(home):
         "source /opt/ros/humble/setup.bash && "
         f"source {ws}/install/setup.bash && env"
     )
+    # sh/start-rosbridge.sh forces Cyclone DDS (Fast-DDS, ROS2 Humble's
+    # default, proved less reliable under discovery/service-call load on
+    # this hardware — see that script's own comment for the story). This
+    # script never set it at all, so every node it launches was running on
+    # a DIFFERENT RMW than rosbridge — two different RMW implementations
+    # can't discover each other's nodes at all, not just unreliably, which
+    # would explain both the UI never seeing the robot as ready AND a
+    # separate ROS2 action client (waypoint_manager.py) timing out too.
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
     env = {}
     for line in r.stdout.splitlines():
@@ -242,6 +263,7 @@ def build_env(home):
         env.get("LD_LIBRARY_PATH", "") +
         f":{sdk}/ascamera/libs/lib/aarch64-linux-gnu"
     )
+    env["RMW_IMPLEMENTATION"] = "rmw_cyclonedds_cpp"
     return env
 
 # ──────────────────────────────────────────────────────────────────────────────

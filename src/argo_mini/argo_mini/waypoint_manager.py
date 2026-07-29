@@ -11,8 +11,18 @@ import os
 import threading
 import time
 import math
+from pathlib import Path
 
-DEFAULT_WAYPOINTS_DIR = os.path.expanduser('~/argo_mini_ws/src/argo_mini/waypoints')
+# Was hardcoded to ~/argo_mini_ws/src/argo_mini/waypoints — a separate,
+# diverged workspace from this repo (see argo_sonic_nav.py's own history
+# for the same class of mistake), so this loaded a different, effectively
+# empty waypoints file than the one the UI actually reads/writes
+# (backend/launcher.py's WAYPOINTS_DIR, <repo_root>/src/argo_mini/waypoints).
+# Derived from this file's own location instead — __file__ still resolves
+# back through the symlink to the true source location under a
+# --symlink-install build (this team's own convention), whether launched
+# directly (`python3 .../waypoint_manager.py`) or via `ros2 run`.
+DEFAULT_WAYPOINTS_DIR = str(Path(__file__).resolve().parent.parent / 'waypoints')
 
 class WaypointManager(Node):
     def __init__(self):
