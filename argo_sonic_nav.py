@@ -127,12 +127,23 @@ def _telem_reader(proc):
 # the Dashboard's live progress button keeps working no matter which nav
 # script is actually running.
 PROGRESS_FILE = "/tmp/argo_nav_progress"
-_progress_ready = False   # set True once "READY" is reported — see below
+# Once True, routine "run"-kind progress notes stop overwriting the file —
+# only report_progress("ERROR", ...) or a fresh explicit call can move past
+# it. Without this, ANY real failure (a lifecycle node never reaching
+# "active", not just BT Navigator specifically) would be silently erased
+# the moment the next step's ordinary "Starting X..." message came in,
+# since this script never aborts on a failed activation — it just logs a
+# warning/fail and keeps going. Set on both "READY" (so later benign steps
+# like the camera/safety shield don't erase it — this exact bug already
+# happened once on sh/start_argo_nav_ui.sh) and "ERROR" (so a genuine
+# failure sticks and is actually visible instead of getting overwritten by
+# the very next routine step).
+_progress_locked = False
 
 def report_progress(status, message):
-    global _progress_ready
-    if status == "READY":
-        _progress_ready = True
+    global _progress_locked
+    if status in ("READY", "ERROR"):
+        _progress_locked = True
     try:
         with open(PROGRESS_FILE, "w") as f:
             f.write(f"{status}|{int(time.time())}|{message}\n")
@@ -148,14 +159,7 @@ def log(msg, kind="info"):
         log_lines.append(line)
     if kind == "fail":
         report_progress("ERROR", msg)
-    elif kind == "run" and not _progress_ready:
-        # Steps after BT Navigator (camera, PC restamper, safety shield,
-        # RViz) still call log(..., "run") too — without this guard they'd
-        # silently overwrite the READY status reported right after BT
-        # Navigator activates, making the UI look permanently stuck on
-        # "Starting Safety Shield" even once Nav2 itself was genuinely
-        # ready — this exact bug already happened once on
-        # sh/start_argo_nav_ui.sh and cost real debugging time there too.
+    elif kind == "run" and not _progress_locked:
         report_progress("OK", msg)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -331,6 +335,10 @@ def wait_lifecycle_active(node, env, timeout=30):
     return False
 
 def lc_node(node, env, configure_timeout=20, activate_timeout=15):
+    """Returns True only if the node actually confirmed 'active' — callers
+    that unconditionally proceed (e.g. reporting READY) after calling this
+    without checking the return value were treating a real activation
+    failure as a plain warning and claiming ready regardless."""
     log(f"Lifecycle configure  {node}", "sys")
     runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
     if not wait_lifecycle_state(node, 'inactive', env, timeout=configure_timeout):
@@ -339,8 +347,10 @@ def lc_node(node, env, configure_timeout=20, activate_timeout=15):
     runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
     if wait_lifecycle_state(node, 'active', env, timeout=activate_timeout):
         log(f"Active  {node}", "ok")
+        return True
     else:
         log(f"FAILED to activate {node} – check node logs", "fail")
+        return False
 
 def wait_lifecycle_state(node, state, env, timeout=30):
     """Poll ros2 lifecycle get until node reports the expected state."""
@@ -637,8 +647,19 @@ def main():
     # ── 11. BT Navigator ──────────────────────────────────────────────────────
     launch("BT Navigator",
            f"ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file {nav_cfg}", env)
-    time.sleep(5); lc_node("/bt_navigator", env); step_done("BT Navigator")
-    report_progress("READY", "Nav2 fully activated - ready for goals")
+    time.sleep(5)
+    bt_active = lc_node("/bt_navigator", env)
+    step_done("BT Navigator")
+    if bt_active:
+        report_progress("READY", "Nav2 fully activated - ready for goals")
+    else:
+        # This used to report READY unconditionally right here, regardless
+        # of whether bt_navigator's lifecycle activation actually
+        # succeeded — meaning a genuine activation failure looked
+        # identical to success everywhere except this one easy-to-miss
+        # "fail"-kind log line, and the UI would show "ready" while
+        # /navigate_to_pose was never actually up.
+        report_progress("ERROR", "bt_navigator failed to activate - /navigate_to_pose is not available")
 
     # ── 12. Depth Camera ──────────────────────────────────────────────────────
     if not no_cam:
