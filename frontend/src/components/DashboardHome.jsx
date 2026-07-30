@@ -62,6 +62,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
     startNav: startNav,
     estop: estop,
+    setShowSetPose: setShowSetPose,
   }))
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
@@ -489,6 +490,31 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             </div>
           ))}
         </div>
+
+        {navState === 'running' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            {!navActionReady && (
+              <div className="glass-card" style={{ padding: 12 }}>
+                <div style={{ fontSize: 9.5, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Nav Status</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                  {navProgress.message || 'Starting navigation stack...'}
+                </div>
+              </div>
+            )}
+            {!navActionReady && (
+              <button
+                onClick={() => setShowSetPose(true)}
+                style={{
+                  width: '100%', padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
+                  background: 'rgba(59,240,155,0.12)', border: '1px solid rgba(59,240,155,0.3)', color: 'var(--ok)',
+                  cursor: 'pointer',
+                }}
+              >
+                📍 Set 2D Pose Estimate
+              </button>
+            )}
+          </div>
+        )}
 
       </aside>
 
