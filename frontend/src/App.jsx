@@ -33,6 +33,9 @@ export default function App() {
   const [selectedEnv, setSelectedEnv] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const [selectedMap, setSelectedMap] = useState(() => localStorage.getItem('argo_selected_map') || 'office_map')
+  const [navInitializing, setNavInitializing] = useState(false)
+  const [navReady, setNavReady] = useState(false)
+  const [navPoseSet, setNavPoseSet] = useState(false)
   const retryRef = useRef(null)
 
   const [mapData, setMapData]     = useState(null)
@@ -326,18 +329,32 @@ export default function App() {
 
           {/* Start/Stop Argo Buttons */}
           <button
-            onClick={() => dashboardRef.current?.startNav?.()}
+            onClick={() => { setNavInitializing(true); dashboardRef.current?.startNav?.() }}
+            disabled={navInitializing}
             style={{
               padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
-              background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)', color: 'var(--gold-bright)',
+              background: navReady ? 'rgba(59,240,155,0.12)' : 'rgba(226,179,92,0.14)',
+              border: navReady ? '1px solid rgba(59,240,155,0.3)' : '1px solid rgba(226,179,92,0.4)',
+              color: navReady ? 'var(--ok)' : 'var(--gold-bright)',
               display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+              opacity: navInitializing ? 0.6 : 1,
+              cursor: navInitializing ? 'not-allowed' : 'pointer',
             }}
           >
-            ▶ Start Argo
+            {navInitializing ? (
+              <>
+                <span style={{ display: 'inline-block', animation: 'spin-slow 1s linear infinite' }}>⏳</span>
+                Starting...
+              </>
+            ) : navReady ? (
+              <>✓ Nav Ready</>
+            ) : (
+              <>▶ Start Argo</>
+            )}
           </button>
 
           <button
-            onClick={() => dashboardRef.current?.estop?.()}
+            onClick={() => { setNavInitializing(false); setNavReady(false); setNavPoseSet(false); dashboardRef.current?.estop?.() }}
             style={{
               padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
               background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.45)', color: 'var(--danger)',
@@ -378,6 +395,9 @@ export default function App() {
             robotPose={robotPose}
             onOpenSettings={() => setShowSettings(true)}
             onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
+            onNavInitializing={setNavInitializing}
+            onNavReady={setNavReady}
+            onNavPoseSet={setNavPoseSet}
           />
         )}
 
