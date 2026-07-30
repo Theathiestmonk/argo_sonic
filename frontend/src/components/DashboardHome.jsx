@@ -61,6 +61,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   useImperativeHandle(ref, () => ({
     toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
     startNav: startNav,
+    stopNav: stopNav,
     estop: estop,
     setShowSetPose: setShowSetPose,
   }))
@@ -425,7 +426,18 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // of "immediately". Kills only serial_bridge, not the rest of the nav
   // stack (SLAM/planner/etc. keep running), so resuming doesn't require a
   // full restart.
+  const sendZeroVelocity = () => {
+    if (!ros?.connection?.isConnected) return
+    try {
+      const cmdVelTopic = ros.topic('/cmd_vel', 'geometry_msgs/Twist')
+      cmdVelTopic?.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } })
+    } catch (e) {
+      console.log('Could not send zero velocity:', e)
+    }
+  }
+
   const estop = () => {
+    sendZeroVelocity()
     fetch(`${launcherUrl}/estop`, { method: 'POST' })
       .then(() => { setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
       .catch(() => showToast('Could not reach launcher for E-STOP', 'danger'))
@@ -505,30 +517,41 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         {navState === 'running' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
             {!navActionReady ? (
-              <>
-                <div className="glass-card" style={{ padding: 12 }}>
-                  <div style={{ fontSize: 9.5, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>⏳ Initializing</div>
-                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
-                    {navProgress.message || 'Starting navigation stack...'}
-                  </div>
+              <div className="glass-card" style={{ padding: 12 }}>
+                <div style={{ fontSize: 9.5, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>⏳ Initializing</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                  {navProgress.message || 'Starting navigation stack...'}
                 </div>
-                <button
-                  onClick={() => setShowSetPose(true)}
-                  style={{
-                    width: '100%', padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
-                    background: 'rgba(59,240,155,0.12)', border: '1px solid rgba(59,240,155,0.3)', color: 'var(--ok)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  📍 Set 2D Pose Estimate
-                </button>
-              </>
+              </div>
             ) : (
               <div className="glass-card" style={{ padding: 12, background: 'rgba(59,240,155,0.15)' }}>
                 <div style={{ fontSize: 9.5, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>✓ Ready</div>
-                <div style={{ fontSize: 11, color: 'var(--ok)', marginTop: 6 }}>Navigation stack is active and ready for goals</div>
+                <div style={{ fontSize: 11, color: 'var(--ok)', marginTop: 6 }}>Navigation stack is active</div>
               </div>
             )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setShowSetPose(true)}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
+                  background: 'rgba(59,240,155,0.12)', border: '1px solid rgba(59,240,155,0.3)', color: 'var(--ok)',
+                  cursor: 'pointer',
+                }}
+              >
+                📍 Pose
+              </button>
+              <button
+                onClick={sendZeroVelocity}
+                title="Emergency stop - send zero velocity"
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
+                  background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.3)', color: 'var(--danger)',
+                  cursor: 'pointer',
+                }}
+              >
+                🛑 Stop
+              </button>
+            </div>
           </div>
         )}
 

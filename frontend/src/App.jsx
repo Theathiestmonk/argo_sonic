@@ -354,7 +354,13 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => { setNavInitializing(false); setNavReady(false); setNavPoseSet(false); dashboardRef.current?.estop?.() }}
+            onClick={() => {
+              setNavInitializing(false);
+              setNavReady(false);
+              setNavPoseSet(false);
+              dashboardRef.current?.stopNav?.();
+              dashboardRef.current?.estop?.()
+            }}
             style={{
               padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
               background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.45)', color: 'var(--danger)',

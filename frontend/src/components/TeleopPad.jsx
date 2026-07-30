@@ -34,10 +34,19 @@ export default function TeleopPad({ connected, compact = false }) {
   // replaced on every reconnect (see ros.js), which would otherwise leave
   // a cached Topic silently publishing into a dead connection forever.
   const publish = useCallback((lx, az) => {
-    ros.topic('/cmd_vel', 'geometry_msgs/Twist')?.publish({
-      linear: { x: lx * speed, y: 0, z: 0 },
-      angular: { x: 0, y: 0, z: az },
-    })
+    try {
+      const topic = ros.topic('/cmd_vel', 'geometry_msgs/Twist')
+      if (!topic) {
+        console.warn('cmd_vel topic not available')
+        return
+      }
+      topic.publish({
+        linear: { x: lx * speed, y: 0, z: 0 },
+        angular: { x: 0, y: 0, z: az },
+      })
+    } catch (e) {
+      console.warn('Failed to publish cmd_vel:', e)
+    }
   }, [speed])
 
   const publishStopUntilZero = useCallback(() => {
