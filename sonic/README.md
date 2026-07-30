@@ -133,15 +133,16 @@ it's triggering on background noise/other words.
 
 ---
 
-## Voice — bulbul:v3 + shubh
+## Voice — bulbul:v3 + ishita
 
-Using Sarvam's **bulbul:v3** model with the **shubh** speaker — the
-official default voice for v3, tuned to sound neutral and friendly.
+Using Sarvam's **bulbul:v3** model with the **ishita** speaker, at
+pace `0.9` (slightly slower than bulbul:v3's normal `1.0`).
 
-`varun` was considered but Sarvam's own docs flag it as carrying a
-"deep, dramatic villain/suspense character," explicitly recommending
-it only for thriller/drama content — not a fit for a friendly assistant
-robot. `shubh` is the safer, production-proven default instead.
+Previously used `shubh` (v3's neutral-friendly default male voice).
+`varun` was considered even earlier but Sarvam's own docs flag it as
+carrying a "deep, dramatic villain/suspense character," explicitly
+recommending it only for thriller/drama content — not a fit for a
+friendly assistant robot.
 
 ---
 

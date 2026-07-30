@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import { ros } from '../ros'
 import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
@@ -32,12 +32,11 @@ const TASK_TO_ACTION = {
 // common case of "do X at table Y" (see sendArgo's taskOverride param).
 const TABLE_ACTIONS = [
   ['Take order',   'Take Order'],
-  ['Deliver',      'Deliver Order'],
-  ['Billing',      'Give Bill'],
-  ['Room service', 'Room Service'],
+  ['Deliver',      'Deliver'],
+  ['Billing',      'Send Bill'],
 ]
 
-export default function DashboardHome({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings }) {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle }, ref) => {
   const [tables, setTables]         = useState({})
   const [showSetPose, setShowSetPose] = useState(false)
   const [selectedTask, setSelectedTask] = useState('Deliver')
@@ -56,6 +55,14 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
   const [showAddPlace, setShowAddPlace] = useState(false)
   const [pendingPlace, setPendingPlace] = useState(null)   // { wx, wy } once the map's been clicked
   const [newPlaceName, setNewPlaceName] = useState('')
+  const [showTeleopPad, setShowTeleopPad] = useState(false)
+  const [showActivityPanel, setShowActivityPanel] = useState(false)
+
+  useImperativeHandle(ref, () => ({
+    toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
+    startNav: startNav,
+    estop: estop,
+  }))
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
   // the robot; picking a map here only decides which waypoints.json to read.
@@ -449,15 +456,19 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
       {/* ── Left rail: Argo control ── */}
       <aside style={{ padding: '4px 20px 24px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
-          <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: 14 }}>Argo Status</div>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 20, fontWeight: 800, letterSpacing: '-0.5px', marginBottom: 4 }}>{greeting}</h2>
+          <p style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 16 }}>Here's what's happening right now.</p>
+        </div>
+
+        <div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {[
-              ['Current spot', curPos, 'Right now', '#fff'],
-              ['Status', curStatus, curStatus === 'Moving' ? 'Moving' : 'Ready', curStatus === 'Moving' ? 'var(--gold)' : 'var(--ok)'],
-              ['Task', taskLabel, 'Next job', 'var(--gold-bright)'],
-              ['Battery', '78%', '~1h 20m', 'var(--ok)'],
+              ['Location', curPos, '', '#fff'],
+              ['Status', curStatus, '', curStatus === 'Moving' ? 'var(--gold)' : 'var(--ok)'],
+              ['Task', taskLabel, '', 'var(--gold-bright)'],
+              ['Working Hours', '~1h 20m', 'Remaining', 'var(--ok)'],
             ].map(([k, v, s, color]) => (
-              <div key={k} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass)', borderRadius: 14, padding: 12 }}>
+              <div key={k} className="glass-card" style={{ padding: 12 }}>
                 <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{k}</div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginTop: 5, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
                 <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>{s}</div>
@@ -466,249 +477,77 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
           </div>
         </div>
 
-        <div style={{ paddingTop: 16, borderTop: '1px dashed rgba(255,255,255,0.08)' }}>
-          <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 7, background: 'rgba(226,179,92,0.12)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 800, flexShrink: 0 }}>1</span>
-            What do you need?
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {TASKS.map(t => (
-              <button key={t} style={chip(selectedTask === t)} onClick={() => { setSelectedTask(t); setTaskLabel(t) }}>{t}</button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ paddingTop: 16, borderTop: '1px dashed rgba(255,255,255,0.08)' }}>
-          <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 7, background: 'rgba(226,179,92,0.12)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 800, flexShrink: 0 }}>2</span>
-            Where should Argo go?
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {destinations.map(d => (
-              <button key={d.name} style={chip(selectedDest === d.name)} onClick={() => setSelectedDest(d.name)}>{d.name}</button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ paddingTop: 16, borderTop: '1px dashed rgba(255,255,255,0.08)' }}>
-          <div style={{ fontSize: 10.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 20, height: 20, borderRadius: 7, background: 'rgba(226,179,92,0.12)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 800, flexShrink: 0 }}>3</span>
-            Send Argo
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn-ghost" style={{ flex: 1 }} onClick={recall}>Send Home</button>
-            <button className="btn-primary" style={{ flex: 1 }} onClick={() => sendArgo()}>Confirm</button>
-          </div>
-          {!(connected && navReady) && (
-            <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
-              {navState === 'running' && navMap === selectedMap
-                ? 'Nav2 is still starting up — this takes a minute or two, or Send/Confirm now to simulate the trip.'
-                : `No live navigation for ${selectedMap} yet — Send/Confirm still works, it'll simulate the trip.`}
-            </p>
-          )}
-          {voiceStatus.running && (
-            <div style={{
-              marginTop: 12, padding: '10px 14px', borderRadius: 10,
-              background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.28)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-            }}>
-              <span style={{ fontSize: 12, color: 'var(--gold-bright)', fontWeight: 600 }}>
-                🎙️ Sonic is talking with {destinations.find(d => d.key === voiceStatus.table)?.name || `Table ${voiceStatus.table}`} ({voiceStatus.action})
-              </span>
-              <button onClick={stopVoice} className="btn-ghost" style={{ padding: '4px 10px', fontSize: 11.5 }}>Stop</button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
+          {[
+            { k: "Today's Revenue", v: '₹18,240', d: '+12.5% vs yesterday', pos: true },
+            { k: 'Total Orders', v: '56', d: '+8 new today' },
+          ].map(({ k, v, d, pos }) => (
+            <div key={k} className="glass-card" style={{ padding: 12 }}>
+              <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{k}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 5, color: 'var(--gold-bright)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
+              <div style={{ fontSize: 10.5, color: pos ? 'var(--ok)' : 'var(--muted)', marginTop: 2 }}>{d}</div>
             </div>
-          )}
+          ))}
         </div>
 
-        {/* Manual drive — same TeleopPad already used in ExplorationPanel/
-            TablesPanel, just not previously wired into this dashboard view.
-            Publishes straight to /cmd_vel (what serial_bridge actually
-            subscribes to). Buttons are already self-disabling via the
-            `connected` prop; if serial_bridge itself isn't running (e.g.
-            still e-stopped, not yet resumed) a press is a harmless no-op —
-            no subscriber, nothing happens — so no need to gate this on
-            estop state specifically. */}
-        <div className="glass-card" style={{ padding: 20, marginTop: 16 }}>
-          <div className="label-xs" style={{ marginBottom: 16 }}>Drive Controls</div>
-          <TeleopPad connected={connected} compact />
-        </div>
       </aside>
 
       {/* ── Main ── */}
       <main style={{ paddingLeft: 20, borderLeft: '1px solid var(--border-glass)' }}>
-        <div id="dash-overview" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 28, flexWrap: 'wrap', gap: 16 }}>
-          <div>
-            <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 27, fontWeight: 800, letterSpacing: '-0.5px' }}>{greeting}</h2>
-            <p style={{ color: 'var(--muted)', fontSize: 14, marginTop: 4 }}>Here's what's happening right now.</p>
-          </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <button
-              onClick={estopped ? estopResume : estop}
-              title={estopped ? 'Resume serial_bridge / motor control' : 'Immediately cut motor commands — SLAM/planner keep running'}
-              style={{
-                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
-                background: estopped ? 'rgba(59,240,155,0.12)' : 'rgba(255,65,65,0.12)',
-                border: estopped ? '1px solid rgba(59,240,155,0.4)' : '1px solid rgba(255,65,65,0.45)',
-                color: estopped ? 'var(--ok)' : 'var(--danger)',
-                display: 'flex', alignItems: 'center', gap: 7,
-              }}
-            >
-              {estopped ? '▶ Resume Motors' : '🛑 E-STOP'}
-            </button>
-            <button
-              onClick={onAddMap}
-              style={{
-                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 700,
-                background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-glass)', color: 'var(--muted)',
-                display: 'flex', alignItems: 'center', gap: 7,
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-              Setup / Remap
-            </button>
-
-            {navReady ? (
-              <button
-                onClick={stopNav}
-                title={`Navigating on ${selectedMap} — click to stop`}
-                style={{
-                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                  background: 'rgba(59,240,155,0.08)', border: '1px solid rgba(59,240,155,0.28)', color: 'var(--ok)',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}
-              >
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ok)', boxShadow: '0 0 7px var(--ok)', animation: 'pulse-dot 2s infinite' }} />
-                Navigating on {selectedMap}
-              </button>
-            ) : navState === 'running' && navMap === selectedMap && !connected ? (
-              // The launcher's wrapper process is up, but we have no rosbridge
-              // WebSocket connection at all — /rosapi/topics can never resolve
-              // in this state, so navActionReady would silently stay false
-              // forever. Saying "Waiting for Nav2" here would hide the real
-              // blocker (rosbridge itself isn't reachable) behind a message
-              // that implies Nav2 is just slow — say what's actually wrong.
-              <button
-                onClick={stopNav}
-                title="rosbridge_websocket isn't reachable — check it's running and the URL/port are correct"
-                style={{
-                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                  background: 'rgba(255,94,94,0.08)', border: '1px solid rgba(255,94,94,0.3)', color: 'var(--danger)',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}
-              >
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
-                Not connected to rosbridge
-              </button>
-            ) : navState === 'running' && navMap === selectedMap && navProgress.status === 'ERROR' ? (
-              // sh/start_argo_nav_ui.sh itself reported a specific failed
-              // step (see GET /nav_progress) — show exactly what broke
-              // instead of leaving this looking identical to "still
-              // starting", which used to mean the only way to find out
-              // something had failed, or what, was to SSH in and dig
-              // through process lists and hidden log files by hand.
-              <button
-                onClick={stopNav}
-                title={`${navProgress.message} — click to stop`}
-                style={{
-                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                  background: 'rgba(255,94,94,0.08)', border: '1px solid rgba(255,94,94,0.3)', color: 'var(--danger)',
-                  display: 'flex', alignItems: 'center', gap: 8, maxWidth: 340,
-                }}
-              >
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Failed: {navProgress.message}</span>
-              </button>
-            ) : navState === 'running' && navMap === selectedMap ? (
-              // Wrapper process is up AND rosbridge is connected, but Nav2's
-              // own ~90s+ lifecycle chain (camera wait, costmap wait, several
-              // lifecycle activations) hasn't actually finished yet — don't
-              // claim "ready" early. navActionReady's own polling (above)
-              // has no fixed timeout — it keeps checking every 2s for as long
-              // as this state holds, however long Nav2 actually takes.
-              <button
-                onClick={stopNav}
-                title="Nav2 is still starting up — click to cancel"
-                style={{
-                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                  background: 'rgba(127,168,232,0.1)', border: '1px solid rgba(127,168,232,0.3)', color: 'var(--blue)',
-                  display: 'flex', alignItems: 'center', gap: 8, maxWidth: 340,
-                }}
-              >
-                <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid currentColor', borderTopColor: 'transparent', animation: 'spin-slow 0.8s linear infinite', flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {navProgress.message || 'Waiting for Nav2 (~1–2 min)…'}
-                </span>
-              </button>
-            ) : (
-              <button
-                onClick={startNav}
-                disabled={navState === 'starting'}
-                style={{
-                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 700,
-                  background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)', color: 'var(--gold-bright)',
-                  display: 'flex', alignItems: 'center', gap: 8, opacity: navState === 'starting' ? 0.6 : 1,
-                }}
-              >
-                {navState === 'starting' && (
-                  <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid currentColor', borderTopColor: 'transparent', animation: 'spin-slow 0.8s linear infinite', flexShrink: 0 }} />
-                )}
-                {navState === 'starting' ? 'Starting…' : `Start Navigating on ${selectedMap}`}
-              </button>
-            )}
-
-            {/* Nav2's localization has no idea where the robot actually is
-                until told — normally an RViz "2D Pose Estimate" step, but
-                the robot is headless (no RViz/DISPLAY). Only offered once
-                navReady is genuinely true (the same real-readiness check
-                gating the buttons above), since setting a pose before the
-                action server exists would just be silently ignored. */}
-            {navReady && (
-              <button
-                onClick={() => setShowSetPose(true)}
-                title="Tell Nav2 where Argo is actually standing right now"
-                style={{
-                  padding: '9px 16px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                  background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.28)', color: 'var(--gold-bright)',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2 12 6M12 18 12 22M2 12 6 12M18 12 22 12"/><circle cx="12" cy="12" r="5"/></svg>
-                Set Robot Position
-              </button>
-            )}
-            <div style={{ padding: '9px 16px', borderRadius: 99, fontSize: 13, fontWeight: 600, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', color: 'var(--muted)' }}>{time}</div>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 32 }}>
-          {[
-            { k: "Today's Revenue", v: '₹18,240', d: '+12.5% vs yesterday', pos: true },
-            { k: 'Total Orders', v: '56', d: '+8 new today' },
-            { k: 'Locations Mapped', v: String(entries.length), d: 'Ready to navigate' },
-            { k: 'Argo Status', v: curStatus === 'Moving' ? 'Moving' : 'Ready', d: 'Battery 78%', color: curStatus === 'Moving' ? 'var(--gold)' : 'var(--ok)' },
-          ].map(({ k, v, d, pos, color }) => (
-            <div key={k} className="glass-card" style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <div style={{ fontSize: 10.5, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700 }}>{k}</div>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 24, fontWeight: 800, margin: '2px 0', color }}>{v}</div>
-              <div style={{ fontSize: 11.5, color: pos ? 'var(--ok)' : 'var(--muted)' }}>{d}</div>
-            </div>
-          ))}
-        </section>
-
         {/* Saved places grid */}
         <section id="dash-places">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <div>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 19, fontWeight: 700 }}>Saved Places</div>
-              <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 3 }}>Click any place to send Argo there instantly.</div>
-            </div>
+            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 19, fontWeight: 700 }}>Locations</div>
             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
               <button onClick={() => setShowAddPlace(true)} style={{ color: 'var(--gold-bright)', fontSize: 13, fontWeight: 600 }}>+ Add place</button>
               <button onClick={onAddMap} style={{ color: 'var(--muted)', fontSize: 13, fontWeight: 600 }} title="Full setup wizard — remap the space, build a new map, etc.">Setup wizard →</button>
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16, marginBottom: 36 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 36 }}>
+            {/* Home Card */}
+            <div
+              className="glass-card"
+              style={{
+                padding: '18px 20px', cursor: 'pointer',
+                border: selectedDest === 'Home' ? '2px solid var(--gold)' : 'none',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
+                minHeight: '280px',
+              }}
+              onClick={() => setSelectedDest('Home')}
+            >
+              <div style={{
+                width: '56px', height: '56px', borderRadius: '50%',
+                border: '2px solid var(--gold-bright)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--gold-bright)' }}>
+                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                  <polyline points="9 22 9 12 15 12 15 22"/>
+                </svg>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6, width: '100%' }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSelectedDest('Kitchen'); sendArgo('Kitchen') }}
+                  style={{
+                    padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
+                    background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.22)',
+                    color: 'var(--gold-bright)', cursor: 'pointer',
+                  }}
+                >
+                  Go to kitchen
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSelectedDest('Docker Station'); sendArgo('Docker Station') }}
+                  style={{
+                    padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
+                    background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.22)',
+                    color: 'var(--gold-bright)', cursor: 'pointer',
+                  }}
+                >
+                  Go to Docker
+                </button>
+              </div>
+            </div>
+
             {entries.length === 0 ? (
               <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '56px 20px', color: 'var(--muted)', fontSize: 14, lineHeight: 1.8 }}>
                 No places saved yet.<br/>
@@ -725,9 +564,8 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
                   className="glass-card"
                   onClick={() => editId !== key && setSelectedDest(label)}
                   style={{
-                    borderLeft: `3px solid ${selectedDest === label ? 'var(--gold)' : 'rgba(255,255,255,0.15)'}`,
                     padding: '18px 20px', cursor: editId === key ? 'default' : 'pointer',
-                    boxShadow: selectedDest === label ? '0 0 0 2px rgba(226,179,92,0.2), var(--shadow-fluid)' : undefined,
+                    border: selectedDest === label ? '2px solid var(--gold)' : 'none',
                   }}
                 >
                   {editId === key ? (
@@ -755,52 +593,37 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
                         <button onClick={() => removeTable(key)} style={{ padding: '4px 6px', color: 'var(--danger)', borderRadius: 6, opacity: 0.7 }} title="Remove">
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                         </button>
-                        <div style={{ fontSize: 10, padding: '4px 10px', borderRadius: 99, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)', color: 'var(--muted)', whiteSpace: 'nowrap' }}>Saved</div>
                       </div>
                     </div>
                   )}
                   <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>{Number(t.x).toFixed(1)} m, {Number(t.y).toFixed(1)} m</div>
 
                   {order && (
-                    <div style={{ marginTop: 10 }}>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleBill(key) }}
-                        style={{
-                          fontSize: 10.5, fontWeight: 700, padding: '3px 9px', borderRadius: 99,
-                          background: 'rgba(226,179,92,0.1)', border: '1px solid rgba(226,179,92,0.28)',
-                          color: 'var(--gold-bright)', whiteSpace: 'nowrap',
-                        }}
-                      >
-                        🧾 {order.items.length} item{order.items.length === 1 ? '' : 's'} · {money(order.total)} {billOpen ? '▲' : '▼'}
-                      </button>
-                      {billOpen && (
-                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(226,179,92,0.3)' }} onClick={e => e.stopPropagation()}>
-                          {order.items.map((it, i) => (
-                            <div key={it.id || i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                              <span>{it.qty} × {it.name}</span>
-                              <span style={{ fontFamily: 'monospace' }}>{money(it.qty * it.price)}</span>
-                            </div>
-                          ))}
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.08)', fontWeight: 700, fontSize: 12.5 }}>
-                            <span>Total</span>
-                            <span style={{ fontFamily: 'monospace' }}>{money(order.total)}</span>
+                    <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed rgba(226,179,92,0.3)' }} onClick={e => e.stopPropagation()}>
+                        {order.items.map((it, i) => (
+                          <div key={it.id || i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                            <span>{it.qty} × {it.name}</span>
+                            <span style={{ fontFamily: 'monospace' }}>{money(it.qty * it.price)}</span>
                           </div>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); clearOrder(key) }}
-                            title="Clear this table's order history"
-                            style={{ marginTop: 8, fontSize: 10.5, fontWeight: 600, color: 'var(--danger)', opacity: 0.75, padding: '2px 6px' }}
-                          >
-                            Clear
-                          </button>
+                        ))}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.08)', fontWeight: 700, fontSize: 12.5 }}>
+                          <span>Total</span>
+                          <span style={{ fontFamily: 'monospace' }}>{money(order.total)}</span>
                         </div>
-                      )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); clearOrder(key) }}
+                          title="Clear this table's order history"
+                          style={{ marginTop: 8, fontSize: 10.5, fontWeight: 600, color: 'var(--danger)', opacity: 0.75, padding: '2px 6px' }}
+                        >
+                          Clear
+                        </button>
                     </div>
                   )}
 
                   {/* Direct action buttons — fire immediately with this table
                       as destination, no detour through the sidebar's
                       select-task / select-destination / confirm steps. */}
-                  <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
                     {TABLE_ACTIONS.map(([task, actLabel]) => {
                       const blocked = voiceStatus.running && voiceStatus.table !== key
                       const active = voiceStatus.running && voiceStatus.table === key && voiceStatus.action === TASK_TO_ACTION[task]
@@ -834,43 +657,95 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
           </div>
         </section>
 
-        {/* Activity + Alerts */}
-        <section id="dash-activity" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-          <div className="glass-card" style={{ padding: 24 }}>
-            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 17, fontWeight: 700 }}>Recent Activity</div>
-            <div style={{ color: 'var(--muted)', fontSize: 12, margin: '4px 0 16px' }}>What Argo has done today.</div>
-            <ul style={{ listStyle: 'none' }}>
-              {activity.length === 0 ? (
-                <li style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0' }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 11, flexShrink: 0 }}>—</div>
-                  <div style={{ fontSize: 13 }}>No activity yet<small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>Argo is ready to start</small></div>
-                </li>
-              ) : activity.map((a, i) => (
-                <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: i < activity.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 11, flexShrink: 0 }}>{a.dest.slice(0, 4)}</div>
-                  <div style={{ fontSize: 13 }}>{a.task} → {a.dest}<small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>{a.time}</small></div>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="glass-card" style={{ padding: 24 }}>
-            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 17, fontWeight: 700 }}>Alerts</div>
-            <div style={{ color: 'var(--muted)', fontSize: 12, margin: '4px 0 16px' }}>Things that may need attention.</div>
-            <ul style={{ listStyle: 'none' }}>
-              <li style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }} />
-                <div style={{ fontSize: 13 }}>All systems normal<small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>Argo is online and ready</small></div>
-              </li>
-              <li style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 0' }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--gold)', flexShrink: 0 }} />
-                <div style={{ fontSize: 13 }}>No pending tasks<small style={{ display: 'block', color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>Choose a destination and confirm</small></div>
-              </li>
-            </ul>
-          </div>
-        </section>
       </main>
 
       <RadialNav pages={radialPages} activePage="overview" />
+
+      {/* Floating Activity/Alerts Panel — top right corner */}
+      {showActivityPanel && (
+        <div style={{ position: 'fixed', top: 80, right: 24, zIndex: 100 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, maxWidth: 640 }}>
+            <div className="glass-card" style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Recent Activity</div>
+              <div style={{ color: 'var(--muted)', fontSize: 11, margin: '0 0 12px' }}>What Argo has done today.</div>
+              <ul style={{ listStyle: 'none' }}>
+                {activity.length === 0 ? (
+                  <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+                    <div style={{ fontSize: 12 }}>No activity yet<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 2 }}>Argo is ready to start</small></div>
+                  </li>
+                ) : activity.map((a, i) => (
+                  <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: i < activity.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(255,255,255,0.03)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 10, flexShrink: 0 }}>{a.dest.slice(0, 3)}</div>
+                    <div style={{ fontSize: 12 }}>{a.task} → {a.dest}<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>{a.time}</small></div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="glass-card" style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Alerts</div>
+              <div style={{ color: 'var(--muted)', fontSize: 11, margin: '0 0 12px' }}>Things that may need attention.</div>
+              <ul style={{ listStyle: 'none' }}>
+                <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }} />
+                  <div style={{ fontSize: 12 }}>All systems normal<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>Argo is online and ready</small></div>
+                </li>
+                <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--gold)', flexShrink: 0 }} />
+                  <div style={{ fontSize: 12 }}>No pending tasks<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>Choose a destination and confirm</small></div>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Teleop Pad — bottom right corner */}
+      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 100 }}>
+        {!showTeleopPad && (
+        <button
+          onClick={() => setShowTeleopPad(!showTeleopPad)}
+          title="Toggle drive controls"
+          style={{
+            padding: '12px 14px', borderRadius: 12, fontSize: 16,
+            background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)',
+            color: 'var(--gold-bright)', cursor: 'pointer', fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.2s',
+          }}
+        >
+          {/* Joystick icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="6" cy="6" r="4"/>
+            <path d="M6 10v8"/>
+            <path d="M2 6h8"/>
+            <circle cx="18" cy="18" r="3"/>
+            <path d="M18 21v2"/>
+            <path d="M15 18h6"/>
+          </svg>
+        </button>
+        )}
+        {showTeleopPad && (
+          <div className="glass-card" style={{ padding: 20, marginTop: 12, minWidth: 220 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div className="label-xs">Drive Controls</div>
+              <button
+                onClick={() => setShowTeleopPad(false)}
+                title="Minimize drive controls"
+                style={{
+                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
+                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+            </div>
+            <TeleopPad connected={connected} compact />
+          </div>
+        )}
+      </div>
 
       {showSetPose && (
         <div
@@ -964,4 +839,7 @@ export default function DashboardHome({ launcherUrl, selectedMap, connected, sho
       )}
     </div>
   )
-}
+})
+
+DashboardHomeComponent.displayName = 'DashboardHome'
+export default DashboardHomeComponent

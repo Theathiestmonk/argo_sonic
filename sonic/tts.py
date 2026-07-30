@@ -1,7 +1,7 @@
 """
 tts.py
 ------
-Sarvam TTS wrapper using bulbul:v3 with the "shubh" speaker.
+Sarvam TTS wrapper using bulbul:v3 with the "ishita" speaker.
 Sends text, gets back audio, plays it.
 Used by both the fast-matcher lane and the Groq LLM lane.
 """
@@ -45,7 +45,7 @@ def speak(text: str, block: bool = True) -> float:
                 "inputs": [text],
                 "target_language_code": config.SARVAM_LANGUAGE,
                 "model": config.SARVAM_TTS_MODEL,        # bulbul:v3
-                "speaker": config.SARVAM_SPEAKER,         # shubh
+                "speaker": config.SARVAM_SPEAKER,         # ishita
                 "pace": config.SARVAM_PACE,               # v3 range: 0.5-2.0
                 "temperature": config.SARVAM_TEMPERATURE, # v3 only, 0.01-1.0
                 "speech_sample_rate": config.SARVAM_SAMPLE_RATE,

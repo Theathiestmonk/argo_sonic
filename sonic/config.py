@@ -26,9 +26,9 @@ SARVAM_STT_MODEL = "saarika:v2.5"
 SARVAM_API_KEY     = os.environ.get("SARVAM_API_KEY", "")
 SARVAM_TTS_URL     = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_MODEL   = "bulbul:v3"
-SARVAM_SPEAKER     = "shubh"       # neutral friendly male, bulbul:v3 default
+SARVAM_SPEAKER     = "ishita"
 SARVAM_LANGUAGE    = "en-IN"
-SARVAM_PACE        = 1.1           # 0.5–2.0
+SARVAM_PACE        = 0.9           # 0.5–2.0 (1.0 = normal speed)
 SARVAM_TEMPERATURE = 0.6           # 0.01–1.0, v3 only
 SARVAM_SAMPLE_RATE = 24000         # v3 default
 SARVAM_TIMEOUT     = 15

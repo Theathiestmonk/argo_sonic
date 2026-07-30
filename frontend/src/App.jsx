@@ -19,6 +19,7 @@ function launcherUrl(rosUrl) {
 }
 
 export default function App() {
+  const dashboardRef = useRef(null)
   const [step, setStep]           = useState(0)
   const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
@@ -221,7 +222,7 @@ export default function App() {
       <header style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap',
         padding: '0 28px', gap: 16, height: 68,
-        background: 'rgba(10,8,14,0.55)',
+        background: '#121212',
         backdropFilter: 'blur(30px) saturate(180%)',
         WebkitBackdropFilter: 'blur(30px) saturate(180%)',
         borderBottom: '1px solid var(--border-glass)',
@@ -230,20 +231,18 @@ export default function App() {
         {/* Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
           <div style={{
-            width: 36, height: 36, borderRadius: 11,
-            background: 'linear-gradient(180deg,rgba(255,255,255,0.9) 0%,rgba(255,255,255,0) 100%)',
-            backgroundColor: 'var(--gold)',
-            backgroundBlendMode: 'overlay',
-            color: '#1a1103', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 17,
+            width: 40, height: 40, borderRadius: '50%',
+            border: '2px solid var(--gold)',
+            background: 'transparent',
+            color: 'var(--gold)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 18,
             display: 'grid', placeItems: 'center',
-            boxShadow: '0 6px 18px rgba(226,179,92,0.28)',
           }}>A</div>
           <div>
             <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 16, letterSpacing: '-0.2px' }}>
-              Argo{selectedEnv ? ` · ${selectedEnv.name}` : ''}
+              ARGO SONIC{selectedEnv ? ` · ${selectedEnv.name}` : ''}
             </div>
-            <div style={{ color: 'var(--muted)', fontSize: 10.5, letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>
-              Smart Robot Assistant
+            <div style={{ color: connected ? 'var(--ok)' : 'var(--muted)', fontSize: 11, letterSpacing: '0.05em', fontWeight: 600, marginTop: 3 }}>
+              {connected ? 'Connected' : 'Not connected'}
             </div>
           </div>
         </div>
@@ -284,45 +283,69 @@ export default function App() {
         </nav>
         )}
 
-        {/* Connection */}
+        {/* Connection Edit — hidden but accessible for rosbridge URL changes */}
+        {editingUrl && (
         <div style={{ flexShrink: 0 }}>
-          {editingUrl ? (
-            <form
-              onSubmit={e => { e.preventDefault(); connect(); setEditingUrl(false) }}
-              style={{ display: 'flex', gap: 6 }}
-            >
-              <input
-                autoFocus value={rosUrl} onChange={e => setRosUrl(e.target.value)}
-                style={{
-                  padding: '7px 12px', borderRadius: 9, fontSize: 12,
-                  background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)',
-                  color: '#fff', outline: 'none', width: 180,
-                }}
-              />
-              <button type="submit" className="btn-ok" style={{ padding: '7px 14px', fontSize: 12 }}>Connect</button>
-              <button type="button" onClick={() => setEditingUrl(false)} className="btn-ghost" style={{ padding: '7px 10px', fontSize: 12 }}>✕</button>
-            </form>
-          ) : (
-            <button
-              onClick={() => setEditingUrl(true)}
+          <form
+            onSubmit={e => { e.preventDefault(); connect(); setEditingUrl(false) }}
+            style={{ display: 'flex', gap: 6 }}
+          >
+            <input
+              autoFocus value={rosUrl} onChange={e => setRosUrl(e.target.value)}
               style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '7px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                background: connected ? 'rgba(59,240,155,0.08)' : 'rgba(255,255,255,0.03)',
-                border: `1px solid ${connected ? 'rgba(59,240,155,0.28)' : 'var(--border-glass)'}`,
-                color: connected ? 'var(--ok)' : 'var(--muted)',
+                padding: '7px 12px', borderRadius: 9, fontSize: 12,
+                background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)',
+                color: '#fff', outline: 'none', width: 180,
               }}
-            >
-              <span style={{
-                width: 7, height: 7, borderRadius: '50%',
-                background: connected ? 'var(--ok)' : 'rgba(255,255,255,0.25)',
-                boxShadow: connected ? '0 0 7px var(--ok)' : 'none',
-                animation: connected ? 'pulse-dot 2s infinite' : 'none',
-                flexShrink: 0,
-              }} />
-              {connected ? 'Connected' : 'Not connected'}
-            </button>
-          )}
+            />
+            <button type="submit" className="btn-ok" style={{ padding: '7px 14px', fontSize: 12 }}>Connect</button>
+            <button type="button" onClick={() => setEditingUrl(false)} className="btn-ghost" style={{ padding: '7px 10px', fontSize: 12 }}>✕</button>
+          </form>
+        </div>
+        )}
+
+        {/* Right-aligned buttons */}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginLeft: 'auto' }}>
+          {/* Activity Bell */}
+          <button
+            onClick={() => dashboardRef.current?.toggleActivityPanel?.()}
+            title="View recent activity and alerts"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '7px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
+              background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.28)',
+              color: 'var(--gold-bright)', flexShrink: 0,
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            Activity
+          </button>
+
+          {/* Start/Stop Argo Buttons */}
+          <button
+            onClick={() => dashboardRef.current?.startNav?.()}
+            style={{
+              padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
+              background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)', color: 'var(--gold-bright)',
+              display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+            }}
+          >
+            ▶ Start Argo
+          </button>
+
+          <button
+            onClick={() => dashboardRef.current?.estop?.()}
+            style={{
+              padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
+              background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.45)', color: 'var(--danger)',
+              display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+            }}
+          >
+            🛑 Stop Argo
+          </button>
         </div>
       </header>
 
@@ -344,6 +367,7 @@ export default function App() {
 
         {view === 'dashboard' && !showSettings && (
           <DashboardHome
+            ref={dashboardRef}
             launcherUrl={launcherUrl(rosUrl)}
             selectedMap={selectedMap}
             connected={connected}

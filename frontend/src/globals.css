@@ -1,7 +1,7 @@
 :root {
-  --bg: #060408;
-  --glass: rgba(14, 10, 20, 0.32);
-  --glass-dense: rgba(16, 11, 24, 0.58);
+  --bg: #121212;
+  --glass: rgba(255, 255, 255, 0.05);
+  --glass-dense: rgba(255, 255, 255, 0.05);
   --glass-specular: linear-gradient(135deg,
     rgba(255,255,255,0.16) 0%,
     rgba(255,255,255,0.03) 38%,
@@ -16,8 +16,8 @@
   --danger: #ff5e5e;
   --ok: #3bf09b;
   --blue: #7fa8e8;
-  --radius-lg: 24px;
-  --radius-md: 14px;
+  --radius-lg: 10px;
+  --radius-md: 10px;
   --font-heading: "Plus Jakarta Sans", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
   --shadow-fluid: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.1);
@@ -35,11 +35,11 @@ input { font-family: inherit; font-size: 14px; }
 /* ── Liquid Glass Card ─────────────────────────────────────────────────────── */
 .glass-card {
   background: var(--glass);
-  border: 1px solid var(--border-glass);
+  border: none;
   border-radius: var(--radius-lg);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  box-shadow: var(--shadow-fluid);
+  box-shadow: none;
   position: relative;
   overflow: hidden;
 }
@@ -47,7 +47,7 @@ input { font-family: inherit; font-size: 14px; }
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--glass-specular);
+  background: none;
   pointer-events: none;
   z-index: 0;
 }
@@ -55,11 +55,11 @@ input { font-family: inherit; font-size: 14px; }
 
 .glass-dense {
   background: var(--glass-dense);
-  border: 1px solid var(--border-glass);
+  border: none;
   border-radius: var(--radius-lg);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  box-shadow: var(--shadow-fluid);
+  box-shadow: none;
   position: relative;
   overflow: hidden;
 }
@@ -67,7 +67,7 @@ input { font-family: inherit; font-size: 14px; }
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--glass-specular);
+  background: none;
   pointer-events: none;
   z-index: 0;
 }
