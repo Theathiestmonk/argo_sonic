@@ -116,7 +116,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // Update parent about nav readiness state
   useEffect(() => {
     onNavReady?.(navReady)
-    if (navState === 'running') {
+    // Keep initializing=true until nav is fully ready OR it stops
+    if (navState === 'stopped') {
+      onNavInitializing?.(false)
+    } else if (navReady) {
       onNavInitializing?.(false)
     }
   }, [navReady, onNavReady, navState, onNavInitializing])
