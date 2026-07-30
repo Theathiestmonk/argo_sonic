@@ -31,8 +31,12 @@ All sensors stale → full pass-through (fail-open, robot never freezes).
 """
 
 import math
+import os
+import socket
+import subprocess
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import rclpy
@@ -74,6 +78,24 @@ DEPTH_TOPIC  = "/ascamera_hp60c/camera_publisher/depth0/points"
 # ── Beep ──────────────────────────────────────────────────────────────────────
 BEEP_COOLDOWN = 2.0        # s
 
+# Same hardware auto-detect voice_agent.py uses for its speaker device — the
+# Jetson's USB audio card isn't the ALSA default, so mpg123 needs pointing at
+# it explicitly there; a dev machine just uses whatever "default" resolves to.
+_ON_JETSON     = os.path.exists("/etc/nv_tegra_release") or "argo" in socket.gethostname().lower()
+SPEAKER_DEVICE = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
+
+# <repo_root>/sound/sound.mp3 — resolved from this file's own location (not a
+# hardcoded absolute path) so it keeps working under a --symlink-install
+# build, same convention as waypoint_manager.py's DEFAULT_WAYPOINTS_DIR.
+SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" / "sound.mp3")
+
+# This is a "something's nearby" nudge, not an alarm — kept well under full
+# volume on purpose so it doesn't disturb the room (customers/staff), and
+# fixed in code rather than following the Jetson's system mixer, since
+# voice_agent.py/tts.py already play speech at whatever that's set to and
+# this alert needs to stay quiet independent of that.
+ALERT_VOLUME = 0.45   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
+
 
 def _vel_scale(dist: float, stop: float, slow: float) -> float:
     """Linear scale in [0.0, 1.0]: 0 at or below stop, 1 at or above slow."""
@@ -84,18 +106,45 @@ def _vel_scale(dist: float, stop: float, slow: float) -> float:
     return (dist - stop) / (slow - stop)
 
 
+def _play_alert_clip() -> bool:
+    """Play SOUND_FILE via mpg123. Returns False (never raises) if the file
+    or the mpg123 binary aren't there, so the caller can fall back to the
+    synthesized tone — the alert must still fire either way."""
+    if not os.path.isfile(SOUND_FILE):
+        return False
+    try:
+        # mpg123's -f scale is independent of the ALSA mixer (default full
+        # scale = 32768) — this is what actually keeps the alert quiet
+        # regardless of whatever system volume voice/TTS are using.
+        scale = int(32768 * ALERT_VOLUME)
+        subprocess.run(
+            ["mpg123", "-q", "-a", SPEAKER_DEVICE, "-f", str(scale), SOUND_FILE],
+            check=True, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _play_synth_beep():
+    """Two-tone chirp fallback — used whenever the recorded clip can't play."""
+    try:
+        import sounddevice as sd
+        sr  = 16000
+        t   = np.linspace(0, 0.12, int(sr * 0.12))
+        hi  = (np.sin(2 * np.pi * 1000 * t) * ALERT_VOLUME).astype(np.float32)
+        lo  = (np.sin(2 * np.pi * 700  * t) * ALERT_VOLUME).astype(np.float32)
+        gap = np.zeros(int(sr * 0.04), dtype=np.float32)
+        sd.play(np.concatenate([hi, gap, lo]), samplerate=sr, blocking=True)
+    except Exception:
+        pass
+
+
 def _beep():
     def _run():
-        try:
-            import sounddevice as sd
-            sr  = 16000
-            t   = np.linspace(0, 0.12, int(sr * 0.12))
-            hi  = (np.sin(2 * np.pi * 1000 * t) * 0.6).astype(np.float32)
-            lo  = (np.sin(2 * np.pi * 700  * t) * 0.6).astype(np.float32)
-            gap = np.zeros(int(sr * 0.04), dtype=np.float32)
-            sd.play(np.concatenate([hi, gap, lo]), samplerate=sr, blocking=True)
-        except Exception:
-            pass
+        if not _play_alert_clip():
+            _play_synth_beep()
     threading.Thread(target=_run, daemon=True).start()
 
 
