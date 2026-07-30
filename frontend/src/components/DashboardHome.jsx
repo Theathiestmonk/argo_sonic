@@ -50,11 +50,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null })
   const [orders, setOrders]         = useState({})
   const [expandedBills, setExpandedBills] = useState(() => new Set())
-  const [editId, setEditId]         = useState(null)
-  const [editName, setEditName]     = useState('')
-  const [showAddPlace, setShowAddPlace] = useState(false)
-  const [pendingPlace, setPendingPlace] = useState(null)   // { wx, wy } once the map's been clicked
-  const [newPlaceName, setNewPlaceName] = useState('')
   const [showTeleopPad, setShowTeleopPad] = useState(false)
   const [showActivityPanel, setShowActivityPanel] = useState(false)
 
@@ -230,33 +225,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     }).catch(() => showToast('Could not save to robot', 'danger'))
   }, [launcherUrl, selectedMap, showToast])
 
-  const nextKey = useCallback(() => {
-    const nums = Object.keys(tables).map(Number).filter(n => !isNaN(n))
-    const max = nums.length ? Math.max(...nums) : 0
-    return String(Math.max(max + 1, 1)) // never reuse "0" — that's Home/dock
-  }, [tables])
-
-  const renameTable = (key) => {
-    if (!editName.trim()) return
-    persist({ ...tables, [key]: { ...tables[key], name: editName.trim() } })
-    setEditId(null); setEditName('')
-  }
-
-  const removeTable = (key) => {
-    const next = { ...tables }
-    delete next[key]
-    persist(next)
-    if (selectedDest === (tables[key]?.name || `Table ${key}`)) setSelectedDest(null)
-  }
-
-  const saveNewPlace = () => {
-    if (!newPlaceName.trim() || !pendingPlace) return
-    const key = nextKey()
-    persist({ ...tables, [key]: { x: pendingPlace.wx, y: pendingPlace.wy, qz: 0, qw: 1, theta: 0, name: newPlaceName.trim(), status: 'available' } })
-    showToast(`"${newPlaceName.trim()}" added`, 'ok')
-    setPendingPlace(null); setNewPlaceName(''); setShowAddPlace(false)
-  }
-
   // Is Sonic currently mid-conversation at some table? Same poll pattern as
   // TablesPanel.jsx's identical hook — used to show a busy banner and avoid
   // firing a second voice session the backend would just 409 anyway.
@@ -343,6 +311,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const entries = Object.entries(tables)
     .filter(([key]) => key !== '0')
     .sort((a, b) => Number(a[0]) - Number(b[0]))
+
+  // Kitchen/Docker are reachable via the Home card's own buttons, so hide
+  // their duplicate cards from the grid — keep them in `entries`/`destinations`
+  // (below) so sendArgo('Kitchen')/sendArgo('Docker Station') still resolve.
+  const HIDDEN_CARD_NAMES = ['Kitchen', 'Docker']
+  const visibleEntries = entries.filter(([, t]) => !HIDDEN_CARD_NAMES.includes(t.name))
 
   // Key "0" is always the dock/home position (waypoint_manager.py's own
   // convention) — use its real saved pose instead of hardcoding (0,0), and
@@ -564,7 +538,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <div style={{ fontFamily: 'var(--font-heading)', fontSize: 19, fontWeight: 700 }}>Locations</div>
             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-              <button onClick={() => setShowAddPlace(true)} style={{ color: 'var(--gold-bright)', fontSize: 13, fontWeight: 600 }}>+ Add place</button>
               <button onClick={onAddMap} style={{ color: 'var(--muted)', fontSize: 13, fontWeight: 600 }} title="Full setup wizard — remap the space, build a new map, etc.">Setup wizard →</button>
             </div>
           </div>
@@ -613,12 +586,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               </div>
             </div>
 
-            {entries.length === 0 ? (
+            {visibleEntries.length === 0 ? (
               <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '56px 20px', color: 'var(--muted)', fontSize: 14, lineHeight: 1.8 }}>
                 No places saved yet.<br/>
                 <button onClick={onAddMap} style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>Run the setup flow</button> to map your space and label locations — then they'll appear here.
               </div>
-            ) : entries.map(([key, t]) => {
+            ) : visibleEntries.map(([key, t]) => {
               const label = t.name || `Table ${key}`
               const orderRaw = orders[key]
               const order = orderRaw && orderRaw.items && orderRaw.items.length ? orderRaw : null
@@ -627,40 +600,13 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 <div
                   key={key}
                   className="glass-card"
-                  onClick={() => editId !== key && setSelectedDest(label)}
+                  onClick={() => setSelectedDest(label)}
                   style={{
-                    padding: '18px 20px', cursor: editId === key ? 'default' : 'pointer',
+                    padding: '18px 20px', cursor: 'pointer',
                     border: selectedDest === label ? '2px solid var(--gold)' : 'none',
                   }}
                 >
-                  {editId === key ? (
-                    <div style={{ display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
-                      <input
-                        autoFocus value={editName}
-                        onChange={e => setEditName(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') renameTable(key); if (e.key === 'Escape') setEditId(null) }}
-                        style={{
-                          flex: 1, padding: '8px 11px', borderRadius: 9, fontSize: 13,
-                          background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)',
-                          color: '#fff', outline: 'none',
-                        }}
-                      />
-                      <button onClick={() => renameTable(key)} style={{ color: 'var(--ok)', fontWeight: 700, padding: '0 8px', fontSize: 14 }}>✓</button>
-                      <button onClick={() => setEditId(null)} style={{ color: 'var(--muted)', padding: '0 8px', fontSize: 14 }}>✕</button>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={{ fontFamily: 'var(--font-heading)', fontSize: 16, fontWeight: 800 }}>{label}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                        <button onClick={() => { setEditId(key); setEditName(label) }} style={{ padding: '4px 6px', color: 'var(--muted)', borderRadius: 6 }} title="Rename">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        </button>
-                        <button onClick={() => removeTable(key)} style={{ padding: '4px 6px', color: 'var(--danger)', borderRadius: 6, opacity: 0.7 }} title="Remove">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  <div style={{ fontFamily: 'var(--font-heading)', fontSize: 16, fontWeight: 800 }}>{label}</div>
                   <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>{Number(t.x).toFixed(1)} m, {Number(t.y).toFixed(1)} m</div>
 
                   {order && (
@@ -852,57 +798,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         </div>
       )}
 
-      {showAddPlace && (
-        <div
-          onClick={() => { setShowAddPlace(false); setPendingPlace(null); setNewPlaceName('') }}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="glass-dense"
-            style={{ width: '100%', maxWidth: 820, padding: 22, animation: 'slideUp 0.2s ease' }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-              <div>
-                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 16 }}>Add Place</div>
-                <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6, maxWidth: 560 }}>
-                  Click the map where the new place should be, then name it.
-                </p>
-              </div>
-              <button onClick={() => { setShowAddPlace(false); setPendingPlace(null); setNewPlaceName('') }} style={{ color: 'var(--muted)', padding: 4, flexShrink: 0 }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-              </button>
-            </div>
-            <div style={{ height: 400, marginTop: 12 }}>
-              <MapCanvas
-                mapData={mapData}
-                robotPose={robotPose}
-                clickable
-                onMapClick={({ wx, wy }) => setPendingPlace({ wx, wy })}
-              />
-            </div>
-            {pendingPlace && (
-              <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
-                <input
-                  autoFocus value={newPlaceName}
-                  onChange={e => setNewPlaceName(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') saveNewPlace() }}
-                  placeholder="e.g. Table 6, Window Booth"
-                  style={{
-                    flex: 1, padding: '11px 14px', borderRadius: 12,
-                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(226,179,92,0.3)',
-                    color: '#fff', outline: 'none', boxSizing: 'border-box',
-                  }}
-                />
-                <button onClick={saveNewPlace} className="btn-ok" disabled={!newPlaceName.trim()}>Save</button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 })

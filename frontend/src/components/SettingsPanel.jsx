@@ -110,7 +110,8 @@ export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, o
             {selectedMap} — waypoints
           </div>
           <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
-            Click a pin (or a row on the right) to select it, then use the pencil to rename it.
+            Click a pin (or a row on the right) to select it. Use the pencil to rename it, or the pin icon
+            to arm a move, then click a new spot on the map to reposition it.
           </p>
           <MapWaypointViewer launcherUrl={launcherUrl} mapName={selectedMap} showToast={showToast} />
         </div>
