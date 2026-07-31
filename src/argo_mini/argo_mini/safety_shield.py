@@ -94,7 +94,7 @@ SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" 
 # fixed in code rather than following the Jetson's system mixer, since
 # voice_agent.py/tts.py already play speech at whatever that's set to and
 # this alert needs to stay quiet independent of that.
-ALERT_VOLUME = 0.45   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
+ALERT_VOLUME = 0.60   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
 
 
 def _vel_scale(dist: float, stop: float, slow: float) -> float:

@@ -360,23 +360,47 @@ def wait_lifecycle_active(node, env, timeout=30):
     log(f"Timeout – {node} never reached active state", "warn")
     return False
 
-def lc_node(node, env, configure_timeout=30, activate_timeout=25):
+def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
     """Returns True only if the node actually confirmed 'active' — callers
     that unconditionally proceed (e.g. reporting READY) after calling this
     without checking the return value were treating a real activation
-    failure as a plain warning and claiming ready regardless."""
-    log(f"Lifecycle configure  {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
-    if not wait_lifecycle_state(node, 'inactive', env, timeout=configure_timeout):
-        log(f"Configure timeout for {node} – proceeding anyway", "warn")
-    log(f"Lifecycle activate   {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
-    if wait_lifecycle_state(node, 'active', env, timeout=activate_timeout):
-        log(f"Active  {node}", "ok")
-        return True
-    else:
-        log(f"FAILED to activate {node} – check node logs", "fail")
-        return False
+    failure as a plain warning and claiming ready regardless.
+
+    Retries the full configure→activate cycle, same pattern lc_ntfields()
+    already uses for /planner_server. A cold Jetson start (cold page cache,
+    CPU governor not yet ramped) routinely makes the first configure call
+    lose the race against the node's own startup — it lands while the node
+    is still coming up, so the transition silently no-ops and the node is
+    stuck 'unconfigured' for both the configure AND activate timeouts. That's
+    exactly the "controller_server/velocity_smoother/bt_navigator failed on
+    the first run, worked on the second" symptom — the second run only
+    "worked" because everything was already warm by then. deactivate+cleanup
+    between attempts are harmless no-ops if the node never even reached
+    'inactive' — what actually matters is giving `configure` a second try a
+    couple seconds later, after the race has had time to resolve.
+    """
+    for attempt in range(1, attempts + 1):
+        tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
+        log(f"Lifecycle configure  {node}{tag}", "sys")
+        runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
+        if not wait_lifecycle_state(node, 'inactive', env, timeout=configure_timeout):
+            log(f"Configure timeout for {node} – proceeding anyway", "warn")
+
+        log(f"Lifecycle activate   {node}", "sys")
+        runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
+        if wait_lifecycle_state(node, 'active', env, timeout=activate_timeout):
+            log(f"Active  {node}", "ok")
+            return True
+
+        log(f"{node} did not activate (attempt {attempt}/{attempts})", "warn")
+        if attempt < attempts:
+            log(f"Resetting {node} before retry...", "warn")
+            runcmd(f"ros2 lifecycle set {node} deactivate 2>&1", env)
+            runcmd(f"ros2 lifecycle set {node} cleanup 2>&1", env)
+            time.sleep(2)
+
+    log(f"FAILED to activate {node} after {attempts} attempts – check node logs", "fail")
+    return False
 
 def wait_lifecycle_state(node, state, env, timeout=30):
     """Poll ros2 lifecycle get until node reports the expected state."""
