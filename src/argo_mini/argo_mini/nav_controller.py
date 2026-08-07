@@ -27,17 +27,29 @@ class NavController(Node):
     def __init__(self):
         super().__init__('nav_controller')
 
-        # Load waypoints
+        # Load waypoints from map file
         waypoint_file = Path(__file__).parent.parent / "waypoints" / "office_map.json"
         with open(waypoint_file) as f:
             self.waypoints = json.load(f)
 
-        self.get_logger().info(f'Loaded {len(self.waypoints)} waypoints')
+        self.get_logger().info(f'Loaded {len(self.waypoints)} waypoints from {waypoint_file.name}')
 
-        # Kitchen position (waypoint 0)
-        self.kitchen_wp = self.waypoints["0"]
+        # Find kitchen dynamically by searching for "name": "Kitchen"
+        self.kitchen_wp_id = None
+        self.kitchen_wp = None
+        for wp_id, wp_data in self.waypoints.items():
+            if wp_data.get("name") == "Kitchen":
+                self.kitchen_wp_id = wp_id
+                self.kitchen_wp = wp_data
+                break
+
+        if not self.kitchen_wp:
+            self.get_logger().error('ERROR: No waypoint with name="Kitchen" found in map JSON!')
+            raise RuntimeError('Kitchen waypoint not found in office_map.json')
+
         self.get_logger().info(
-            f'Kitchen: x={self.kitchen_wp["x"]:.3f}, y={self.kitchen_wp["y"]:.3f}'
+            f'Kitchen found at waypoint {self.kitchen_wp_id}: '
+            f'x={self.kitchen_wp["x"]:.3f}, y={self.kitchen_wp["y"]:.3f}'
         )
 
         # Nav2 client
@@ -154,7 +166,7 @@ class NavController(Node):
                 current_goal = self.current_goal_wp
 
             # If goal was NOT kitchen, auto-return
-            if current_goal != "0":
+            if current_goal != self.kitchen_wp_id:
                 self.get_logger().info(f'⏱ Waiting 10 seconds before returning to kitchen...')
                 threading.Timer(10.0, self.return_to_kitchen).start()
             else:
