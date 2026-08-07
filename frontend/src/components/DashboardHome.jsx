@@ -366,7 +366,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
       // Auto-return to kitchen after 10 seconds (unless already at kitchen)
       if (destName !== 'Kitchen') {
+        console.log(`[ARRIVAL] Robot reached ${destName}. Auto-return in 10 seconds...`)
         setTimeout(() => {
+          console.log('[AUTO-RETURN] Triggering return to kitchen')
           showToast('Auto-returning to kitchen...', 'info')
           sendArgo('Kitchen')
         }, 10000)
