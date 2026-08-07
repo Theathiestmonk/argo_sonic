@@ -163,17 +163,24 @@ class NavController(Node):
         pass
 
     def on_nav_done(self, future):
-        """Called when goal completes."""
+        """Called when goal completes (from any source: CLI, UI, or direct publish)."""
         result = future.result()
 
         if result.status == 4:  # SUCCEEDED
             self.get_logger().info('✓ Goal reached!')
 
             with self.state_lock:
-                current_goal = self.current_goal_wp
+                current_x = self.robot_x
+                current_y = self.robot_y
 
-            # If goal was NOT kitchen, auto-return
-            if current_goal != self.kitchen_wp_id:
+            # Check if we're at the kitchen (within tolerance)
+            kitchen_x = self.kitchen_wp['x']
+            kitchen_y = self.kitchen_wp['y']
+            distance_to_kitchen = math.sqrt((current_x - kitchen_x)**2 + (current_y - kitchen_y)**2)
+            at_kitchen = distance_to_kitchen < 0.3  # 30cm tolerance
+
+            # If not at kitchen, auto-return
+            if not at_kitchen:
                 self.get_logger().info(f'⏱ Waiting 10 seconds before returning to kitchen...')
                 threading.Timer(10.0, self.return_to_kitchen).start()
             else:
