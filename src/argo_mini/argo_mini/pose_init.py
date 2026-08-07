@@ -75,21 +75,12 @@ class PoseInit(Node):
         pub.publish(msg)
         self.get_logger().info('✓ Initial pose published to /initialpose')
 
-        # Exit after publishing
-        time.sleep(1.0)
-        rclpy.shutdown()
-
 
 def main(args=None):
     rclpy.init(args=args)
     node = PoseInit()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    node.destroy_node()
+    rclpy.shutdown()
 
 
 if __name__ == '__main__':
