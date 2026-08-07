@@ -20,6 +20,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
         ('share/' + package_name + '/maps', glob('maps/*.pgm') + glob('maps/*.yaml') + glob('maps/*.posegraph') + glob('maps/*.data')),
+        ('share/' + package_name + '/waypoints', glob('waypoints/*.json')),
         ('share/' + package_name + '/config/bt', glob('config/bt/*.xml')),
         ('share/' + package_name + '/urdf', glob('urdf/*.urdf')),
         ('share/' + package_name + '/launch', glob('launch/*.py')),

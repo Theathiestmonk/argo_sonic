@@ -12,6 +12,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from ament_index_python.packages import get_package_share_directory
 
 
 class PoseInit(Node):
@@ -20,8 +21,14 @@ class PoseInit(Node):
     def __init__(self):
         super().__init__('pose_init')
 
-        # Load office_map.json
-        map_file = Path(__file__).parent.parent / "waypoints" / "office_map.json"
+        # Load office_map.json from package share directory
+        try:
+            pkg_share = get_package_share_directory('argo_mini')
+            map_file = Path(pkg_share) / "waypoints" / "office_map.json"
+        except Exception:
+            # Fallback to source path if package share not available
+            map_file = Path(__file__).parent.parent / "waypoints" / "office_map.json"
+
         with open(map_file) as f:
             waypoints = json.load(f)
 
