@@ -80,8 +80,15 @@ class NavController(Node):
 
         # Auto-initialize pose at kitchen
         time.sleep(1.0)  # wait for publishers to connect
-        self.set_initial_pose(self.kitchen_wp['x'], self.kitchen_wp['y'])
-        self.get_logger().info('✓ Initial pose set to kitchen')
+        kitchen_theta = self.kitchen_wp.get('theta', 0.0)
+        self.set_initial_pose(
+            self.kitchen_wp['x'],
+            self.kitchen_wp['y'],
+            kitchen_theta
+        )
+        self.get_logger().info(
+            f'✓ Initial pose set to kitchen (facing {math.degrees(kitchen_theta):.1f}°)'
+        )
 
     def set_initial_pose(self, x: float, y: float, theta: float = 0.0):
         """Publish initial pose to /initialpose."""
