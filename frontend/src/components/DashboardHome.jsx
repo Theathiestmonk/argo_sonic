@@ -363,6 +363,14 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       setCurPos(destName)
       setCurStatus('Arrived')
       showToast(`Argo arrived at ${destName}`, 'ok')
+
+      // Auto-return to kitchen after 10 seconds (unless already at kitchen)
+      if (destName !== 'Kitchen') {
+        setTimeout(() => {
+          showToast('Auto-returning to kitchen...', 'info')
+          sendArgo('Kitchen')
+        }, 10000)
+      }
     }
 
     const live = connected && navReady
