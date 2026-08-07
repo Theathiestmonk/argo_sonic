@@ -75,14 +75,14 @@ stop_ui    = threading.Event()
 telem      = {"lin": 0.0, "ang": 0.0, "rpm_l": 0.0, "rpm_r": 0.0}
 telem_lock = threading.Lock()
 
-TOTAL_STEPS = 13
+TOTAL_STEPS = 14
 
 STEP_NAMES = [
     "Robot State Publisher", "Camera TF Bridge",    "Serial Bridge",
     "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
-    "NTFields Planner",      "Controller Server",    "Velocity Smoother",
-    "Behavior Server",       "BT Navigator",         "Depth Camera",
-    "PC Restamper",          "Safety Shield",
+    "Pose Initializer",      "NTFields Planner",    "Controller Server",
+    "Velocity Smoother",     "Behavior Server",     "BT Navigator",
+    "Depth Camera",          "PC Restamper",        "Safety Shield",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -721,6 +721,15 @@ def main():
     if not wait_topic("/map", env, timeout=30):
         log("SLAM map not published – check map file path", "warn")
     time.sleep(3); step_done("SLAM Toolbox")
+
+    # ── 6.5. Pose Initializer (Auto-set kitchen pose) ────────────────────────
+    log("Initializing robot pose at kitchen...", "sys")
+    r = runcmd("ros2 run argo_mini pose_init", env, timeout=10)
+    if r.returncode == 0:
+        log("Robot pose initialized at kitchen", "ok")
+    else:
+        log("Pose initialization failed – check office_map.json", "warn")
+    time.sleep(2); step_done("Pose Initializer")
 
     # ── 7. NTFields Planner ───────────────────────────────────────────────────
     launch("NTFields Planner",

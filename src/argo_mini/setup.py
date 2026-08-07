@@ -47,6 +47,7 @@ setup(
             'voice_agent2=argo_mini.voice_agent2:main',
             'slam_teleop=argo_mini.slam_teleop:main',
             'pose_setter=argo_mini.pose_setter:main',
+            'pose_init=argo_mini.pose_init:main',
             'restaurant_agent=argo_mini.restaurant_agent_node:main',
             'ntfields_planner_node=argo_mini.ntfields_planner_node:main',
             'ntfields_data_logger=argo_mini.ntfields_data_logger:main',

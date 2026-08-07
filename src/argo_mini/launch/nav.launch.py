@@ -148,6 +148,16 @@ def generate_launch_description():
             ],
         ),
 
+        # ?? 5.5. Pose Initializer (Auto-set kitchen pose) ?????????????????????
+        # Reads kitchen location from office_map.json and initializes robot pose
+        # Runs once at startup, then exits cleanly
+        Node(
+            package='argo_mini',
+            executable='pose_init',
+            name='pose_init',
+            output='screen',
+        ),
+
         # ?? 6. Behavior Server (Spin / BackUp / Wait recoveries) ?????????????
         LifecycleNode(
             package='nav2_behaviors',

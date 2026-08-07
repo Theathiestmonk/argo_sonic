@@ -574,7 +574,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                   Go to kitchen
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedDest('Docker'); sendArgo('Docker') }}
+                  onClick={(e) => { e.stopPropagation(); setSelectedDest('Docker Station'); sendArgo('Docker Station') }}
                   style={{
                     padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
                     background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.22)',
