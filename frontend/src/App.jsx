@@ -134,7 +134,7 @@ export default function App() {
 
   // How close (meters) to the goal counts as "arrived". Nav2's own goal
   // tolerance settles somewhere near this range, not exactly on the point.
-  const ARRIVAL_RADIUS = 0.35
+  const ARRIVAL_RADIUS = 0.5  // Increased from 0.35m for more reliable detection
   // Safety fallback if the robot never quite settles within ARRIVAL_RADIUS
   // (e.g. an obstacle forces a slightly-off final pose) — fires onArrival
   // anyway rather than waiting forever, same reasoning as every other
@@ -165,7 +165,14 @@ export default function App() {
       }
       const intervalId = setInterval(() => {
         const p = mapPoseRef.current
-        if (p && Math.hypot(p.x - wx, p.y - wy) <= ARRIVAL_RADIUS) finish()
+        if (p) {
+          const dist = Math.hypot(p.x - wx, p.y - wy)
+          console.log(`[ARRIVAL CHECK] Robot at (${p.x.toFixed(2)}, ${p.y.toFixed(2)}), Goal at (${wx.toFixed(2)}, ${wy.toFixed(2)}), Distance: ${dist.toFixed(2)}m`)
+          if (dist <= ARRIVAL_RADIUS) {
+            console.log(`[ARRIVAL] ✓ Robot within ${ARRIVAL_RADIUS}m of goal!`)
+            finish()
+          }
+        }
       }, 300)
       const timeoutId = setTimeout(finish, ARRIVAL_MAX_WAIT_MS)
       arrivalWatch.current = { intervalId, timeoutId }
