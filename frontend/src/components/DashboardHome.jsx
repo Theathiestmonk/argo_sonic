@@ -41,6 +41,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [showSetPose, setShowSetPose] = useState(false)
   const [selectedTask, setSelectedTask] = useState('Deliver')
   const [selectedDest, setSelectedDest] = useState(null)
+  const autoReturnTimeoutRef = useRef(null)
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
   const [taskLabel, setTaskLabel]   = useState('—')
@@ -367,12 +368,19 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       // Auto-return to kitchen after 10 seconds (unless already at kitchen)
       if (destName !== 'Kitchen') {
         console.log(`[ARRIVAL] Robot reached ${destName}. Auto-return in 10 seconds...`)
-        setTimeout(() => {
+        autoReturnTimeoutRef.current = setTimeout(() => {
           console.log('[AUTO-RETURN] Triggering return to kitchen')
           showToast('Auto-returning to kitchen...', 'info')
           sendArgo('Kitchen')
         }, 10000)
       }
+    }
+
+    // Cancel auto-return if user sends new goal while auto-return is pending
+    if (autoReturnTimeoutRef.current) {
+      clearTimeout(autoReturnTimeoutRef.current)
+      autoReturnTimeoutRef.current = null
+      console.log('[CANCEL] Auto-return cancelled - user sent new goal')
     }
 
     const live = connected && navReady
