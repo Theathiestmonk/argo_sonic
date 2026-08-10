@@ -93,8 +93,10 @@ SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" 
 # volume on purpose so it doesn't disturb the room (customers/staff), and
 # fixed in code rather than following the Jetson's system mixer, since
 # voice_agent.py/tts.py already play speech at whatever that's set to and
-# this alert needs to stay quiet independent of that.
-ALERT_VOLUME = 0.60   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
+# this alert needs to stay quiet independent of that. Raised from 0.60 —
+# reported inaudible on real hardware; re-lower this if it turns out to be
+# genuinely disruptive rather than just quiet.
+ALERT_VOLUME = 0.85   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
 
 
 def _vel_scale(dist: float, stop: float, slow: float) -> float:
@@ -107,23 +109,35 @@ def _vel_scale(dist: float, stop: float, slow: float) -> float:
 
 
 def _play_alert_clip() -> bool:
-    """Play SOUND_FILE via mpg123. Returns False (never raises) if the file
-    or the mpg123 binary aren't there, so the caller can fall back to the
-    synthesized tone — the alert must still fire either way."""
+    """Play SOUND_FILE via mpg123. Returns False if the file or the mpg123
+    binary aren't there, or playback fails, so the caller can fall back to
+    the synthesized tone — the alert must still fire either way. Logs the
+    actual failure reason (previously silently swallowed, which made a
+    "the beep isn't audible" report undebuggable — no way to tell whether
+    it was just quiet, hitting the wrong output device, or not running at
+    all)."""
     if not os.path.isfile(SOUND_FILE):
+        print(f"[SafetyShield] alert clip missing: {SOUND_FILE}")
         return False
     try:
         # mpg123's -f scale is independent of the ALSA mixer (default full
         # scale = 32768) — this is what actually keeps the alert quiet
         # regardless of whatever system volume voice/TTS are using.
         scale = int(32768 * ALERT_VOLUME)
-        subprocess.run(
+        result = subprocess.run(
             ["mpg123", "-q", "-a", SPEAKER_DEVICE, "-f", str(scale), SOUND_FILE],
-            check=True, timeout=5,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=5, capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            print(f"[SafetyShield] mpg123 failed (device={SPEAKER_DEVICE!r}, "
+                  f"rc={result.returncode}): {result.stderr.strip()[-300:]}")
+            return False
         return True
-    except Exception:
+    except FileNotFoundError:
+        print("[SafetyShield] mpg123 not installed — falling back to synth beep")
+        return False
+    except Exception as e:
+        print(f"[SafetyShield] alert clip playback error: {e}")
         return False
 
 
@@ -137,8 +151,8 @@ def _play_synth_beep():
         lo  = (np.sin(2 * np.pi * 700  * t) * ALERT_VOLUME).astype(np.float32)
         gap = np.zeros(int(sr * 0.04), dtype=np.float32)
         sd.play(np.concatenate([hi, gap, lo]), samplerate=sr, blocking=True)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[SafetyShield] synth beep fallback ALSO failed — no alert sound played: {e}")
 
 
 def _beep():
