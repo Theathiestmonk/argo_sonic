@@ -1,0 +1,176 @@
+:root {
+  --bg: #121212;
+  --glass: rgba(255, 255, 255, 0.05);
+  --glass-dense: rgba(255, 255, 255, 0.05);
+  --glass-specular: linear-gradient(135deg,
+    rgba(255,255,255,0.16) 0%,
+    rgba(255,255,255,0.03) 38%,
+    rgba(212,162,74,0.02) 58%,
+    rgba(212,162,74,0.11) 100%
+  );
+  --border-glass: rgba(255,255,255,0.09);
+  --text: #fdfbfa;
+  --muted: #9c92a6;
+  --gold: #e2b35c;
+  --gold-bright: #ffd485;
+  --danger: #ff5e5e;
+  --ok: #3bf09b;
+  --blue: #7fa8e8;
+  --radius-lg: 10px;
+  --radius-md: 10px;
+  --font-heading: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --shadow-fluid: 0 20px 50px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-body); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+html { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.14) transparent; }
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.24); }
+button { font-family: inherit; color: inherit; background: none; border: 0; cursor: pointer; transition: all 0.25s cubic-bezier(0.25,0.8,0.25,1); }
+input { font-family: inherit; font-size: 14px; }
+
+/* ── Liquid Glass Card ─────────────────────────────────────────────────────── */
+.glass-card {
+  background: var(--glass);
+  border: none;
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: none;
+  position: relative;
+  overflow: hidden;
+}
+.glass-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: none;
+  pointer-events: none;
+  z-index: 0;
+}
+.glass-card > * { position: relative; z-index: 1; }
+
+.glass-dense {
+  background: var(--glass-dense);
+  border: none;
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: none;
+  position: relative;
+  overflow: hidden;
+}
+.glass-dense::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: none;
+  pointer-events: none;
+  z-index: 0;
+}
+.glass-dense > * { position: relative; z-index: 1; }
+
+/* ── Buttons ───────────────────────────────────────────────────────────────── */
+.btn-primary {
+  padding: 14px 24px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 14px;
+  background: linear-gradient(180deg, #fff 0%, #f3ede2 100%);
+  color: #1a1103;
+  box-shadow: 0 10px 30px rgba(226,179,92,0.25);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 15px 35px rgba(226,179,92,0.4); }
+
+.btn-ghost {
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 13px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-glass);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-ghost:hover { background: rgba(255,255,255,0.07); color: #fff; border-color: rgba(255,255,255,0.18); }
+
+.btn-gold {
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 13px;
+  background: rgba(226,179,92,0.12);
+  border: 1px solid rgba(226,179,92,0.35);
+  color: var(--gold-bright);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-gold:hover { background: rgba(226,179,92,0.2); box-shadow: 0 0 20px rgba(226,179,92,0.15); }
+
+.btn-ok {
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 13px;
+  background: rgba(59,240,155,0.1);
+  border: 1px solid rgba(59,240,155,0.3);
+  color: var(--ok);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-ok:hover { background: rgba(59,240,155,0.18); }
+
+/* ── Chip toggle ───────────────────────────────────────────────────────────── */
+.chip {
+  padding: 10px 18px; border-radius: 99px; font-size: 13px; font-weight: 600;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border-glass); color: var(--muted);
+}
+.chip:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.chip.on { background: #fff; color: #000; border-color: transparent; font-weight: 700; box-shadow: 0 8px 20px rgba(255,255,255,0.12); }
+.chip.gold-on { background: rgba(226,179,92,0.15); color: var(--gold-bright); border-color: rgba(226,179,92,0.4); }
+
+/* ── Label / key-value ─────────────────────────────────────────────────────── */
+.label-xs {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  font-weight: 700;
+}
+
+/* ── Animations ────────────────────────────────────────────────────────────── */
+@keyframes float {
+  0%   { transform: translateY(0) scale(1) rotate(0deg); }
+  100% { transform: translateY(40px) scale(1.1) rotate(20deg); }
+}
+@keyframes slideUp {
+  from { transform: translateY(14px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
