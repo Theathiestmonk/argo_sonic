@@ -21,6 +21,8 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
   const [tables, setTables]       = useState({})
   const [orders, setOrders]       = useState({})
   const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null })
+  const [navEnabled, setNavEnabled] = useState(true)
+  const [navToggling, setNavToggling] = useState(false)
   const [expanded, setExpanded]   = useState(() => new Set())
   const [pending, setPending]     = useState(null)
   const [name, setName]           = useState('')
@@ -67,6 +69,44 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
     const id = setInterval(load, 3000)
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
+
+  // Staff kill-switch for voice-triggered navigation — sonic_agent.py checks
+  // this before acting on a guest's "take me to the kitchen"-style request.
+  // Nav wiring itself is still a stub, but the switch exists now so it's
+  // already in place once real Nav2 goals are sent.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/voice/nav_enabled`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setNavEnabled(!!d.enabled) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 5000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
+
+  const toggleVoiceNav = useCallback(() => {
+    const next = !navEnabled
+    setNavToggling(true)
+    fetch(`${launcherUrl}/voice/nav_enabled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setNavEnabled(!!d.enabled)
+          showToast(`Voice-triggered navigation ${d.enabled ? 'enabled' : 'disabled'}`, 'ok')
+        } else {
+          showToast('Could not update navigation switch', 'danger')
+        }
+      })
+      .catch(() => showToast('Could not reach robot', 'danger'))
+      .finally(() => setNavToggling(false))
+  }, [launcherUrl, navEnabled, showToast])
 
   const toggleExpanded = useCallback((key) => {
     setExpanded(prev => {
@@ -192,6 +232,30 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
           <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.7 }}>
             Tap the map to add a table — or drive Argo there and save its exact spot.
           </p>
+        </div>
+
+        {/* Staff switch: disable Sonic acting on spoken "take me to X"
+            navigation requests, independent of the rest of the voice agent
+            (ordering/bill/staff-calls keep working either way). */}
+        <div className="glass-dense" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 600 }}>Voice-triggered navigation</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              {navEnabled ? 'Guests can ask Sonic to move' : 'Sonic will decline movement requests'}
+            </div>
+          </div>
+          <button
+            onClick={toggleVoiceNav}
+            disabled={navToggling}
+            className="btn-ghost"
+            style={{
+              padding: '5px 12px', fontSize: 12,
+              color: navEnabled ? 'var(--gold-bright)' : 'var(--muted)',
+              opacity: navToggling ? 0.6 : 1,
+            }}
+          >
+            {navEnabled ? 'On' : 'Off'}
+          </button>
         </div>
 
         {/* Voice-session busy banner — Sonic can only physically talk to

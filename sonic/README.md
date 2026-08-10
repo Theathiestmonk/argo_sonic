@@ -1,53 +1,22 @@
-# Sonic — Full Voice Agent (Wake Word + Live Mic + Groq + Sarvam)
+# Sonic — restaurant voice agent (LangGraph + Postgres)
 
-Real wake word detection using your trained `Hi_Sonic.onnx`, real
-microphone recording, live transcription, cloud LLM, and natural
-sentence-streamed speech — no keyboard typing required.
+Real-time voice NLP agent for the cafe robot. Wake word ("Hi Sonic") → greet
+→ listen → Groq LLM NLU (intent classification + slot extraction, with
+mid-conversation intent switching) → dialogue handler (menu / call_people /
+take_order / navigation / cutlery / about / normal_conv / get_bill) → Sarvam
+TTS → back to idle.
 
----
+Runtime is a real LangGraph `StateGraph` (see `build_graph()` in
+`sonic_agent.py`) — each step of the flowchart in `graph.py` is an actual
+graph node. Multi-turn "ask the guest something and wait" uses LangGraph's
+`interrupt()`/`Command(resume=...)` mechanism plus a `MemorySaver`
+checkpointer.
 
-## Architecture
-
-```
-"Hey Sonic" (Hi_Sonic.onnx wake word)
-  -> mic records until you stop talking
-     -> Sarvam STT transcribes
-        -> fast_matcher.py     (regex, instant, known commands)
-           no match? ->
-        -> llm_voice.py         (Groq Llama 3.1 8B, streamed, sentence-chunked)
-        -> tts.py                (Sarvam bulbul:v3 + shubh, speaks each sentence)
-  -> dispatcher.py                (mock robot action, ROS2-ready stubs)
-  -> loops back to listening for wake word
-```
-
-If the wake word model or microphone isn't available, it automatically
-falls back to keyboard input so you can still develop without hardware.
-
----
-
-## Files
-
-```
-sonic_streaming/
-├── main.py            # entry point — run this
-├── config.py          # all API keys, model settings, mic/wake word tuning
-├── wake_word.py         # Hi_Sonic.onnx detection via openwakeword
-├── mic_stt.py            # live mic recording (VAD) + Sarvam STT
-├── fast_matcher.py        # regex fast lane (instant known commands)
-├── llm_voice.py            # Groq streaming + Sarvam sentence-chunk TTS
-├── tts.py                   # Sarvam TTS wrapper (bulbul:v3 + shubh)
-├── commands.py                # all 79 intents across 5 scenarios
-├── dispatcher.py                # mock robot actions (ROS2-ready stubs)
-├── conversation.py                # context, history, slot tracking
-├── menu_client.py                 # fetches the shared menu, checks availability
-├── order_cart.py                  # structured {id, name, qty, price} cart
-├── test_harness.py                # simulated table-arrival test driver
-└── models/
-    └── Hi_Sonic.onnx                # your trained wake word model
-```
-
-Dependencies now live in one combined file at the repo root — see
-`../requirements.txt` (covers this and `settings-dashboard/backend/` too).
+Menu, orders, dialogue sessions, cutlery/staff-call requests, and bills all
+persist to Postgres (see `robot_fleet_schema.sql`, `restaurant_ops_schema.sql`,
+`db_schema.sql`) — this replaced the old file-based menu.json/orders.json
+system entirely; `backend/launcher.py`'s `/menu` and `/orders/*` endpoints
+now read/write the same database.
 
 ---
 
@@ -58,118 +27,131 @@ cd ..    # repo root
 python3 -m venv venv && venv/bin/pip install -r requirements.txt
 ```
 
-Create a `.env` file in this folder (`sonic/.env`, gitignored — `config.py`
-loads it via `python-dotenv`, it does not read hardcoded values from
-`config.py` itself):
+Create `sonic/.env` (gitignored — copy `.env.example`):
 ```
-GROQ_API_KEY=gsk_...     # free at console.groq.com
-SARVAM_API_KEY=sk_...    # dashboard.sarvam.ai
+GROQ_API_KEY=gsk_...      # free at console.groq.com
+SARVAM_API_KEY=sk_...     # dashboard.sarvam.ai — not needed for --text-mode
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+ROBOT_UID=SONIC-001
 ```
 
-Make sure `models/Hi_Sonic.onnx` exists (already placed for you).
+`backend/launcher.py` loads this same `.env` file, so `DATABASE_URL`/
+`ROBOT_UID` only need to be set once here.
+
+### Database
+
+```bash
+python run_migrations.py   # applies robot_fleet -> restaurant_ops -> db_schema
+                            # -> auth_rls_schema, in order
+python seed_db.py          # seeds a demo client/location/robot/5 tables, and
+                            # the live menu from src/argo_mini/menu/menu.json
+                            # (the same file staff edit via menu.html)
+```
+
+`run_migrations.py`'s first three files only target a brand-new empty
+database (drop it first to start over); `auth_rls_schema.sql` (the 4th) and
+`seed_db.py` are both idempotent and safe to re-run any time.
+
+`Hi_Sonic.onnx` (the trained wake-word model) is already in this directory.
+
+### Remote dashboard access (multi-tenant — dashboard/)
+
+`sonic_agent.py`/`backend/launcher.py` always connect via `DATABASE_URL`
+directly (trusted, bypasses RLS — see `auth_rls_schema.sql`'s header) and
+need no auth setup. The separate `dashboard/` app is what real customers log
+into remotely, and that needs a Supabase Auth user linked to a client:
+
+```bash
+# 1. Create the user in Supabase: dashboard -> Authentication -> Users -> Add user
+# 2. Link them to a client (or grant fleet-wide access):
+python grant_dashboard_access.py --email owner@cafe.com --client "Sonic Demo Restaurant" --role owner
+python grant_dashboard_access.py --email me@yourcompany.com --platform-admin
+```
+
+See `dashboard/README.md` for running that app.
 
 ## Run
 
 ```bash
-python main.py
+python sonic_agent.py               # real mic/speaker/wake-word loop
+python sonic_agent.py --text-mode   # typed input / printed output — no mic,
+                                     # no wake word, no Sarvam calls; exercises
+                                     # the dialogue logic directly
 ```
 
-Say **"Hey Sonic"** out loud, wait for it to say "Yes?", then talk
-naturally. It auto-stops recording 1.5 seconds after you stop talking.
+Say **"Hi Sonic"**, wait for it to greet you, then talk naturally.
 
-Say "bye Sonic" or "goodbye Sonic" anytime to end the session, or Ctrl+C.
+### Staff-dispatched sessions (backend/launcher.py)
 
----
+When a staff member clicks a table's action button in the dashboard,
+`backend/launcher.py`'s `POST /voice/start` spawns this script with
+`TABLE_NO`/`SONIC_ACTION_HINT`/`SONIC_MAP_NAME` environment variables set —
+the agent skips conversational table discovery and runs exactly one round
+trip before exiting, instead of sitting in the wake-word loop:
 
-## Fixing the "getaddrinfo failed" / ConnectionError you hit
+- **order / bill / room_service**: navigate Kitchen → Table N, run the
+  normal conversational session, navigate back to Kitchen.
+- **deliver**: at the Kitchen, ask staff to load the order and wait up to
+  30s for a spoken confirmation (`run_delivery_session()`) — only then
+  navigate to the table, announce the delivery, and return. No confirmation
+  within the window aborts the trip rather than delivering an empty robot.
 
-```
-urllib3.exceptions.NameResolutionError: HTTPSConnection(host='api.groq.com'...
-```
+Running the script directly (no `TABLE_NO` set) gives the general always-on
+wake-word loop, unaffected by any of this.
 
-This is **not a code bug** — it means Windows could not resolve
-`api.groq.com` at all, before the request was even sent. Causes:
+## Real navigation (`navigate_and_wait()` / `sonic/nav_bridge.py`)
 
-- A firewall/VPN/campus network blocking unknown domains
-- A flaky or misconfigured DNS server
-- No internet connection at the moment the script ran
+`sonic_agent.py` itself stays a plain, non-ROS process — `nav_bridge.py` is
+the one piece that talks to Nav2 directly (`/navigate_to_pose`), invoked as
+a subprocess with the ROS environment sourced, matching how
+`backend/launcher.py`'s `/estop` handler shells out to `ros2`. It blocks
+until Nav2 reports a real result (arrived/failed/timeout) — nothing in this
+agent claims to have arrived somewhere on a timer.
 
-**To confirm it's network, not code:**
+Waypoints come from `src/argo_mini/waypoints/<SONIC_MAP_NAME>.json`
+(default `office_map`), matched by name (`"Kitchen"`, `"Table 3"`,
+`"Docker"`) — the same names `seed_db.py`'s seeded tables and
+`service_points.label` already use, so no separate id-mapping is needed.
+
+Test the bridge in isolation before trusting it inside a session:
 ```bash
-ping api.groq.com
-nslookup api.groq.com 8.8.8.8
+source /opt/ros/humble/setup.bash && source ../install/setup.bash
+python3 nav_bridge.py --map office_map --destination Kitchen --timeout 60
 ```
 
-If `ping` fails entirely, it's confirmed network-side. Try switching
-your Windows DNS to Google's `8.8.8.8` / `8.8.4.4` (Network Adapter
-settings -> IPv4 properties), or try a different network (mobile
-hotspot) to rule out a blocked domain.
+## Tuning
 
----
-
-## Tuning the microphone behavior
-
-In `config.py`:
-
+In `sonic_agent.py`:
 ```python
-MIC_SILENCE_THRESHOLD = 500.0   # raise if it cuts off too early in
-                                  # noisy environments; lower if it
-                                  # doesn't stop when you stop talking
-MIC_SILENCE_DURATION  = 1.5     # seconds of quiet before it stops recording
-MIC_MAX_DURATION       = 12.0    # hard cap, never hangs forever
+NAV_TIMEOUT_S          # default 90 — max seconds to wait for a Nav2 result
+                        # per leg before giving up
+WAKE_WORD_THRESHOLD    # 0.0–1.0, default 0.5 — lower if "Hi Sonic" isn't
+                        # detected reliably, raise if it triggers on noise
+SILENCE_ONSET_TIMEOUT_S, TRAILING_SILENCE_MS, SPEECH_RMS_THRESHOLD
+                        # mic/VAD tuning — recalibrate against your room
+PICKUP_CONFIRM_WINDOW_S # default 30 — delivery's kitchen pickup-confirmation window
 ```
 
-If Sonic keeps cutting you off mid-sentence, increase `MIC_SILENCE_DURATION`.
-If it waits too long after you finish, decrease it.
+Set `SONIC_TRACE=0` to silence the per-node execution trace printed to the
+terminal by default.
 
-## Tuning wake word sensitivity
+## Staff switch: navigation kill switch
 
-```python
-WAKE_WORD_THRESHOLD = 0.5   # 0.0 to 1.0
+`locations.voice_nav_enabled` (Postgres) gates **all** autonomous
+navigation now — a guest's spoken "take me to the kitchen" request AND
+every staff-dispatched round trip (`navigate_and_wait()`). One switch stops
+all robot movement (e.g. staff spot a spill on the floor). Toggle it from
+the dashboard (`TablesPanel.jsx`) or directly:
+```bash
+curl -X POST http://localhost:8888/voice/nav_enabled -d '{"enabled": false}'
 ```
 
-Lower this if "Hey Sonic" isn't being detected reliably. Raise it if
-it's triggering on background noise/other words.
+## Porting to Jetson
 
----
-
-## Voice — bulbul:v3 + ishita
-
-Using Sarvam's **bulbul:v3** model with the **ishita** speaker, at
-pace `0.9` (slightly slower than bulbul:v3's normal `1.0`).
-
-Previously used `shubh` (v3's neutral-friendly default male voice).
-`varun` was considered even earlier but Sarvam's own docs flag it as
-carrying a "deep, dramatic villain/suspense character," explicitly
-recommending it only for thriller/drama content — not a fit for a
-friendly assistant robot.
-
----
-
-## Why sentence-chunk streaming
-
-Word-by-word streaming sends each word to Sarvam TTS in isolation, so
-the model has no sentence-level context for natural pitch/rhythm — it
-sounded choppy and robotic in testing. Sentence-chunk buffers tokens
-until a `.`/`!`/`?` boundary, giving Sarvam a complete sentence to work
-with, while still starting playback well before the full reply has
-finished generating. The system prompt also has Sonic open every reply
-with a short 2-4 word phrase ("On it!", "Sure thing.") so the very
-first sound comes even faster.
-
----
-
-## Porting to Jetson later
-
-- `wake_word.py` and `mic_stt.py` already use cross-platform libraries
-  (sounddevice, openwakeword) that work on Jetson as-is
-- Only `dispatcher.py` action function bodies change — swap the print
-  logs for `rclpy` publisher calls
-- Everything else (`fast_matcher.py`, `llm_voice.py`, `commands.py`,
-  `conversation.py`) is hardware-agnostic and stays exactly as is
-
-On Jetson, install audio deps via apt first:
+`wake_word.py`-equivalent code (`load_wake_word_model()`/`wait_for_wake_word()`
+in `sonic_agent.py`) uses cross-platform libraries (`sounddevice`,
+`openwakeword`) that work on Jetson as-is. Install audio deps via apt first:
 ```bash
 sudo apt install portaudio19-dev python3-pyaudio
-pip3 install sounddevice openwakeword onnxruntime --break-system-packages
+pip3 install sounddevice openwakeword onnxruntime psycopg2-binary langgraph --break-system-packages
 ```

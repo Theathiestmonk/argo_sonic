@@ -26,25 +26,36 @@ Endpoints (CORS-open so the browser can call them directly):
     POST /waypoints/<map_name>     →  body is the full waypoints dict; overwrites
                                        the file (mirrors waypoint_manager.py's own
                                        full-rewrite save_waypoints() semantics)
-    GET  /menu    →  JSON content of menu/menu.json (one global menu, not per-map —
-                      a venue has one menu regardless of which SLAM map is loaded).
-                      Seeded once from frontend/argo-menu-backup.json on first run
-                      if menu.json doesn't exist yet.
+    GET  /menu    →  {"menu": [...], "settings": {...}, "savedAt": str} sourced
+                      from Postgres (menu_items/menu_categories/menu_settings —
+                      see sonic/*.sql, sonic/seed_db.py), one global menu, not
+                      per-map (a venue has one menu regardless of which SLAM
+                      map is loaded). Same wire shape as the old file-based
+                      version, so frontend/public/menu-data.js and menu.html
+                      need no changes.
     POST /menu    →  body is {"menu": [...], "settings": {...}, "savedAt": str};
-                      overwrites the file. frontend/public/menu-data.js POSTs here
-                      after every localStorage save, so this file stays the live
-                      mirror of whatever staff last edited in menu.html — and Sonic
-                      (backend/../sonic/) reads it to check real-time availability.
-    GET  /orders/<map_name>            →  JSON content of orders/<map_name>.json
-                                           (empty {} if no orders yet for that map)
+                      full-overwrite upsert into Postgres (deletions included —
+                      an item missing from the body is removed). menu-data.js
+                      POSTs here after every localStorage save in menu.html.
+                      sonic/sonic_agent.py reads the same tables directly at
+                      startup (load_menu_from_db()), not through this endpoint.
+    GET  /orders/<map_name>            →  {table_id: {items, total, status,
+                                           updatedAt}, ...} for every table with
+                                           an active visit, from Postgres
+                                           (orders/order_items/visits/
+                                           service_points). map_name is accepted
+                                           for URL compatibility but not filtered
+                                           on — Postgres has one table set per
+                                           location, not per map.
     GET  /orders/<map_name>/<table_id> →  just that table's order ({} if none)
-    POST /orders/<map_name>/<table_id> →  body is ONE table's order object; this
-                                           read-modify-writes the whole file (unlike
-                                           waypoints' full-overwrite) so one table's
-                                           order can never clobber another's
-    DELETE /orders/<map_name>/<table_id> → removes that table's order (e.g. staff
-                                           clearing history from its card); no-op
-                                           (still 200) if it wasn't there
+    POST /orders/<map_name>/<table_id> →  501 — orders are now written directly
+                                           by sonic/sonic_agent.py's
+                                           db_place_order() as the guest orders,
+                                           not through this endpoint.
+    DELETE /orders/<map_name>/<table_id> → closes that table's active visit
+                                           (Postgres equivalent of clearing a
+                                           table's card); no-op (still 200) if
+                                           there wasn't one
     POST /start   →  body {"mode": "manual"|"auto"|"navigate", "map": str} (default "auto")
                       "manual"   → sh/start_slam_ui.sh          (SLAM only, no Nav2 — build a map)
                       "auto"     → sh/start_slam_explore_ui.sh  (SLAM + Nav2 + frontier explorer)
@@ -82,9 +93,25 @@ Endpoints (CORS-open so the browser can call them directly):
                            "map": str|null, "table": str|null} — is Sonic
                            currently mid-conversation at a table?
     POST /voice/start  →  body {"action": "order"|"deliver"|"bill"|"room_service",
-                           "map": str, "table": str}. Spawns sonic/test_harness.py
+                           "map": str, "table": str}. Spawns sonic/sonic_agent.py
                            as a subprocess scoped to that table — this is what a
                            table's action buttons in the UI actually call.
+                           sonic_agent.py is normally a continuous wake-word
+                           loop that discovers its table conversationally; a
+                           TABLE_NO env var (set here from "table") makes it
+                           skip that and run exactly one Kitchen->Table N->
+                           Kitchen round trip for this table instead (real
+                           Nav2 navigation, see sonic/nav_bridge.py), then
+                           exit — same click-to-dispatch lifecycle the old
+                           sonic/test_harness.py had. "action" is passed
+                           through as SONIC_ACTION_HINT: order/bill/
+                           room_service run the round trip plus the normal
+                           conversation; deliver runs a distinct routine
+                           that waits at the kitchen for a spoken pickup
+                           confirmation before departing. SONIC_MAP_NAME
+                           (from "map") selects which
+                           src/argo_mini/waypoints/<map>.json to navigate
+                           against.
                            Same action+map+table while already running → no-op
                            "already_running". A DIFFERENT one while already
                            running → REJECTED (409) rather than pre-empted —
@@ -96,6 +123,16 @@ Endpoints (CORS-open so the browser can call them directly):
                            state, separate lock — starting/stopping a voice
                            session must never contend with or depend on
                            whether the nav stack is running).
+    GET  /voice/nav_enabled  → {"enabled": bool} — staff-facing kill-switch
+                           (locations.voice_nav_enabled) that
+                           sonic_agent.py's navigation_handler() checks before
+                           acting on a guest's spoken "take me to X" request.
+                           Defaults true. Real Nav2 goal-sending is still a
+                           stub (dispatch_robot_action()) — this switch exists
+                           now so it already gates real navigation once that
+                           lands.
+    POST /voice/nav_enabled → body {"enabled": bool}; toggled from the
+                           dashboard (see TablesPanel.jsx).
 
     GET  /estop/status →  {"estopped": bool} — is serial_bridge currently
                            killed via /estop?
@@ -121,7 +158,12 @@ import re
 import signal
 import subprocess
 import threading
+import uuid as uuid_lib
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import psycopg2
+import psycopg2.extras
+from dotenv import load_dotenv
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
@@ -141,13 +183,21 @@ EXPLORE_SCRIPT = os.path.join(_ROOT, 'sh', 'start_slam_explore_ui.sh')
 NAV_SCRIPT     = os.path.join(_ROOT, 'argo_sonic_nav.py')
 MAPS_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'maps')
 WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
-MENU_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'menu')
-MENU_PATH      = os.path.join(MENU_DIR, 'menu.json')
-BACKUP_MENU_PATH = os.path.join(_ROOT, 'frontend', 'argo-menu-backup.json')
-ORDERS_DIR     = os.path.join(_ROOT, 'src', 'argo_mini', 'orders')
-SONIC_DIR            = os.path.join(_ROOT, 'sonic')
-TEST_HARNESS_SCRIPT  = os.path.join(SONIC_DIR, 'test_harness.py')
-VOICE_LOG_PATH       = os.path.join(SONIC_DIR, 'voice_session.log')
+SONIC_DIR      = os.path.join(_ROOT, 'sonic')
+SONIC_SCRIPT   = os.path.join(SONIC_DIR, 'sonic_agent.py')
+VOICE_LOG_PATH = os.path.join(SONIC_DIR, 'voice_session.log')
+
+# Menu + orders now live in Postgres (see sonic/*.sql, sonic/seed_db.py)
+# instead of src/argo_mini/menu/menu.json + src/argo_mini/orders/*.json —
+# load the same .env sonic_agent.py uses so DATABASE_URL/ROBOT_UID agree.
+load_dotenv(os.path.join(SONIC_DIR, '.env'))
+DATABASE_URL = os.environ.get('DATABASE_URL')
+ROBOT_UID    = os.environ.get('ROBOT_UID', 'SONIC-001')
+# Frontend-generated ids (e.g. "m1784625561831-1", for a not-yet-saved menu
+# item) get mapped deterministically to a menu_items.menu_item_id UUID so
+# repeated saves before a page refresh don't create duplicate rows — same
+# namespace/approach as sonic/seed_db.py's menu_item_uuid().
+MENU_UUID_NAMESPACE = uuid_lib.UUID('6f6a1e2e-4b8a-5e3a-9c2a-2f2f2f2f2f2f')
 _VOICE_ACTIONS = {'order', 'deliver', 'bill', 'room_service'}
 NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by NAV_SCRIPT (whichever nav script is active)
 NAV_LOG_PATH       = '/tmp/argo_nav_output.log'  # full stdout+stderr of the current/last NAV_SCRIPT run
@@ -180,34 +230,305 @@ def _safe_name(name):
     return name if _NAME_RE.match(name or '') else None
 
 
-def _seed_menu_if_missing():
-    """One-time copy of the stale manual export into the real, live menu file
-    — after this, frontend/public/menu-data.js POSTs here on every save, so
-    BACKUP_MENU_PATH is never read again post-seed."""
-    if os.path.isfile(MENU_PATH):
-        return
-    os.makedirs(MENU_DIR, exist_ok=True)
-    if os.path.isfile(BACKUP_MENU_PATH):
+_db_conn = None
+
+
+def _db():
+    """Lazily connect (and reconnect if the connection died). Returns None
+    if DATABASE_URL isn't set or the connection attempt fails — every caller
+    below degrades to an empty/no-op response in that case, same as the old
+    file-missing behavior."""
+    global _db_conn
+    if not DATABASE_URL:
+        return None
+    if _db_conn is None or _db_conn.closed:
         try:
-            with open(BACKUP_MENU_PATH, 'r') as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            data = {'menu': [], 'settings': {}, 'savedAt': None}
+            _db_conn = psycopg2.connect(DATABASE_URL)
+            _db_conn.autocommit = True
+        except Exception as e:
+            print(f'[launcher] DB connection failed: {e}')
+            _db_conn = None
+    return _db_conn
+
+
+_location_id_cache = None
+
+
+def _menu_location_id():
+    """Resolves the single location_id this deployment's menu/orders belong
+    to, via the same ROBOT_UID -> robots -> location_id lookup sonic_agent.py
+    uses (see sonic/seed_db.py) — one robot, one venue, one menu/table set."""
+    global _location_id_cache
+    if _location_id_cache is not None:
+        return _location_id_cache
+    conn = _db()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT location_id FROM robots WHERE robot_uid = %s', (ROBOT_UID,))
+            row = cur.fetchone()
+        if row:
+            _location_id_cache = str(row[0])
+        return _location_id_cache
+    except Exception as e:
+        print(f'[launcher] location lookup failed: {e}')
+        return None
+
+
+def _resolve_menu_item_id(client_id):
+    try:
+        return str(uuid_lib.UUID(str(client_id)))
+    except (ValueError, AttributeError, TypeError):
+        return str(uuid_lib.uuid5(MENU_UUID_NAMESPACE, str(client_id)))
+
+
+def _get_menu_response():
+    """{'menu': [...], 'settings': {...}, 'savedAt': str|None} — same shape
+    the old file-based /menu returned, sourced from menu_items/menu_categories/
+    menu_settings instead of src/argo_mini/menu/menu.json."""
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return {'menu': [], 'settings': {}, 'savedAt': None}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT mi.menu_item_id, mi.item_name, mi.price, mc.name,
+                          mi.description, mi.image_url, mi.is_available, mi.extra
+                   FROM menu_items mi
+                   LEFT JOIN menu_categories mc ON mi.category_id = mc.category_id
+                   WHERE mi.location_id = %s""",
+                (location_id,),
+            )
+            rows = cur.fetchall()
+            cur.execute(
+                'SELECT currency_code, tax_percent, saved_at FROM menu_settings WHERE location_id = %s',
+                (location_id,),
+            )
+            settings_row = cur.fetchone()
+    except Exception as e:
+        print(f'[launcher] menu read failed: {e}')
+        return {'menu': [], 'settings': {}, 'savedAt': None}
+
+    menu = []
+    for menu_item_id, name, price, category, desc, image, available, extra in rows:
+        extra = extra or {}
+        menu.append({
+            'id': str(menu_item_id),
+            'name': name,
+            'price': float(price),
+            'category': category or 'Uncategorized',
+            'desc': desc,
+            'image': image,
+            'available': available,
+            'discountPercent': extra.get('discountPercent'),
+            'discountActive': extra.get('discountActive', False),
+            'eventLabel': extra.get('eventLabel'),
+            'stock': extra.get('stock'),
+            'diet': extra.get('diet'),
+        })
+
+    if settings_row:
+        currency_code, tax_percent, saved_at = settings_row
+        settings = {'currencyCode': currency_code, 'taxPercent': float(tax_percent) if tax_percent is not None else 0}
+        saved_at_str = saved_at.isoformat() if saved_at else None
     else:
-        data = {'menu': [], 'settings': {}, 'savedAt': None}
-    with open(MENU_PATH, 'w') as f:
-        json.dump(data, f, indent=2)
+        settings, saved_at_str = {}, None
+
+    return {'menu': menu, 'settings': settings, 'savedAt': saved_at_str}
 
 
-def _read_orders(map_name):
-    path = os.path.join(ORDERS_DIR, f'{map_name}.json')
-    if not os.path.isfile(path):
+def _save_menu(data):
+    """Full-overwrite save (matches the old file-based POST /menu semantics:
+    whatever menu.html POSTs becomes the whole menu, deletions included)."""
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return False
+
+    category_cache = {}
+
+    def get_or_create_category(cur, name):
+        name = (name or 'Uncategorized').strip() or 'Uncategorized'
+        if name in category_cache:
+            return category_cache[name]
+        cur.execute('SELECT category_id FROM menu_categories WHERE location_id = %s AND name = %s',
+                    (location_id, name))
+        row = cur.fetchone()
+        if row:
+            category_cache[name] = row[0]
+            return row[0]
+        cur.execute('INSERT INTO menu_categories (location_id, name) VALUES (%s, %s) RETURNING category_id',
+                    (location_id, name))
+        category_cache[name] = cur.fetchone()[0]
+        return category_cache[name]
+
+    try:
+        with conn.cursor() as cur:
+            seen_ids = []
+            for item in data.get('menu', []):
+                menu_item_id = _resolve_menu_item_id(item.get('id'))
+                seen_ids.append(menu_item_id)
+                category_id = get_or_create_category(cur, item.get('category'))
+                extra = {
+                    'discountPercent': item.get('discountPercent'),
+                    'discountActive': item.get('discountActive', False),
+                    'eventLabel': item.get('eventLabel'),
+                    'stock': item.get('stock'),
+                    'diet': item.get('diet'),
+                }
+                cur.execute(
+                    """INSERT INTO menu_items (menu_item_id, category_id, location_id, item_name,
+                                                description, price, is_available, image_url, extra)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (menu_item_id) DO UPDATE SET
+                           category_id = EXCLUDED.category_id,
+                           item_name = EXCLUDED.item_name,
+                           description = EXCLUDED.description,
+                           price = EXCLUDED.price,
+                           is_available = EXCLUDED.is_available,
+                           image_url = EXCLUDED.image_url,
+                           extra = EXCLUDED.extra""",
+                    (menu_item_id, category_id, location_id, item.get('name'), item.get('desc'),
+                     item.get('price', 0), item.get('available', True), item.get('image'),
+                     psycopg2.extras.Json(extra)),
+                )
+            if seen_ids:
+                cur.execute(
+                    'DELETE FROM menu_items WHERE location_id = %s AND menu_item_id NOT IN %s',
+                    (location_id, tuple(seen_ids)),
+                )
+            else:
+                cur.execute('DELETE FROM menu_items WHERE location_id = %s', (location_id,))
+
+            settings = data.get('settings') or {}
+            cur.execute(
+                """INSERT INTO menu_settings (location_id, currency_code, tax_percent, saved_at)
+                   VALUES (%s, %s, %s, now())
+                   ON CONFLICT (location_id) DO UPDATE SET
+                       currency_code = EXCLUDED.currency_code,
+                       tax_percent = EXCLUDED.tax_percent,
+                       saved_at = EXCLUDED.saved_at""",
+                (location_id, settings.get('currencyCode', 'USD'), settings.get('taxPercent', 0)),
+            )
+        return True
+    except Exception as e:
+        print(f'[launcher] menu write failed: {e}')
+        return False
+
+
+def _read_orders_db():
+    """{table_id: {items, total, status, updatedAt}} for every service_point
+    with an active visit at this deployment's one location. The map_name
+    path segment callers still pass is accepted for URL compatibility with
+    the frontend (which scopes by SLAM map) but not filtered on — Postgres
+    models one menu/table-set per location, not per map (see seed_db.py).
+    Multiple `orders` rows can exist per active visit (sonic_agent.py's
+    db_place_order() writes one per confirm) — these are summed into a
+    single per-table entry to match the old one-order-per-table file shape."""
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
         return {}
-    with open(path, 'r') as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT sp.label, o.order_id, o.total_amount, o.order_status, o.confirmed_at, o.created_at
+                   FROM service_points sp
+                   JOIN visits v ON v.service_point_id = sp.service_point_id AND v.visit_status = 'active'
+                   JOIN orders o ON o.visit_id = v.visit_id
+                   WHERE sp.location_id = %s
+                   ORDER BY o.created_at""",
+                (location_id,),
+            )
+            order_rows = cur.fetchall()
+            order_ids = [r[1] for r in order_rows]
+            items_by_order = {}
+            if order_ids:
+                cur.execute(
+                    """SELECT oi.order_id, oi.menu_item_id, mi.item_name, oi.quantity, oi.unit_price
+                       FROM order_items oi JOIN menu_items mi ON mi.menu_item_id = oi.menu_item_id
+                       WHERE oi.order_id IN %s""",
+                    (tuple(order_ids),),
+                )
+                for order_id, menu_item_id, name, qty, unit_price in cur.fetchall():
+                    items_by_order.setdefault(order_id, []).append(
+                        {'id': str(menu_item_id), 'name': name, 'qty': qty, 'price': float(unit_price)}
+                    )
+    except Exception as e:
+        print(f'[launcher] orders read failed: {e}')
+        return {}
+
+    result = {}
+    for label, order_id, total_amount, status, confirmed_at, created_at in order_rows:
+        table_id = (label or '').replace('Table ', '').strip()
+        if not table_id:
+            continue
+        entry = result.setdefault(table_id, {'items': [], 'total': 0.0, 'status': status, 'updatedAt': None})
+        entry['items'].extend(items_by_order.get(order_id, []))
+        entry['total'] += float(total_amount)
+        entry['status'] = status
+        updated_at = confirmed_at or created_at
+        if updated_at and (entry['updatedAt'] is None or updated_at.isoformat() > entry['updatedAt']):
+            entry['updatedAt'] = updated_at.isoformat()
+    return result
+
+
+def _clear_table_order(table_id):
+    """Closes the table's active visit — the Postgres equivalent of the old
+    'delete this table's order.json entry' (staff clearing a table's card),
+    since orders/visits persist as history rather than living in one
+    overwrite-in-place file."""
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return
+    label = f'Table {table_id}'
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE visits SET visit_status = 'closed', checked_out_at = now()
+                   WHERE visit_status = 'active' AND service_point_id = (
+                       SELECT service_point_id FROM service_points
+                       WHERE location_id = %s AND label = %s)""",
+                (location_id, label),
+            )
+    except Exception as e:
+        print(f'[launcher] order clear failed: {e}')
+
+
+def _get_voice_nav_enabled():
+    """Staff-facing kill-switch sonic_agent.py's navigation_handler() checks
+    before dispatching a "go to X" action. Defaults to True (including when
+    DB is unset) so a missing DB doesn't read as 'disabled'."""
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return True
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT voice_nav_enabled FROM locations WHERE location_id = %s', (location_id,))
+            row = cur.fetchone()
+            return bool(row[0]) if row else True
+    except Exception as e:
+        print(f'[launcher] voice_nav_enabled read failed: {e}')
+        return True
+
+
+def _set_voice_nav_enabled(enabled):
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute('UPDATE locations SET voice_nav_enabled = %s WHERE location_id = %s',
+                        (bool(enabled), location_id))
+        return True
+    except Exception as e:
+        print(f'[launcher] voice_nav_enabled write failed: {e}')
+        return False
 
 # ── State ────────────────────────────────────────────────────────────────────
 
@@ -443,22 +764,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(data)
 
         elif self.path == '/menu':
-            if os.path.isfile(MENU_PATH):
-                with open(MENU_PATH, 'r') as f:
-                    try:
-                        data = json.load(f)
-                    except json.JSONDecodeError:
-                        data = {'menu': [], 'settings': {}, 'savedAt': None}
-            else:
-                data = {'menu': [], 'settings': {}, 'savedAt': None}
-            self._json(data)
+            self._json(_get_menu_response())
 
         elif len(parts) == 2 and parts[0] == 'orders':
             name = _safe_name(parts[1])
             if not name:
                 self._json({'error': 'invalid map name'}, 400)
                 return
-            self._json(_read_orders(name))
+            self._json(_read_orders_db())
 
         elif len(parts) == 3 and parts[0] == 'orders':
             name = _safe_name(parts[1])
@@ -466,7 +779,7 @@ class Handler(BaseHTTPRequestHandler):
             if not name or not table_id:
                 self._json({'error': 'invalid map name or table id'}, 400)
                 return
-            self._json(_read_orders(name).get(table_id, {}))
+            self._json(_read_orders_db().get(table_id, {}))
 
         elif self.path == '/voice/status':
             with _voice_lock:
@@ -476,6 +789,9 @@ class Handler(BaseHTTPRequestHandler):
                 map_    = _voice_map if running else None
                 table   = _voice_table if running else None
             self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table})
+
+        elif self.path == '/voice/nav_enabled':
+            self._json({'enabled': _get_voice_nav_enabled()})
 
         elif self.path == '/estop/status':
             with _serial_lock:
@@ -600,9 +916,9 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError):
                 self._json({'error': 'invalid JSON body'}, 400)
                 return
-            os.makedirs(MENU_DIR, exist_ok=True)
-            with open(MENU_PATH, 'w') as f:
-                json.dump(data, f, indent=2)
+            if not _save_menu(data):
+                self._json({'error': 'menu write failed — check DATABASE_URL / launcher logs'}, 500)
+                return
             self._json({'ok': True})
 
         elif self.path.startswith('/orders/'):
@@ -615,19 +931,12 @@ class Handler(BaseHTTPRequestHandler):
             if not name or not table_id:
                 self._json({'error': 'invalid map name or table id'}, 400)
                 return
-            try:
-                length = int(self.headers.get('Content-Length', 0))
-                order = json.loads(self.rfile.read(length)) if length else {}
-            except (ValueError, json.JSONDecodeError):
-                self._json({'error': 'invalid JSON body'}, 400)
-                return
-            os.makedirs(ORDERS_DIR, exist_ok=True)
-            all_orders = _read_orders(name)
-            all_orders[table_id] = order
-            orders_path = os.path.join(ORDERS_DIR, f'{name}.json')
-            with open(orders_path, 'w') as f:
-                json.dump(all_orders, f, indent=2)
-            self._json({'ok': True})
+            # No frontend caller writes here (orders are written directly by
+            # sonic_agent.py's db_place_order() as the guest orders) — kept
+            # as a 501 rather than silently dropped, in case something else
+            # starts depending on it.
+            self._json({'error': 'orders are now written by the voice agent (db_place_order) — '
+                                  'POST /orders/<map>/<table> is not supported'}, 501)
 
         elif self.path == '/voice/start':
             global _voice_proc, _voice_action, _voice_map, _voice_table
@@ -667,12 +976,22 @@ class Handler(BaseHTTPRequestHandler):
                                    'table': _voice_table, 'pid': _voice_proc.pid},
                     }, 409)
                     return
-                if not os.path.isfile(TEST_HARNESS_SCRIPT):
-                    self._json({'ok': False, 'error': f'script not found: {TEST_HARNESS_SCRIPT}'}, 500)
+                if not os.path.isfile(SONIC_SCRIPT):
+                    self._json({'ok': False, 'error': f'script not found: {SONIC_SCRIPT}'}, 500)
                     return
 
-                args = [_sonic_python(), TEST_HARNESS_SCRIPT,
-                        '--table', table_id, '--map', map_name, '--action', action]
+                # sonic_agent.py has no --table/--map/--action CLI flags (it's
+                # a continuous wake-word loop that discovers the table
+                # conversationally) — TABLE_NO tells it to skip that
+                # discovery and run one real Kitchen->Table->Kitchen round
+                # trip for this table (nav_bridge.py sends the actual Nav2
+                # goals), preserving the old click-to-dispatch UX.
+                # SONIC_ACTION_HINT selects order/bill/room_service (round
+                # trip + normal conversation) vs. deliver (kitchen
+                # pickup-confirmation routine, see run_delivery_session()).
+                # SONIC_MAP_NAME picks which waypoints file to navigate
+                # against.
+                args = [_sonic_python(), SONIC_SCRIPT]
                 # Appended, not overwritten — so a prior session's output is
                 # still there to compare against. A clear separator per
                 # session is enough to tell them apart without needing log
@@ -708,12 +1027,11 @@ class Handler(BaseHTTPRequestHandler):
                     args,
                     cwd=SONIC_DIR,             # sonic/*.py use bare `import config` etc, not package-relative
                     start_new_session=True,    # own process group → clean kill, mirrors SLAM stack
-                    stdin=subprocess.DEVNULL,  # no TTY — keyboard_loop()'s input() would otherwise
-                                               # raise EOFError against a closed stream (order action
-                                               # only) or, worse, fight over this process's own
-                                               # terminal if left un-redirected
+                    stdin=subprocess.DEVNULL,  # no TTY
                     stdout=log_f,
                     stderr=log_f,
+                    env={**os.environ, 'TABLE_NO': table_id, 'SONIC_ACTION_HINT': action,
+                         'SONIC_MAP_NAME': map_name},
                 )
                 if log_f is not subprocess.DEVNULL:
                     log_f.close()  # child has its own fd via dup2; safe to close our copy now
@@ -727,6 +1045,22 @@ class Handler(BaseHTTPRequestHandler):
                 _voice_stop_locked()
             print('[launcher] voice session stopped')
             self._json({'ok': True, 'status': 'stopped'})
+
+        elif self.path == '/voice/nav_enabled':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+            except (ValueError, json.JSONDecodeError):
+                self._json({'ok': False, 'error': 'invalid JSON body'}, 400)
+                return
+            if 'enabled' not in body:
+                self._json({'ok': False, 'error': 'missing "enabled"'}, 400)
+                return
+            if not _set_voice_nav_enabled(body['enabled']):
+                self._json({'ok': False, 'error': 'write failed — check DATABASE_URL / launcher logs'}, 500)
+                return
+            print(f"[launcher] voice-triggered navigation {'enabled' if body['enabled'] else 'disabled'}")
+            self._json({'ok': True, 'enabled': bool(body['enabled'])})
 
         elif self.path == '/estop':
             with _serial_lock:
@@ -754,12 +1088,7 @@ class Handler(BaseHTTPRequestHandler):
             if not name or not table_id:
                 self._json({'error': 'invalid map name or table id'}, 400)
                 return
-            all_orders = _read_orders(name)
-            all_orders.pop(table_id, None)
-            os.makedirs(ORDERS_DIR, exist_ok=True)
-            orders_path = os.path.join(ORDERS_DIR, f'{name}.json')
-            with open(orders_path, 'w') as f:
-                json.dump(all_orders, f, indent=2)
+            _clear_table_order(table_id)
             self._json({'ok': True})
 
         else:
@@ -805,13 +1134,12 @@ if __name__ == '__main__':
         print(f'[launcher] WARNING: navigate script not found — check path above')
     os.makedirs(MAPS_DIR, exist_ok=True)
     os.makedirs(WAYPOINTS_DIR, exist_ok=True)
-    os.makedirs(ORDERS_DIR, exist_ok=True)
-    _seed_menu_if_missing()
-    print(f'[launcher] menu file        → {MENU_PATH}')
+    if not DATABASE_URL:
+        print('[launcher] WARNING: DATABASE_URL not set (sonic/.env) — /menu and /orders will return empty')
     print(f'[launcher] sonic interpreter → {_sonic_python()}')
     print(f'[launcher] voice session log → {VOICE_LOG_PATH}')
-    if not os.path.isfile(TEST_HARNESS_SCRIPT):
-        print(f'[launcher] WARNING: test_harness.py not found — check path above')
+    if not os.path.isfile(SONIC_SCRIPT):
+        print(f'[launcher] WARNING: sonic_agent.py not found — check path above')
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')
     try:

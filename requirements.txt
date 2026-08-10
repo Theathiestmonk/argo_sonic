@@ -11,8 +11,10 @@ requests>=2.31.0
 numpy
 python-dotenv
 sounddevice>=0.4.6
-soundfile>=0.12.1
 openwakeword
+psycopg2-binary>=2.9
+langgraph>=0.2
+typing_extensions
 
 # ── settings-dashboard/backend/ (Jetson WiFi/Bluetooth/System settings API) ──
 fastapi>=0.110,<1.0
