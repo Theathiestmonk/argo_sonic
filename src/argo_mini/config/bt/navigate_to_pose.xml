@@ -12,12 +12,8 @@
       </PipelineSequence>
 
       <RoundRobin name="RecoveryActions">
-        <Sequence name="ClearingActions">
-          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
-          <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
-        </Sequence>
-        <Spin spin_dist="1.57"/>
         <BackUp backup_dist="0.20" backup_speed="0.30"/>
+        <Spin spin_dist="1.57"/>
       </RoundRobin>
 
     </RecoveryNode>
