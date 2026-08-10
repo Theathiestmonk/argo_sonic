@@ -15,6 +15,8 @@ openwakeword
 psycopg2-binary>=2.9
 langgraph>=0.2
 typing_extensions
+websockets>=12.0   # Sarvam streaming TTS (sarvam_tts_stream) — optional at runtime,
+                    # speak() falls back to the REST API if this isn't installed
 
 # ── settings-dashboard/backend/ (Jetson WiFi/Bluetooth/System settings API) ──
 fastapi>=0.110,<1.0

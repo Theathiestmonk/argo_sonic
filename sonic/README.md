@@ -135,6 +135,22 @@ PICKUP_CONFIRM_WINDOW_S # default 30 — delivery's kitchen pickup-confirmation 
 Set `SONIC_TRACE=0` to silence the per-node execution trace printed to the
 terminal by default.
 
+## Voice (Sarvam TTS)
+
+`SARVAM_SPEAKER = "ishita"` (female, bulbul:v3) at `SARVAM_TTS_PACE = 0.9`
+(slightly slower than normal, clearer over a speaker in a noisy room).
+`shubh` is bulbul:v3's male default; `varun` exists but Sarvam's own docs
+flag it as a "villain/suspense" voice — not a fit here.
+
+`speak()` tries Sarvam's real streaming API first (`sarvam_tts_stream()` —
+one WebSocket connection per utterance, audio arrives in chunks as it's
+generated) and transparently falls back to the non-streaming REST call
+(`sarvam_tts()`) if the `websockets` package isn't installed or anything
+about the streaming connection fails — this fallback hasn't been exercised
+against the live API from a dev sandbox, so treat early failures there as
+expected until verified against real hardware. Needs `websockets>=12.0`
+(`pip install -r requirements.txt`).
+
 ## Staff switch: navigation kill switch
 
 `locations.voice_nav_enabled` (Postgres) gates **all** autonomous
