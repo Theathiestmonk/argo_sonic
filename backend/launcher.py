@@ -68,7 +68,15 @@ Endpoints (CORS-open so the browser can call them directly):
                       If something's already running under a different mode/map than
                       requested, it's stopped first so the new one always reflects what
                       was actually asked for (e.g. switching which map to navigate on).
-    POST /stop    →  kills the entire process group cleanly
+                      For "navigate" specifically: a background thread
+                      (_watch_for_nav_ready) polls NAV_PROGRESS_PATH for THIS run
+                      reporting READY, then auto-starts sonic_agent.py's continuous
+                      wake-word loop ("Hi Sonic") — so a guest can talk to the robot
+                      without staff separately starting it by hand. See GET
+                      /voice/status's wake_loop_* fields.
+    POST /stop    →  kills the entire process group cleanly, and stops the
+                      wake-word loop too if it had been auto-started (it only
+                      makes sense while Nav2 is up)
     GET  /nav_progress → {"status": "OK"|"ERROR"|"READY"|"STOPPED"|null,
                           "message": str|null, "timestamp": int|null} —
                           the current/last step NAV_SCRIPT reported
@@ -90,12 +98,22 @@ Endpoints (CORS-open so the browser can call them directly):
                      the script by hand to ever see it.
 
     GET  /voice/status →  {"running": bool, "pid": int|null, "action": str|null,
-                           "map": str|null, "table": str|null} — is Sonic
-                           currently mid-conversation at a table?
+                           "map": str|null, "table": str|null,
+                           "wake_loop_running": bool, "wake_loop_pending": bool} —
+                           is Sonic currently mid-conversation at a table
+                           ("running"/action/map/table), and separately, is the
+                           continuous wake-word loop up ("wake_loop_running") or
+                           does it want to be but isn't right now
+                           ("wake_loop_pending" — paused for a table dispatch, or
+                           still starting up after nav just went READY)?
     POST /voice/start  →  body {"action": "order"|"deliver"|"bill"|"room_service",
                            "map": str, "table": str}. Spawns sonic/sonic_agent.py
                            as a subprocess scoped to that table — this is what a
-                           table's action buttons in the UI actually call.
+                           table's action buttons in the UI actually call. Pauses
+                           the wake-word loop for the dispatch's duration (shared
+                           mic/speaker, can't run both at once) and restarts it
+                           once the dispatch process exits, if it's still supposed
+                           to be running.
                            sonic_agent.py is normally a continuous wake-word
                            loop that discovers its table conversationally; a
                            TABLE_NO env var (set here from "table") makes it
@@ -158,6 +176,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 import uuid as uuid_lib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -539,13 +558,19 @@ _lock = threading.Lock()
 
 def _stop_locked():
     """Kill the current process group, if any. Caller must hold _lock."""
-    global _proc, _mode, _map
+    global _proc, _mode, _map, _wake_should_run
     if _proc and _proc.poll() is None:
         try:
             os.killpg(os.getpgid(_proc.pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
     _proc, _mode, _map = None, None, None
+    # The wake-word loop only makes sense while Nav2 is up — stop it too
+    # rather than leaving it listening (and trying to navigate) against a
+    # nav stack that no longer exists.
+    with _wake_lock:
+        _wake_should_run = False
+        _wake_stop_locked()
 
 
 # Independent from _proc/_mode/_map/_lock above on purpose — a voice session
@@ -569,6 +594,100 @@ def _voice_stop_locked():
         except ProcessLookupError:
             pass
     _voice_proc, _voice_action, _voice_map, _voice_table = None, None, None, None
+
+
+# Continuous wake-word loop ("Hi Sonic") — sonic_agent.py run with no
+# TABLE_NO, auto-started once Nav2 reports READY (see
+# _watch_for_nav_ready, spawned from POST /start's navigate branch) and
+# auto-stopped when the nav stack stops (_stop_locked). It shares the same
+# mic/speaker as a table dispatch (_voice_proc above) and can't run
+# alongside one, so POST /voice/start pauses it for the dispatch's
+# duration and a background thread restarts it once that dispatch process
+# exits — see the pause/resume block there. _wake_should_run is separate
+# from "is _wake_proc alive right now": it's the standing intent ("nav is
+# up, so the loop should be running whenever nothing else needs the mic"),
+# independent of it being briefly paused for a dispatch.
+_wake_proc: subprocess.Popen | None = None
+_wake_should_run = False
+_wake_lock = threading.Lock()
+# Lock ordering: _lock/_voice_lock are always acquired BEFORE _wake_lock,
+# never the reverse, so pausing/resuming the wake loop from within either
+# of those sections can never deadlock against it.
+
+
+def _wake_start_locked():
+    """Start the continuous wake-word loop, if not already running. Caller
+    must hold _wake_lock."""
+    global _wake_proc
+    if _wake_proc and _wake_proc.poll() is None:
+        return
+    if not os.path.isfile(SONIC_SCRIPT):
+        print(f'[launcher] wake-word loop not started — script not found: {SONIC_SCRIPT}')
+        return
+    try:
+        with open(VOICE_LOG_PATH, 'a'):
+            pass
+        os.chmod(VOICE_LOG_PATH, 0o666)
+        log_f = open(VOICE_LOG_PATH, 'a')
+        log_f.write(f"\n{'='*70}\n[{datetime.datetime.now().isoformat()}] "
+                    f"wake-word loop starting\n{'='*70}\n")
+        log_f.flush()
+    except OSError:
+        log_f = subprocess.DEVNULL
+    _wake_proc = subprocess.Popen(
+        [_sonic_python(), SONIC_SCRIPT],   # no TABLE_NO -> continuous wake-word mode
+        cwd=SONIC_DIR,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=log_f,
+        stderr=log_f,
+        env=os.environ.copy(),
+    )
+    if log_f is not subprocess.DEVNULL:
+        log_f.close()
+    print(f'[launcher] wake-word loop started  pid={_wake_proc.pid}')
+
+
+def _wake_stop_locked():
+    """Stop the wake-word loop, if running. Caller must hold _wake_lock."""
+    global _wake_proc
+    if _wake_proc and _wake_proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(_wake_proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    _wake_proc = None
+
+
+def _watch_for_nav_ready(nav_proc, started_at):
+    """Background thread (one per POST /start navigate call): polls
+    NAV_PROGRESS_PATH until THIS run reports READY, then auto-starts the
+    wake-word loop. `started_at` guards against a stale READY left over
+    from a previous run still sitting in the (shared) progress file at the
+    moment this thread starts polling. Exits without starting anything if
+    the nav process dies first, or if it's superseded by a stop/restart
+    before ever reporting READY."""
+    while nav_proc.poll() is None:
+        if os.path.isfile(NAV_PROGRESS_PATH):
+            try:
+                with open(NAV_PROGRESS_PATH, 'r') as f:
+                    raw = f.read().strip()
+                bits = raw.split('|', 2)
+                status = bits[0] if len(bits) == 3 else None
+                ts = int(bits[1]) if len(bits) == 3 else 0
+            except (OSError, ValueError):
+                status, ts = None, 0
+            if status == 'READY' and ts >= started_at:
+                with _lock:
+                    if _proc is not nav_proc or _mode != 'navigate':
+                        return  # superseded — don't race a stop/restart
+                global _wake_should_run
+                with _wake_lock:
+                    _wake_should_run = True
+                    _wake_start_locked()
+                print('[launcher] Nav2 READY — wake-word loop auto-started')
+                return
+        time.sleep(1.0)
 
 
 # Independent again, on purpose — an operator hitting emergency-stop on the
@@ -788,7 +907,11 @@ class Handler(BaseHTTPRequestHandler):
                 action  = _voice_action if running else None
                 map_    = _voice_map if running else None
                 table   = _voice_table if running else None
-            self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table})
+            with _wake_lock:
+                wake_running = _wake_proc is not None and _wake_proc.poll() is None
+                wake_pending = _wake_should_run and not wake_running  # paused for a dispatch, or still starting up
+            self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table,
+                        'wake_loop_running': wake_running, 'wake_loop_pending': wake_pending})
 
         elif self.path == '/voice/nav_enabled':
             self._json({'enabled': _get_voice_nav_enabled()})
@@ -865,6 +988,7 @@ class Handler(BaseHTTPRequestHandler):
                     os.chmod(NAV_LOG_PATH, 0o666)
                 except OSError:
                     pass
+                nav_start_ts = int(time.time())
                 nav_log_f = open(NAV_LOG_PATH, 'a')
                 _proc = subprocess.Popen(
                     # --no-rviz: the robot is headless and driven entirely
@@ -883,6 +1007,13 @@ class Handler(BaseHTTPRequestHandler):
                 nav_log_f.close()  # child has its own fd via dup2; safe to close our copy now
                 _mode = mode
                 _map = map_name
+                if mode == 'navigate':
+                    # Auto-start the wake-word loop once THIS run reports
+                    # Nav2 READY, so a guest can say "Hi Sonic" without
+                    # staff separately SSH-ing in to start it by hand.
+                    threading.Thread(
+                        target=_watch_for_nav_ready, args=(_proc, nav_start_ts), daemon=True,
+                    ).start()
             print(f'[launcher] stack started  mode={mode}  map={map_name}  pid={_proc.pid}')
             self._json({'ok': True, 'status': 'started', 'pid': _proc.pid, 'mode': mode, 'map': map_name})
 
@@ -1023,6 +1154,14 @@ class Handler(BaseHTTPRequestHandler):
                     log_f.flush()
                 except OSError:
                     log_f = subprocess.DEVNULL
+                # The wake-word loop and a table dispatch share the same
+                # mic/speaker and can't run at once — pause it for the
+                # dispatch's duration; a background thread below restarts
+                # it once this dispatch process exits (if it's still
+                # supposed to be running — i.e. nav hasn't been stopped
+                # meanwhile).
+                with _wake_lock:
+                    _wake_stop_locked()
                 _voice_proc = subprocess.Popen(
                     args,
                     cwd=SONIC_DIR,             # sonic/*.py use bare `import config` etc, not package-relative
@@ -1036,6 +1175,15 @@ class Handler(BaseHTTPRequestHandler):
                 if log_f is not subprocess.DEVNULL:
                     log_f.close()  # child has its own fd via dup2; safe to close our copy now
                 _voice_action, _voice_map, _voice_table = action, map_name, table_id
+
+                def _resume_wake_loop_after(dispatch_proc):
+                    dispatch_proc.wait()
+                    with _wake_lock:
+                        if _wake_should_run:
+                            _wake_start_locked()
+                threading.Thread(
+                    target=_resume_wake_loop_after, args=(_voice_proc,), daemon=True,
+                ).start()
             print(f'[launcher] voice session started  action={action}  map={map_name}  table={table_id}  pid={_voice_proc.pid}')
             self._json({'ok': True, 'status': 'started', 'pid': _voice_proc.pid,
                         'action': action, 'map': map_name, 'table': table_id})
