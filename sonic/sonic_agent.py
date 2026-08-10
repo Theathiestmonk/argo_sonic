@@ -31,12 +31,17 @@ Run modes:
 
 If TABLE_NO is set (backend/launcher.py sets this when staff dispatch the
 robot to a specific table from the dashboard), the wake-word gate is skipped
-and the robot runs one real Kitchen -> Table N -> Kitchen round trip (via
-navigate_and_wait(), which blocks on an actual Nav2 result — see
-nav_bridge.py) before exiting instead of looping on the wake word — see
-main_loop(). SONIC_ACTION_HINT selects order/bill/room_service (round trip
-+ normal conversation) vs. deliver (run_delivery_session(): wait at the
-kitchen for a spoken pickup confirmation before departing).
+— see main_loop(). SONIC_ACTION_HINT selects order/bill/room_service vs.
+deliver:
+  - order/bill/room_service: the graph itself owns the Kitchen -> Table N
+    trip (n_navigate_to_table, the graph's entry point) and the
+    Table -> Kitchen return (n_return_to_kitchen, its terminal step,
+    reached however the session ends — order completed, guest said bye, or
+    a silence timeout) via navigate_and_wait(), which blocks on an actual
+    Nav2 result — see nav_bridge.py.
+  - deliver: run_delivery_session() — not part of this graph (it's not a
+    conversation) — waits at the kitchen for a spoken pickup confirmation
+    before departing, and manages its own travel directly.
 
 Menu lives in Postgres (menu_items/menu_categories, see load_menu_from_db())
 instead of a bundled file — requires DATABASE_URL and `seed_db.py` to have
@@ -135,7 +140,11 @@ SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 480 samples/frame
 
-SILENCE_ONSET_TIMEOUT_S = 5.0
+SILENCE_ONSET_TIMEOUT_S = 8.0  # was 5.0 — too tight for a guest who just watched the
+                                # robot arrive and needs a beat before answering; with
+                                # only one reprompt, 5s+5s was cutting real order-taking
+                                # sessions short (silence timeout -> went_idle -> the
+                                # robot leaves mid-order)
 TRAILING_SILENCE_MS = 600
 SPEECH_RMS_THRESHOLD = 500  # int16 RMS energy; recalibrate against your mic/room
 
@@ -1560,6 +1569,35 @@ def place_order(state: DialogueState) -> None:
 MAX_CLARIFICATIONS = 3
 
 
+def n_navigate_to_table(state: DialogueState) -> dict:
+    """Graph entry point. For a staff-dispatched session (FORCED_TABLE_NO
+    set — the dashboard's Take Order/Give Bill/room_service buttons), this
+    is where the physical Kitchen -> Table trip actually happens, as a real
+    graph step rather than a wrapper main_loop() ran around the whole
+    session — so a failed trip can route straight to going idle (see
+    below) instead of ever starting a conversation the robot isn't
+    physically present for. A no-op for the general wake-word loop
+    (FORCED_TABLE_NO unset) — the robot might be wherever a guest walked up
+    to it, not necessarily the kitchen."""
+    trace_node("navigate_to_table", state)
+    if FORCED_TABLE_NO and not state.table_no:
+        state.table_no = FORCED_TABLE_NO
+        state.table_no_locked = True
+
+    if FORCED_TABLE_NO:
+        arrived = perform_travel_action(
+            f"Heading to Table {FORCED_TABLE_NO} now, I'll be right there!",
+            f"Table {FORCED_TABLE_NO}",
+        )
+        if not arrived:
+            state.went_idle = True
+            state.next_node = "respond"
+            return asdict(state)
+
+    state.next_node = "intent_classify"
+    return asdict(state)
+
+
 def n_intent_classify(state: DialogueState) -> dict:
     trace_node("intent_classify", state)
 
@@ -1721,7 +1759,7 @@ def n_respond(state: DialogueState) -> dict:
         state.pending_seed = None
         db_end_session(state)
         print("--- back to idle, listening for the wake word ---\n")
-        state.next_node = "END"
+        state.next_node = "return_to_kitchen"
         return asdict(state)
 
     if state.pending_resume_after_switch:
@@ -1798,6 +1836,22 @@ def n_respond(state: DialogueState) -> dict:
     state.went_idle = True
     db_end_session(state)
     print("--- back to idle, listening for the wake word ---\n")
+    state.next_node = "return_to_kitchen"
+    return asdict(state)
+
+
+def n_return_to_kitchen(state: DialogueState) -> dict:
+    """Graph terminal step, reached once n_respond has gone idle for any
+    reason (order completed, guest said bye, a genuine silence timeout, a
+    failed outbound trip). For a staff-dispatched session (FORCED_TABLE_NO
+    set), this is where the physical Table -> Kitchen return trip happens
+    — a real graph step, run every time the session ends regardless of how
+    it ended, same as main_loop()'s old wrapper did, just owned by the
+    graph now instead of Python code wrapped around run_graph_session().
+    A no-op for the general wake-word loop."""
+    trace_node("return_to_kitchen", state)
+    if FORCED_TABLE_NO:
+        navigate_and_wait("Kitchen")
     state.next_node = "END"
     return asdict(state)
 
@@ -2156,9 +2210,11 @@ def n_cancel_order_start(state: DialogueState) -> dict:
 # ---------------------------------------------------------------------------
 
 NODE_FUNCS = {
+    "navigate_to_table": n_navigate_to_table,
     "intent_classify": n_intent_classify,
     "handle_switch": n_handle_switch,
     "respond": n_respond,
+    "return_to_kitchen": n_return_to_kitchen,
     "menu_node": n_menu,
     "call_people_node": n_call_people,
     "navigation_node": n_navigation,
@@ -2189,7 +2245,7 @@ def build_graph():
     g = StateGraph(DialogueState)
     for name, fn in NODE_FUNCS.items():
         g.add_node(name, fn)
-    g.set_entry_point("intent_classify")
+    g.set_entry_point("navigate_to_table")
 
     edge_map = {name: name for name in NODE_FUNCS}
     edge_map["END"] = END
@@ -2316,31 +2372,25 @@ def main_loop() -> None:
         # wake-word gate and run exactly one round trip, then exit, mirroring
         # the old test_harness.py's one-shot-subprocess-per-click lifecycle.
         # The robot's home base is the kitchen: every dispatched task is
-        # Kitchen -> (task) -> Kitchen. A failed outbound leg skips the task
-        # rather than pretending to be somewhere it isn't; the return leg is
-        # best-effort and never blocks the process from exiting.
+        # Kitchen -> (task) -> Kitchen.
+        #
+        # For order/bill/room_service, the Kitchen->Table trip and the
+        # Table->Kitchen return are graph nodes now (n_navigate_to_table,
+        # n_return_to_kitchen) — owned by the graph itself, run every time
+        # regardless of how the session ends (order completed, guest said
+        # bye, or a genuine silence timeout), rather than an unconditional
+        # wrapper here that couldn't tell those cases apart.
         require_api_keys()
         action_label = FORCED_ACTION or "order"
         print(f"Sonic dispatched: table={FORCED_TABLE_NO} action={action_label!r} (no wake word needed).")
-        navigate_and_wait("Kitchen")  # known start point; idempotent if already there
+        navigate_and_wait("Kitchen")  # known start point before dispatch; idempotent if already there
         if FORCED_ACTION == "deliver":
+            # Delivery is a separate, non-conversational routine (wait for a
+            # spoken pickup confirmation, then go) — not part of the
+            # intent_classify graph, so it still manages its own travel.
             run_delivery_session(FORCED_TABLE_NO)
         else:
-            # No arrival_text here on purpose: run_graph_session()'s entry
-            # node (n_intent_classify) already greets and asks "Hi! How can
-            # I help you today?" via its own interrupt()/listen() as soon as
-            # it starts — an extra greeting here would double up, delaying
-            # the guest's chance to answer within n_intent_classify's own
-            # listen window (a real bug this caused: robot arrives, speaks
-            # two greetings back to back, times out waiting for a reply,
-            # and leaves without ever taking the order).
-            arrived = perform_travel_action(
-                f"Heading to Table {FORCED_TABLE_NO} now, I'll be right there!",
-                f"Table {FORCED_TABLE_NO}",
-            )
-            if arrived:
-                run_graph_session(app, carried_state, thread_id)
-        navigate_and_wait("Kitchen")
+            run_graph_session(app, carried_state, thread_id)
     else:
         require_api_keys()
         oww_model = load_wake_word_model()

@@ -89,12 +89,16 @@ When a staff member clicks a table's action button in the dashboard,
 the agent skips conversational table discovery and runs exactly one round
 trip before exiting, instead of sitting in the wake-word loop:
 
-- **order / bill / room_service**: navigate Kitchen → Table N, run the
-  normal conversational session, navigate back to Kitchen.
+- **order / bill / room_service**: the Kitchen→Table trip and the
+  Table→Kitchen return are graph nodes (`n_navigate_to_table`,
+  `n_return_to_kitchen` — see "Graph-owned navigation" below), run around
+  the normal conversational session.
 - **deliver**: at the Kitchen, ask staff to load the order and wait up to
   30s for a spoken confirmation (`run_delivery_session()`) — only then
   navigate to the table, announce the delivery, and return. No confirmation
   within the window aborts the trip rather than delivering an empty robot.
+  This one isn't part of the intent_classify graph (it's not a
+  conversation), so it still manages its own travel directly.
 
 Running the script directly (no `TABLE_NO` set) gives the general always-on
 wake-word loop, unaffected by any of this.
@@ -118,6 +122,30 @@ Test the bridge in isolation before trusting it inside a session:
 source /opt/ros/humble/setup.bash && source ../install/setup.bash
 python3 nav_bridge.py --map office_map --destination Kitchen --timeout 60
 ```
+
+## Graph-owned navigation
+
+For staff-dispatched order/bill/room_service sessions, the outbound and
+return trips are graph nodes, not a wrapper `main_loop()` runs around
+`run_graph_session()`:
+
+- **`n_navigate_to_table`** — the graph's entry point (`build_graph()`'s
+  `set_entry_point`). Runs the Kitchen→Table trip before `intent_classify`
+  ever asks "How can I help?". If the trip fails, it routes straight to
+  going idle — the graph never starts a conversation the robot isn't
+  physically at the table for.
+- **`n_return_to_kitchen`** — the graph's terminal step. Every path that
+  ends the session (`n_respond`'s `went_idle` handling) routes here instead
+  of straight to `END`, so the Table→Kitchen return happens exactly once,
+  regardless of *why* the session ended (order completed, guest said bye,
+  or a genuine silence timeout) — the graph itself decides when it's truly
+  done, instead of an external wrapper that couldn't tell those cases
+  apart and returned to the kitchen unconditionally the moment
+  `run_graph_session()` returned for any reason.
+
+Both are no-ops for the general wake-word loop (`FORCED_TABLE_NO` unset) —
+the robot might be wherever a guest walked up to it, not necessarily the
+kitchen, so nothing physical happens on entry/exit in that case.
 
 ## Tuning
 
