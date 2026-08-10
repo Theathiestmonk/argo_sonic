@@ -17,9 +17,9 @@ Three independent sensor sources with graduated forward-speed response:
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
     < DEPTH_STOP_DIST (0.45 m) : hard stop
 
-  Ultrasonic (Range x 4)  – binary, no slow zone needed at 10 cm
-    FL/FR < US_FRONT_DIST (0.10 m) : hard stop forward
-    BL/BR < US_REAR_DIST  (0.10 m) : hard stop reverse
+  Ultrasonic (Range x 4)  – binary, no slow zone needed at 30 cm
+    FL/FR < US_FRONT_DIST (0.30 m) : hard stop forward
+    BL/BR < US_REAR_DIST  (0.30 m) : hard stop reverse
 
 Gate:
     fwd_scale = min(lidar_scale, depth_scale, us_scale)   ∈ [0.0, 1.0]
@@ -65,8 +65,8 @@ DEPTH_HEIGHT_MAX =  0.05   # opt Y – upper bound (ignore ceiling)
 DEPTH_STALE_SECS = 1.0     # s
 
 # ── Ultrasonic ────────────────────────────────────────────────────────────────
-US_FRONT_DIST    = 0.10    # m   – hard stop forward
-US_REAR_DIST     = 0.10    # m   – hard stop reverse
+US_FRONT_DIST    = 0.30    # m   – hard stop forward
+US_REAR_DIST     = 0.30    # m   – hard stop reverse
 US_STALE_SECS    = 1.0     # s
 
 # ── Pipeline topics ───────────────────────────────────────────────────────────
