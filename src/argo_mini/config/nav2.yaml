@@ -15,12 +15,13 @@
         - nav2_compute_path_to_pose_action_bt_node
         - nav2_follow_path_action_bt_node
         - nav2_pipeline_sequence_bt_node
+        - nav2_sequence_bt_node
         - nav2_recovery_node_bt_node
         - nav2_rate_controller_bt_node
         - nav2_round_robin_node_bt_node
         - nav2_back_up_action_bt_node
         - nav2_spin_action_bt_node
-        - nav2_wait_action_bt_node
+        - nav2_clear_costmap_service_bt_node
 
   controller_server:
     ros__parameters:
@@ -185,15 +186,13 @@
       global_costmap_topic: global_costmap/costmap_raw
       footprint_topic: local_costmap/published_footprint
       cycle_frequency: 10.0
-      behavior_plugins: ["backup", "spin", "wait"]
+      behavior_plugins: ["backup", "spin"]
       backup:
         plugin: "nav2_behaviors/BackUp"
         backup_dist: 0.5
         backup_speed: 0.3
       spin:
         plugin: "nav2_behaviors/Spin"
-      wait:
-        plugin: "nav2_behaviors/Wait"
       simulate_ahead_time: 2.0
       max_rotational_vel: 0.8
       min_rotational_vel: 0.25
