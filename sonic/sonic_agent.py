@@ -1635,9 +1635,11 @@ def n_intent_classify(state: DialogueState) -> dict:
             for i in state.current_order
         )
         prompt = f"Welcome back! Your order so far: {summary}. Want to add more, confirm it, or something else?"
-    elif not state.first_turn:
-        prompt = "Anything else I can help with?"
     else:
+        # n_respond() ends the session (went_idle) once a request is fully
+        # handled rather than looping back here, so this point is only ever
+        # reached on a fresh wake-word activation -- state.first_turn is
+        # always True by the time we get here.
         prompt = "Hi! How can I help you today?"
 
     answer = interrupt({"prompt": prompt})
@@ -1777,10 +1779,15 @@ def n_respond(state: DialogueState) -> dict:
             # explicit "no" or nothing concrete -- give up on resuming
             state.pending_resume_after_switch = False
             state.paused_order = None
-            # declined -- fall through to normal "anything else" handling
         else:
             state.pending_resume_after_switch = False
 
+    # The request has been fully handled and nothing is left pending to
+    # resume -- go idle instead of looping back into intent_classify to
+    # proactively ask "Anything else I can help with?" and open another
+    # listen window. The bot only speaks when spoken to: a guest who wants
+    # something else can say "Hi Sonic" again, and a staff-dispatched table
+    # session simply ends (the robot returns to the kitchen).
     state.active_intent = None
     state.pending_question = None
     state.order_action = None
@@ -1788,7 +1795,10 @@ def n_respond(state: DialogueState) -> dict:
     state.active_item = None
     state.item_attempts = 0
     state.pending_seed = None
-    state.next_node = "intent_classify"
+    state.went_idle = True
+    db_end_session(state)
+    print("--- back to idle, listening for the wake word ---\n")
+    state.next_node = "END"
     return asdict(state)
 
 
