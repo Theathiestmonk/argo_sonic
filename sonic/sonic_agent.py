@@ -2218,10 +2218,17 @@ def main_loop() -> None:
         if FORCED_ACTION == "deliver":
             run_delivery_session(FORCED_TABLE_NO)
         else:
+            # No arrival_text here on purpose: run_graph_session()'s entry
+            # node (n_intent_classify) already greets and asks "Hi! How can
+            # I help you today?" via its own interrupt()/listen() as soon as
+            # it starts — an extra greeting here would double up, delaying
+            # the guest's chance to answer within n_intent_classify's own
+            # listen window (a real bug this caused: robot arrives, speaks
+            # two greetings back to back, times out waiting for a reply,
+            # and leaves without ever taking the order).
             arrived = perform_travel_action(
                 f"Heading to Table {FORCED_TABLE_NO} now, I'll be right there!",
                 f"Table {FORCED_TABLE_NO}",
-                arrival_text="Hello! I'm your robot assistant — how can I help?",
             )
             if arrived:
                 run_graph_session(app, carried_state, thread_id)
