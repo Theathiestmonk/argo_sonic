@@ -32,10 +32,15 @@ import argparse
 import json
 import os
 import sys
+import time
 
 WAYPOINTS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "argo_mini", "waypoints"
 )
+
+
+def log(msg: str) -> None:
+    print(f"[nav_bridge] {msg}", flush=True)
 
 
 def load_waypoint(map_name: str, destination: str) -> dict:
@@ -67,6 +72,8 @@ def main() -> None:
     args = parser.parse_args()
 
     wp = load_waypoint(args.map, args.destination)
+    log(f"resolved {args.destination!r} -> x={wp['x']:.3f} y={wp['y']:.3f} "
+        f"qz={wp.get('qz', 0.0):.3f} qw={wp.get('qw', 1.0):.3f} (map={args.map})")
 
     import rclpy
     from action_msgs.msg import GoalStatus
@@ -85,9 +92,21 @@ def main() -> None:
         print(f"RESULT:{result}")
         sys.exit(0 if result == "SUCCESS" else 1)
 
-    if not client.wait_for_server(timeout_sec=min(10.0, args.timeout)):
+    server_wait_s = min(10.0, args.timeout)
+    log(f"waiting up to {server_wait_s:.0f}s for the /navigate_to_pose action server...")
+    t0 = time.monotonic()
+    if not client.wait_for_server(timeout_sec=server_wait_s):
+        log(f"ERROR: /navigate_to_pose action server not found after {time.monotonic() - t0:.1f}s — "
+            "is the Nav2 stack (SLAM + Nav2) actually running? Check with `ros2 action list` in another "
+            "terminal (sourced the same way), or start it via the dashboard's 'navigate' mode / "
+            "argo_sonic_nav.py first.")
         finish("TIMEOUT")
         return
+    log(f"action server found after {time.monotonic() - t0:.1f}s")
+
+    def feedback_cb(feedback_msg):
+        dist = feedback_msg.feedback.distance_remaining
+        log(f"en route — distance remaining: {dist:.2f} m")
 
     def send_and_wait() -> str:
         goal = NavigateToPose.Goal()
@@ -98,27 +117,42 @@ def main() -> None:
         goal.pose.pose.orientation.z = float(wp.get("qz", 0.0))
         goal.pose.pose.orientation.w = float(wp.get("qw", 1.0))
 
-        send_future = client.send_goal_async(goal)
+        log("sending goal...")
+        t1 = time.monotonic()
+        send_future = client.send_goal_async(goal, feedback_callback=feedback_cb)
         rclpy.spin_until_future_complete(node, send_future, timeout_sec=args.timeout)
         if not send_future.done():
+            log(f"ERROR: goal send itself did not complete within {args.timeout:.0f}s "
+                "(node may not be discovering the action server over DDS)")
             return "TIMEOUT"
 
         goal_handle = send_future.result()
         if goal_handle is None or not goal_handle.accepted:
+            log("goal REJECTED by Nav2")
             return "REJECTED"
+        log(f"goal accepted after {time.monotonic() - t1:.1f}s — navigating "
+            f"(up to {args.timeout:.0f}s for a result)...")
 
+        t2 = time.monotonic()
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(node, result_future, timeout_sec=args.timeout)
         if not result_future.done():
+            log(f"ERROR: no result within {args.timeout:.0f}s of being accepted "
+                f"({time.monotonic() - t2:.1f}s elapsed) — robot may be stuck, Nav2 may be hung, "
+                "or --timeout is too short for the distance involved")
             return "TIMEOUT"
 
-        return "SUCCESS" if result_future.result().status == GoalStatus.STATUS_SUCCEEDED else "FAILED"
+        status = result_future.result().status
+        log(f"result status={status} (STATUS_SUCCEEDED={GoalStatus.STATUS_SUCCEEDED}) "
+            f"after {time.monotonic() - t2:.1f}s")
+        return "SUCCESS" if status == GoalStatus.STATUS_SUCCEEDED else "FAILED"
 
     outcome = send_and_wait()
     if outcome == "REJECTED":
         # One retry on rejection, then give up — bounded, unlike
         # waypoint_manager.py's own infinite-retry loop; this script must
         # report back to sonic_agent.py within --timeout.
+        log("retrying once after rejection...")
         outcome = send_and_wait()
         outcome = "FAILED" if outcome == "REJECTED" else outcome
 
