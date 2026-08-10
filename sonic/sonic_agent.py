@@ -104,7 +104,7 @@ SARVAM_LANGUAGE_CODE = "en-IN"
 # carrying a "deep, dramatic villain/suspense character" — not a fit for a
 # friendly assistant robot.
 SARVAM_SPEAKER = "ishita"
-SARVAM_TTS_PACE = 0.9  # 1.0 = normal; slightly slower reads clearer over a speaker in a noisy room
+SARVAM_TTS_PACE = 1.0  # 1.0 = normal speed
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 SARVAM_TTS_SAMPLE_RATE = 22050  # one of Sarvam's supported rates: 8000/16000/22050/24000
 
@@ -757,18 +757,27 @@ def sarvam_tts(text: str) -> tuple[np.ndarray, int]:
     return pcm, sr
 
 
-def sarvam_tts_stream(sentences: list, audio_queue: "queue.Queue") -> bool:
+def sarvam_tts_stream(sentences: list) -> bool:
     """Streams TTS audio for `sentences` over ONE Sarvam WebSocket
-    connection (their real low-latency streaming API — distinct from
-    speak()'s own sentence-level pipelining below), pushing (pcm, sr)
-    chunks onto audio_queue as they arrive so playback can start mid-reply
-    instead of waiting for each full sentence's audio. Returns True on
-    success. Returns False (having queued nothing) on ANY problem — missing
-    `websockets` package, connection failure, unexpected protocol shape —
-    so the caller falls back to the proven sarvam_tts() REST path rather
-    than the robot going silently mute. This hasn't been exercised against
-    the live API from a dev sandbox; treat failures here as expected until
-    verified on real hardware.
+    connection (their real low-latency streaming API) and plays it through
+    a SINGLE persistent sounddevice OutputStream, writing each chunk to it
+    as it arrives — gapless, unlike play_audio()'s per-call
+    sd.play()/sd.wait() (opens/closes the audio device every call; fine
+    for the REST fallback's few large per-sentence buffers, but produced
+    audible clicks/breaks once streaming's much smaller, much more
+    frequent chunks went through that same per-call path).
+
+    Returns True if playback happened (fully or partially — see
+    `played_any` below). Returns False, having played NOTHING, on a
+    failure before any audio arrived — missing `websockets` package,
+    connection failure, protocol error on the first chunk — so the caller
+    falls back to sarvam_tts()'s REST path cleanly from the start. If a
+    failure happens mid-stream AFTER some audio already played, this
+    returns True anyway (accepting the partial read) rather than False,
+    since falling back at that point would replay the sentence(s) already
+    heard. This hasn't been exercised against the live API from a dev
+    sandbox; treat failures here as expected until verified on real
+    hardware.
 
     Protocol (per Sarvam's docs, api.sarvam.ai/text-to-speech/ws):
       connect -> send {"type":"config","data":{...}} once
@@ -782,6 +791,8 @@ def sarvam_tts_stream(sentences: list, audio_queue: "queue.Queue") -> bool:
     except ImportError:
         return False
 
+    played_any = False
+    stream = None
     url = f"{SARVAM_TTS_WS_URL}?model={SARVAM_TTS_MODEL}&send_completion_event=true"
     try:
         with ws_client.connect(url, additional_headers={"Api-Subscription-Key": SARVAM_API_KEY}) as ws:
@@ -800,22 +811,31 @@ def sarvam_tts_stream(sentences: list, audio_queue: "queue.Queue") -> bool:
                 ws.send(json.dumps({"type": "text", "data": {"text": sentence}}))
                 ws.send(json.dumps({"type": "flush"}))
 
+            stream = sd.OutputStream(samplerate=SARVAM_TTS_SAMPLE_RATE, channels=1, dtype="int16")
+            stream.start()
+
             pending = len(sentences)
             while pending > 0:
                 msg = json.loads(ws.recv(timeout=20))
                 mtype = msg.get("type")
                 if mtype == "audio":
                     pcm = np.frombuffer(base64.b64decode(msg["data"]["audio"]), dtype=np.int16)
-                    audio_queue.put((pcm, SARVAM_TTS_SAMPLE_RATE))
+                    if pcm.size:
+                        stream.write(pcm)
+                        played_any = True
                 elif mtype == "event" and msg.get("data", {}).get("event_type") == "final":
                     pending -= 1
                 elif mtype == "error":
-                    print(f"[warn] Sarvam streaming TTS error, falling back to REST: {msg}")
-                    return False
+                    print(f"[warn] Sarvam streaming TTS error: {msg}")
+                    return played_any
         return True
     except Exception as e:
-        print(f"[warn] Sarvam streaming TTS unavailable, falling back to REST: {e}")
-        return False
+        print(f"[warn] Sarvam streaming TTS {'ended early' if played_any else 'unavailable, falling back to REST'}: {e}")
+        return played_any
+    finally:
+        if stream is not None:
+            stream.stop()
+            stream.close()
 
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -837,23 +857,23 @@ def speak(text: str) -> None:
     if not sentences:
         return
 
-    # Synthesize sentence N+1 on a background thread while sentence N plays,
-    # instead of waiting for the whole (possibly multi-sentence) reply to be
-    # synthesized before any audio starts — cuts perceived latency, since
-    # network time for later sentences overlaps with earlier playback.
+    # Try Sarvam's real streaming API first — sarvam_tts_stream() owns its
+    # own gapless playback (a single persistent OutputStream) and returns
+    # True once it's actually played something, so there's nothing left
+    # for this function to do. Falls through to the REST path below on any
+    # failure (missing dependency, connection issue, protocol error)
+    # rather than the robot going silently mute.
+    if sarvam_tts_stream(sentences):
+        return
+
+    # Fallback: REST path, sentence-level pipelining — synthesize sentence
+    # N+1 on a background thread while sentence N plays, instead of
+    # waiting for the whole (possibly multi-sentence) reply to be
+    # synthesized before any audio starts.
     audio_queue: "queue.Queue" = queue.Queue(maxsize=2)
     DONE = object()
 
     def synthesize_worker():
-        # Try Sarvam's real streaming API first (audio arrives in chunks as
-        # it's generated, not just pipelined per-sentence like the fallback
-        # below) — sarvam_tts_stream queues nothing and returns False on any
-        # failure (missing dependency, connection issue, protocol error), so
-        # this falls through to the proven REST path rather than the robot
-        # going silently mute. Not yet exercised against the live API.
-        if sarvam_tts_stream(sentences, audio_queue):
-            audio_queue.put(DONE)
-            return
         for sentence in sentences:
             try:
                 audio_queue.put(sarvam_tts(sentence))
