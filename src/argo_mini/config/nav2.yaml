@@ -52,7 +52,7 @@
         vx_std: 0.2
         vy_std: 0.2
         wz_std: 0.4
-        vx_max: 0.40
+        vx_max: 0.60
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
@@ -171,7 +171,7 @@
       use_sim_time: false
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.40, 0.0, 0.8]
+      max_velocity: [0.60, 0.0, 0.8]
       min_velocity: [-0.15, 0.0, -0.8]
       max_accel: [0.5, 0.0, 1.0]
       max_decel: [-0.5, 0.0, -1.0]
