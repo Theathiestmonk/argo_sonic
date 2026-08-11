@@ -33,15 +33,22 @@ If TABLE_NO is set (backend/launcher.py sets this when staff dispatch the
 robot to a specific table from the dashboard), the wake-word gate is skipped
 — see main_loop(). SONIC_ACTION_HINT selects order/bill/room_service vs.
 deliver:
-  - order/bill/room_service: intent_classify's first turn skips straight to
-    the target flow (intent/table are already known — no need to greet and
-    re-classify a free-text answer), and that flow's own entry node
-    (n_new_order_start/n_get_bill) makes the real Kitchen -> Table N trip
-    via _ensure_at_table()/navigate_and_wait() before doing anything else
-    — table_reached tracks whether it's already there. The
-    Table -> Kitchen return (n_return_to_kitchen, the graph's terminal
-    step) fires however the session ends — order completed, guest said
-    bye, or a silence timeout. navigate_and_wait() blocks on an actual
+  - order/bill/room_service: take_order and get_bill both route through
+    n_ask_table first — state.location (the robot's current/target place: a
+    table number, or "Kitchen" once home) is a single value shared by every
+    trigger path. A dispatched session pre-seeds it, so ask_table bypasses
+    instantly; a voice-triggered "Hi Sonic, take order" with no table named
+    gets asked for one right there, same NLU/timeout handling as any other
+    ask_* node. Either way, once location is a real table, that flow's own
+    entry node (n_new_order_start/n_get_bill) makes the real Kitchen ->
+    Table N trip via _ensure_at_table()/navigate_and_wait() before doing
+    anything else — table_reached tracks whether it's already there, and
+    this now applies uniformly whether the session was dashboard-dispatched
+    or voice-triggered. The Table -> Kitchen return (n_return_to_kitchen,
+    the graph's terminal step) fires however the session ends — order
+    completed, guest said bye, or a silence timeout — and resets location
+    back to "Kitchen" (lock cleared) so a later, different visit can't
+    inherit a stale table number. navigate_and_wait() blocks on an actual
     Nav2 result — see nav_bridge.py.
   - deliver: run_delivery_session() — not part of this graph (it's not a
     conversation) — waits at the kitchen for a spoken pickup confirmation
@@ -182,9 +189,11 @@ def order_snapshot(state: "DialogueState") -> str:
 DATABASE_URL = os.environ.get("DATABASE_URL")
 ROBOT_UID = os.environ.get("ROBOT_UID", "SONIC-001")
 # Staff-dispatched sessions (backend/launcher.py spawning one process scoped
-# to a specific table) set this so the session skips conversational table
-# discovery — see load_menu_from_db()/run_graph_session() below.
-FORCED_TABLE_NO = os.environ.get("TABLE_NO") or None
+# to a specific table) set the TABLE_NO env var so the session skips
+# conversational table discovery (n_ask_table) — see run_graph_session()
+# below. Named FORCED_LOCATION internally since it seeds state.location;
+# the env var itself stays TABLE_NO, matching launcher.py's wire contract.
+FORCED_LOCATION = os.environ.get("TABLE_NO") or None
 # Which table-action button was clicked ("order"/"deliver"/"bill"/
 # "room_service") — set by launcher.py alongside TABLE_NO. Selects between
 # the normal kitchen->table->(conversation)->kitchen round trip and the
@@ -234,12 +243,16 @@ class DialogueState:
     active_item: Optional[dict] = None                          # item being built/edited
     pending_items: list = field(default_factory=list)          # extra items named in the same breath, queued up
     paused_order: Optional[dict] = None                         # saved sub-state on intent switch
-    table_no: Optional[str] = None
-    table_no_locked: bool = False   # True once table_no has been captured once — protects against a
-                                     # later misheard number silently redirecting the whole visit
-    table_reached: bool = False     # True once the robot has physically arrived at table_no this
-                                     # visit (staff-dispatched sessions only — see _ensure_at_table).
-                                     # Reset to False once the robot leaves for the kitchen.
+    location: Optional[str] = None  # where the robot currently is / is headed: a table number
+                                     # ("4") while serving a table, or "Kitchen" once it's back home.
+                                     # Cleared to "Kitchen" on every return trip (see n_return_to_kitchen)
+                                     # so a stale value can never redirect a later, different visit.
+    location_locked: bool = False   # True once location has been captured once this visit — protects
+                                     # against a later misheard number silently redirecting the visit.
+                                     # Reset alongside location on every kitchen return.
+    table_reached: bool = False     # True once the robot has physically arrived at the table named by
+                                     # location this visit (see _ensure_at_table). Reset to False once
+                                     # the robot leaves for the kitchen.
     bill_total: float = 0.0
 
     # DB-backed persistence handles (all None if DATABASE_URL isn't set)
@@ -260,6 +273,15 @@ class DialogueState:
     first_turn: bool = True                   # gates farewell-detection / greeting wording
     edit_target_name: Optional[str] = None    # which order line edit_order_start resolved, for later sub-nodes
     pending_resume_after_switch: bool = False # set by handle_switch when it paused a take_order flow
+
+
+# Locations that aren't a guest table — the ask_table node always asks again
+# if state.location is one of these (including None/unset).
+NON_TABLE_LOCATIONS = {"Kitchen", "Docker"}
+
+
+def _is_table_location(location: Optional[str]) -> bool:
+    return bool(location) and location not in NON_TABLE_LOCATIONS
 
 
 # ---------------------------------------------------------------------------
@@ -314,14 +336,14 @@ def resolve_robot() -> None:
 
 
 def resolve_visit(state: DialogueState) -> None:
-    """Once state.table_no is known, resolve (or open) a visit for that
-    table's service_point and cache it on state. Backfills the current
-    dialogue session's visit/service_point too, since the session row may
-    have been created before the table number was known."""
+    """Once state.location is known (and is an actual table, not "Kitchen"),
+    resolve (or open) a visit for that table's service_point and cache it on
+    state. Backfills the current dialogue session's visit/service_point too,
+    since the session row may have been created before the table was known."""
     conn = db()
-    if conn is None or DB_LOCATION_ID is None or state.db_visit_id or not state.table_no:
+    if conn is None or DB_LOCATION_ID is None or state.db_visit_id or not _is_table_location(state.location):
         return
-    label = f"Table {state.table_no}"
+    label = f"Table {state.location}"
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1281,7 +1303,8 @@ def trace_node(name: str, state: DialogueState) -> None:
 
 def interpret(state: DialogueState, transcript: str) -> dict:
     """Log the user turn, run NLU, and apply any ambient slots (currently
-    just table_no) regardless of what intent/question this call was about."""
+    just table_no, stored onto state.location) regardless of what
+    intent/question this call was about."""
     state.conversation_history.append({"role": "user", "text": transcript})
     nlu = run_nlu(transcript, state)
     trace("interpret: NLU result", transcript=transcript, intent=nlu.get("intent"),
@@ -1289,12 +1312,12 @@ def interpret(state: DialogueState, transcript: str) -> dict:
           slots=nlu.get("slots"), yes_no=nlu.get("yes_no"))
     db_log_turn(state, "user", transcript, intent=nlu.get("intent"), slots=nlu.get("slots"))
     table_no = nlu.get("slots", {}).get("table_no")
-    if table_no and not state.table_no_locked:
-        # only ever accept the FIRST table_no capture for this visit — once
+    if table_no and not state.location_locked:
+        # only ever accept the FIRST table capture for this visit — once
         # locked, a later misheard number (STT garble) can't silently
         # redirect an in-progress order/visit to the wrong table
-        state.table_no = str(table_no)
-        state.table_no_locked = True
+        state.location = str(table_no)
+        state.location_locked = True
         resolve_visit(state)
     return nlu
 
@@ -1323,9 +1346,13 @@ ORDER_SLOT_QUESTIONS = {
 
 INTENT_TO_NODE = {
     "menu": "menu_node", "call_people": "call_people_node", "navigation": "navigation_node",
-    "cutlery": "cutlery_node", "about": "about_node", "get_bill": "get_bill_node",
-    "normal_conv": "normal_conv_node", "take_order": "new_order_start",
+    "cutlery": "cutlery_node", "about": "about_node", "get_bill": "ask_table",
+    "normal_conv": "normal_conv_node", "take_order": "ask_table",
 }
+
+# n_ask_table routes onward once a table is resolved — take_order/get_bill
+# both funnel through it, so it needs to know which real node to continue to.
+ASK_TABLE_CONTINUATION = {"take_order": "new_order_start", "get_bill": "get_bill_node"}
 
 
 def route_intent_to_node(intent: Optional[str]) -> str:
@@ -1462,22 +1489,30 @@ def perform_travel_action(announce_text: str, destination: str,
 
 def _ensure_at_table(state: DialogueState) -> bool:
     """Called from a graph node (e.g. n_new_order_start, n_get_bill) that
-    needs the robot physically at the guest's table before it does
-    anything else. For a staff-dispatched session that hasn't arrived yet
-    (table_reached False), this makes the real Nav2 trip right here — as
-    part of that intent's own flow, not a blind step before intent is even
-    known. A no-op (returns True immediately) once already there, or for
-    the general wake-word loop where the robot's already wherever a guest
-    walked up to it.
+    needs the robot physically at the guest's table before it does anything
+    else. By this point n_ask_table has already guaranteed state.location is
+    a real table (not "Kitchen"/None) — this makes the real Nav2 trip there,
+    for BOTH staff-dispatched and voice-triggered sessions alike, as part of
+    the intent's own flow rather than a blind step before intent is even
+    known. A no-op (returns True immediately) once already there
+    (table_reached), or defensively if location somehow isn't a table.
 
     Returns True if the caller should proceed. Returns False if the trip
     failed — state is already set up to go idle (respond -> return_to_kitchen
     -> END), so the caller should just `return asdict(state)` immediately."""
-    if not FORCED_TABLE_NO or state.table_reached:
+    if state.table_reached or not _is_table_location(state.location):
         return True
+    # Greeting only, not phrased as a question — n_ask_item asks "What item
+    # would you like?" right after via its own interrupt(); a second
+    # question-shaped sentence here would invite the guest to answer before
+    # the mic is actually listening (same failure mode as the arrival_text
+    # that used to precede intent_classify's own greeting — see git history).
+    arrival_text = ("Hi there! I'm here with your bill." if state.active_intent == "get_bill"
+                     else "Hi there! I'm here to take your order.")
     arrived = perform_travel_action(
-        f"Heading to Table {state.table_no} now, I'll be right there!",
-        f"Table {state.table_no}",
+        f"Heading to Table {state.location} now, I'll be right there!",
+        f"Table {state.location}",
+        arrival_text=arrival_text,
     )
     if not arrived:
         state.went_idle = True
@@ -1521,10 +1556,10 @@ def navigation_handler(state: DialogueState, slots: dict) -> None:
     elif location == "kitchen":
         perform_travel_action("Heading to the kitchen now.", "Kitchen")
     else:
-        table = state.table_no or "your table"
-        destination = f"Table {state.table_no}" if state.table_no else "Table 1"
+        table_label = state.location if _is_table_location(state.location) else "your table"
+        destination = f"Table {state.location}" if _is_table_location(state.location) else "Table 1"
         perform_travel_action(
-            f"Heading to {table} now, I'll be right there!",
+            f"Heading to {table_label} now, I'll be right there!",
             destination,
             arrival_text="Hello! I'm your robot assistant — would you like to order something?",
         )
@@ -1618,9 +1653,10 @@ def n_intent_classify(state: DialogueState) -> dict:
 
     # Staff-dispatched session, first turn: intent is already known (which
     # button was clicked), and so is the table — skip greeting and NLU
-    # classification entirely and go straight to that flow. Navigation to
-    # the table happens inside it (e.g. n_new_order_start), not here.
-    if state.first_turn and FORCED_TABLE_NO and state.active_intent:
+    # classification entirely and go straight to that flow. route_intent_to_node
+    # still passes through ask_table (bypasses instantly, location's already
+    # set) and navigation happens inside the target node (e.g. n_new_order_start).
+    if state.first_turn and FORCED_LOCATION and state.active_intent:
         trace("pre-seeded intent — skipping greet/classify", intent=state.active_intent)
         state.first_turn = False
         state.next_node = route_intent_to_node(state.active_intent)
@@ -1751,7 +1787,11 @@ def n_handle_switch(state: DialogueState) -> dict:
     nlu = state.last_outcome or {}
     new_intent = nlu.get("intent")
 
-    was_ordering = state.active_intent == "take_order"
+    # order_slot is only set once n_new_order_start actually starts building
+    # the order — a switch during ask_table (active_intent already
+    # "take_order", but nothing ordered yet) has nothing meaningful to pause
+    # or resume, so don't offer to; the guest can just ask to order again.
+    was_ordering = state.active_intent == "take_order" and state.order_slot is not None
     if was_ordering:
         state.paused_order = {
             "order_action": state.order_action,
@@ -1868,15 +1908,18 @@ def n_respond(state: DialogueState) -> dict:
 def n_return_to_kitchen(state: DialogueState) -> dict:
     """Graph terminal step, reached once n_respond has gone idle for any
     reason (order completed, guest said bye, a genuine silence timeout, a
-    failed outbound trip). For a staff-dispatched session (FORCED_TABLE_NO
-    set), this is where the physical Table -> Kitchen return trip happens
-    — a real graph step, run every time the session ends regardless of how
-    it ended, same as main_loop()'s old wrapper did, just owned by the
-    graph now instead of Python code wrapped around run_graph_session().
-    A no-op for the general wake-word loop."""
+    failed outbound trip). If this visit ever resolved a table (location is
+    a real table, not "Kitchen"/None — true for staff-dispatched AND
+    voice-triggered take_order/get_bill sessions alike), this is where the
+    physical Table -> Kitchen return trip happens, and location resets to
+    "Kitchen" (with the lock cleared) so a later, different visit can't
+    inherit a stale table number. A no-op for sessions that never involved
+    a table (menu/cutlery/normal_conv etc. — nothing to return from)."""
     trace_node("return_to_kitchen", state)
-    if FORCED_TABLE_NO:
+    if _is_table_location(state.location):
         navigate_and_wait("Kitchen")
+        state.location = "Kitchen"
+        state.location_locked = False
         state.table_reached = False
     state.next_node = "END"
     return asdict(state)
@@ -1932,6 +1975,32 @@ def n_normal_conv(state: DialogueState) -> dict:
     trace_node("normal_conv_node", state)
     normal_conv_handler(state, state.last_outcome)
     state.next_node = "respond"
+    return asdict(state)
+
+
+def n_ask_table(state: DialogueState) -> dict:
+    """Shared front door for take_order/get_bill, dispatched or voice-
+    triggered alike. A dispatched session (or a voice request that already
+    named its table in the same breath — interpret()'s ambient slot capture
+    already set state.location by the time we get here) bypasses instantly.
+    Otherwise asks which table, same NLU/timeout/intent-switch handling as
+    every other ask_* node — the answer is captured the same ambient way, so
+    there's nothing extra to do here except check it landed."""
+    trace_node("ask_table", state)
+    continuation = ASK_TABLE_CONTINUATION.get(state.active_intent, "respond")
+    if _is_table_location(state.location):
+        state.next_node = continuation
+        return asdict(state)
+
+    outcome = get_outcome_or_route(state, "Sure — which table should I come to?",
+                                    "ask_table: the table number to navigate to", "ask_table")
+    if outcome is None:
+        return asdict(state)
+    if not _is_table_location(state.location):
+        speak("Sorry, which table number is that?")
+        state.next_node = "ask_table"
+        return asdict(state)
+    state.next_node = continuation
     return asdict(state)
 
 
@@ -2251,6 +2320,7 @@ NODE_FUNCS = {
     "about_node": n_about,
     "get_bill_node": n_get_bill,
     "normal_conv_node": n_normal_conv,
+    "ask_table": n_ask_table,
     "new_order_start": n_new_order_start,
     "ask_item": n_ask_item,
     "ask_qty": n_ask_qty,
@@ -2294,18 +2364,18 @@ def run_graph_session(app, carried_state: Optional[DialogueState], thread_id: st
     calls interrupt() (asking the guest something), we speak the prompt,
     listen for a reply (with the usual reprompt-once-on-silence), and resume
     the graph with either the transcript or a timeout sentinel. One call
-    here = one wake-word activation; current_order/table_no/bill_total
+    here = one wake-word activation; current_order/location/bill_total
     persist across calls via carried_state (see main_loop)."""
     global _current_state
 
     state = carried_state if carried_state is not None else DialogueState()
-    if FORCED_TABLE_NO and not state.table_no:
+    if FORCED_LOCATION and not _is_table_location(state.location):
         # Staff-dispatched session (backend/launcher.py set TABLE_NO for this
         # process) — skip conversational discovery, same effect as a guest
         # having already stated their table. db_start_session() below
         # resolves the visit against this immediately.
-        state.table_no = FORCED_TABLE_NO
-        state.table_no_locked = True
+        state.location = FORCED_LOCATION
+        state.location_locked = True
         state.table_reached = False
         # Intent is already known from which dashboard button was clicked —
         # n_intent_classify's fast path uses this to skip straight to the
@@ -2313,7 +2383,7 @@ def run_graph_session(app, carried_state: Optional[DialogueState], thread_id: st
         # the answer via NLU.
         state.active_intent = DISPATCH_ACTION_TO_INTENT.get(FORCED_ACTION, "take_order")
     # Per-wake-word-activation fields reset; per-visit fields (current_order,
-    # table_no, bill_total, db_visit_id, db_service_point_id...) are left as
+    # location, bill_total, db_visit_id, db_service_point_id...) are left as
     # carried forward from the previous session.
     state.db_session_id = None
     state.pending_question = None
@@ -2401,7 +2471,7 @@ def main_loop() -> None:
         print("Press Enter on a blank line to simulate silence/timeout. Type 'quit' to exit.\n")
         while True:
             carried_state = run_graph_session(app, carried_state, thread_id)
-    elif FORCED_TABLE_NO:
+    elif FORCED_LOCATION:
         # Staff-dispatched session (backend/launcher.py spawned this process
         # scoped to one table via TABLE_NO/SONIC_ACTION_HINT) — skip the
         # wake-word gate and run exactly one round trip, then exit, mirroring
@@ -2411,22 +2481,24 @@ def main_loop() -> None:
         #
         # For order/bill/room_service, the Kitchen->Table trip happens
         # inside the target intent's own node (_ensure_at_table(), called
-        # from n_new_order_start/n_get_bill) once intent_classify's
-        # pre-seeded-intent fast path routes there, and the Table->Kitchen
-        # return is n_return_to_kitchen, the graph's terminal step — run
-        # every time the session ends regardless of how (order completed,
-        # guest said bye, or a genuine silence timeout), owned by the graph
-        # itself rather than an unconditional wrapper here that couldn't
-        # tell those cases apart.
+        # from n_new_order_start/n_get_bill) once ask_table (bypassed here —
+        # the table's already known) and intent_classify's pre-seeded-intent
+        # fast path route there. The Table->Kitchen return is
+        # n_return_to_kitchen, the graph's terminal step — run every time the
+        # session ends regardless of how (order completed, guest said bye, or
+        # a genuine silence timeout), owned by the graph itself rather than
+        # an unconditional wrapper here that couldn't tell those cases apart.
+        # This same ask_table/nav machinery also serves voice-triggered
+        # take_order/get_bill (no TABLE_NO set at all) further down.
         require_api_keys()
         action_label = FORCED_ACTION or "order"
-        print(f"Sonic dispatched: table={FORCED_TABLE_NO} action={action_label!r} (no wake word needed).")
+        print(f"Sonic dispatched: table={FORCED_LOCATION} action={action_label!r} (no wake word needed).")
         navigate_and_wait("Kitchen")  # known start point before dispatch; idempotent if already there
         if FORCED_ACTION == "deliver":
             # Delivery is a separate, non-conversational routine (wait for a
             # spoken pickup confirmation, then go) — not part of the
             # intent_classify graph, so it still manages its own travel.
-            run_delivery_session(FORCED_TABLE_NO)
+            run_delivery_session(FORCED_LOCATION)
         else:
             run_graph_session(app, carried_state, thread_id)
     else:
@@ -2453,8 +2525,8 @@ def main() -> None:
     print(f"Node-execution tracing: {'ON' if TRACE_ENABLED else 'OFF'} (set SONIC_TRACE=0 to disable)")
     resolve_robot()
     load_menu_from_db()
-    if FORCED_TABLE_NO:
-        print(f"[db] TABLE_NO={FORCED_TABLE_NO!r} set — session(s) will skip conversational table discovery")
+    if FORCED_LOCATION:
+        print(f"[db] TABLE_NO={FORCED_LOCATION!r} set — session(s) will skip conversational table discovery")
     main_loop()
 
 

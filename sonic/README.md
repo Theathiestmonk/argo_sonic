@@ -125,40 +125,56 @@ python3 nav_bridge.py --map office_map --destination Kitchen --timeout 60
 
 ## Graph-owned navigation
 
-For staff-dispatched order/bill/room_service sessions, the intent and table
-are known before the graph even starts — the dashboard button click already
-says which — so the graph is entered with that state pre-seeded instead of
-running a generic greet-and-classify turn first:
+`state.location` is the single value that tracks where the robot currently
+is or is headed — a table number (e.g. `"4"`) while serving a table, or the
+literal string `"Kitchen"` once it's home. It's shared by **every** trigger
+path: a staff dashboard click, a staff/guest voice command, all funnel
+through the same `ask_table` → navigate → return sequence, so there's no
+separate "dispatched" vs. "voice" navigation logic to keep in sync.
 
-- **Entry point is still `intent_classify`** (`build_graph()`'s
-  `set_entry_point`), but for a dispatched session `run_graph_session()`
-  pre-seeds `state.active_intent` (via `DISPATCH_ACTION_TO_INTENT`,
-  keyed off `SONIC_ACTION_HINT`) and `state.table_no`/`table_no_locked`
-  before the graph runs. `n_intent_classify`'s first line checks
-  `state.first_turn and FORCED_TABLE_NO and state.active_intent` and, if
-  true, skips greeting/NLU entirely and routes straight to that intent's
-  node via `route_intent_to_node()`.
+- **`take_order` and `get_bill` both route through `n_ask_table` first**
+  (`INTENT_TO_NODE` points both at `"ask_table"`, not straight at their real
+  node). For a dashboard-dispatched session, `run_graph_session()` pre-seeds
+  `state.active_intent` (via `DISPATCH_ACTION_TO_INTENT`, keyed off
+  `SONIC_ACTION_HINT`) and `state.location`/`location_locked` before the
+  graph runs — `n_ask_table` sees `location` is already a real table and
+  bypasses instantly, routing on to `new_order_start`/`get_bill_node` via
+  `ASK_TABLE_CONTINUATION`. `n_intent_classify`'s pre-seeded-intent fast path
+  (`state.first_turn and FORCED_LOCATION and state.active_intent`) skips
+  greeting/NLU entirely for these sessions but still passes through
+  `ask_table` on the way, for consistency. For a **voice-triggered** request
+  with no table named ("Hi Sonic, take order") — `location` isn't set yet
+  — `n_ask_table` asks "Which table should I come to?", using the same
+  NLU/timeout/intent-switch handling as every other `ask_*` node; the answer
+  is captured by `interpret()`'s ambient `table_no` slot capture, same
+  mechanism that already opportunistically grabs a table number from *any*
+  utterance ("take order for table 4" gets it in the same breath, no
+  separate question needed).
 - **Navigation happens inside the intent's own node, not before it.**
   `_ensure_at_table(state)` is called at the top of `n_new_order_start` and
-  `n_get_bill`: if this is a dispatched session that hasn't physically
-  arrived yet (`state.table_reached` is False), it makes the real Nav2
-  trip to `state.table_no` right there. If the trip fails, it puts the
-  state into going-idle and returns False so the caller bails out
-  immediately (`return asdict(state)`) — the graph never starts a
-  conversation the robot isn't physically at the table for. Once arrived,
-  `state.table_reached` is set True so a resumed/looping session doesn't
-  re-navigate.
+  `n_get_bill`: by this point `location` is guaranteed to be a real table
+  (thanks to `ask_table`), so if the robot hasn't physically arrived yet
+  (`state.table_reached` is False), it makes the real Nav2 trip there via
+  `navigate_and_wait()` — for a dispatched **or** voice-triggered session
+  alike, no special-casing. Speaks a plain greeting on arrival ("Hi there!
+  I'm here to take your order." / "...with your bill.") — not phrased as a
+  question, so it doesn't compete with the actual first question
+  (`n_ask_item`'s "What item would you like?") for the guest's answer. If
+  the trip fails, it puts the state into going-idle and returns False so the
+  caller bails out immediately (`return asdict(state)`) — the graph never
+  starts a conversation the robot isn't physically at the table for. Once
+  arrived, `state.table_reached` is set True so a resumed/looping session
+  doesn't re-navigate.
 - **`n_return_to_kitchen`** — the graph's terminal step. Every path that
   ends the session (`n_respond`'s `went_idle` handling) routes here instead
-  of straight to `END`, so the Table→Kitchen return happens exactly once,
-  regardless of *why* the session ended (order completed, guest said bye,
-  or a genuine silence timeout). It also clears `state.table_reached` back
-  to False, so a later re-dispatch to the same table navigates again
-  instead of assuming it's still there.
-
-Both are no-ops for the general wake-word loop (`FORCED_TABLE_NO` unset) —
-the robot might be wherever a guest walked up to it, not necessarily the
-kitchen, so nothing physical happens on entry/exit in that case.
+  of straight to `END`. If this visit ever resolved a table
+  (`state.location` is a real table), it makes the real Table→Kitchen trip
+  exactly once regardless of *why* the session ended (order completed,
+  guest said bye, or a genuine silence timeout) — and resets
+  `state.location` back to `"Kitchen"`, clearing `location_locked` too, so a
+  *later, different* visit can't inherit a stale table number and silently
+  navigate to the wrong place. A no-op for sessions that never touched a
+  table (menu/cutlery/normal_conv — nothing to return from).
 
 ## Tuning
 
