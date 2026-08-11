@@ -44,18 +44,38 @@ export default function MapCanvas({
       }
     }
 
-    // OffscreenCanvas is the fastest path for creating a bitmap.
-    const osc = new OffscreenCanvas(width, height)
-    osc.getContext('2d').putImageData(imgData, 0, 0)
-    osc.transferToImageBitmap
-      ? createImageBitmap(osc).then(bmp => { offRef.current = { bmp, md: mapData } })
-      : (() => {
-          // Fallback for Safari
-          const tmp = document.createElement('canvas')
-          tmp.width = width; tmp.height = height
-          tmp.getContext('2d').putImageData(imgData, 0, 0)
-          offRef.current = { bmp: tmp, md: mapData }
-        })()
+    // OffscreenCanvas is the fastest path for creating a bitmap, but isn't
+    // universally available (older/embedded WebViews, some kiosk browsers) —
+    // feature-detect before constructing it, not just branch on a method of
+    // an instance that might never exist. A plain <canvas> works everywhere
+    // that can render at all, so it's the fallback both when OffscreenCanvas
+    // is entirely missing and if constructing/using it throws for any other
+    // reason — without this, an unsupported browser left offRef.current
+    // permanently null (map silently stuck on "Waiting for /map…" forever,
+    // no matter how much map data actually arrived).
+    const toBitmap = () => {
+      const tmp = document.createElement('canvas')
+      tmp.width = width; tmp.height = height
+      tmp.getContext('2d').putImageData(imgData, 0, 0)
+      offRef.current = { bmp: tmp, md: mapData }
+    }
+    if (typeof OffscreenCanvas === 'undefined') {
+      toBitmap()
+      return
+    }
+    try {
+      const osc = new OffscreenCanvas(width, height)
+      osc.getContext('2d').putImageData(imgData, 0, 0)
+      if (osc.transferToImageBitmap) {
+        createImageBitmap(osc)
+          .then(bmp => { offRef.current = { bmp, md: mapData } })
+          .catch(toBitmap)
+      } else {
+        toBitmap()
+      }
+    } catch {
+      toBitmap()
+    }
   }, [mapData])
 
   // Redraw canvas on every relevant prop change.

@@ -38,7 +38,7 @@ const TABLE_ACTIONS = [
 
 const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet }, ref) => {
   const [tables, setTables]         = useState({})
-  const [showSetPose, setShowSetPose] = useState(false)
+  const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [selectedTask, setSelectedTask] = useState('Deliver')
   const [selectedDest, setSelectedDest] = useState(null)
   const autoReturnTimeoutRef = useRef(null)
@@ -59,7 +59,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     startNav: startNav,
     stopNav: stopNav,
     estop: estop,
-    setShowSetPose: setShowSetPose,
+    setPoseMode: setPoseMode,
   }))
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
@@ -521,31 +521,76 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 <div style={{ fontSize: 11, color: 'var(--ok)', marginTop: 6 }}>Navigation stack is active</div>
               </div>
             )}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => setShowSetPose(true)}
-                style={{
-                  flex: 1, padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
-                  background: 'rgba(59,240,155,0.12)', border: '1px solid rgba(59,240,155,0.3)', color: 'var(--ok)',
-                  cursor: 'pointer',
-                }}
-              >
-                📍 Pose
-              </button>
-              <button
-                onClick={sendZeroVelocity}
-                title="Emergency stop - send zero velocity"
-                style={{
-                  flex: 1, padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
-                  background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.3)', color: 'var(--danger)',
-                  cursor: 'pointer',
-                }}
-              >
-                🛑 Stop
-              </button>
-            </div>
+            <button
+              onClick={sendZeroVelocity}
+              title="Emergency stop - send zero velocity"
+              style={{
+                width: '100%', padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
+                background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.3)', color: 'var(--danger)',
+                cursor: 'pointer',
+              }}
+            >
+              🛑 Stop
+            </button>
           </div>
         )}
+
+        {/* ── Live map — always visible here (not tucked behind a modal),
+            so it's obvious at a glance whether map data is actually
+            arriving. Pose-setting now happens right on this same card
+            instead of a separate popup: the previous "📍 Pose" button
+            opened a modal that read the exact same mapData prop, so a
+            missing map looked identical either way — the modal added an
+            extra click without adding any real information, and (being
+            gated only on navState, not on `connected`) could be opened
+            while rosbridge itself was down, in which case mapData/robotPose
+            can never arrive no matter how long you wait. ── */}
+        <div className="glass-card" style={{ padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+              Live Map
+            </div>
+            {navState === 'running' && navActionReady && (
+              <button
+                onClick={() => connected && setPoseMode(v => !v)}
+                disabled={!connected}
+                title={!connected
+                  ? "Can't set pose — not connected to Argo"
+                  : (poseMode ? 'Cancel' : "Click where Argo is standing, then drag toward where it's facing")}
+                style={{
+                  padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
+                  background: poseMode ? 'rgba(255,65,65,0.12)' : 'rgba(59,240,155,0.12)',
+                  border: `1px solid ${poseMode ? 'rgba(255,65,65,0.3)' : 'rgba(59,240,155,0.3)'}`,
+                  color: poseMode ? 'var(--danger)' : 'var(--ok)',
+                  cursor: connected ? 'pointer' : 'not-allowed',
+                  opacity: connected ? 1 : 0.5,
+                }}
+              >
+                {poseMode ? '✕ Cancel' : '📍 Set Pose'}
+              </button>
+            )}
+          </div>
+          <div style={{ height: 260, borderRadius: 12, overflow: 'hidden' }}>
+            <MapCanvas
+              mapData={mapData}
+              robotPose={robotPose}
+              poseEstimateMode={poseMode}
+              onPoseEstimate={({ wx, wy, theta }) => {
+                onSetInitialPose?.(wx, wy, theta)
+                onNavPoseSet?.(true)
+                setPoseMode(false)
+                showToast?.('Pose set', 'ok')
+              }}
+            />
+          </div>
+          {!mapData && (
+            <div style={{ fontSize: 10.5, color: connected ? 'var(--muted)' : 'var(--danger)', marginTop: 8, lineHeight: 1.5 }}>
+              {connected
+                ? 'Waiting for map data from Argo…'
+                : "Not connected to Argo — the map can't load until the connection is back."}
+            </div>
+          )}
+        </div>
 
       </aside>
 
@@ -775,46 +820,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         )}
       </div>
-
-      {showSetPose && (
-        <div
-          onClick={() => setShowSetPose(false)}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="glass-dense"
-            style={{ width: '100%', maxWidth: 820, padding: 22, animation: 'slideUp 0.2s ease' }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-              <div>
-                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 16 }}>Set Robot Position</div>
-                <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6, maxWidth: 560 }}>
-                  Click the map where Argo is actually standing, then drag in the direction it's facing before releasing — same as RViz's "2D Pose Estimate" tool.
-                </p>
-              </div>
-              <button onClick={() => setShowSetPose(false)} style={{ color: 'var(--muted)', padding: 4, flexShrink: 0 }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-              </button>
-            </div>
-            <div style={{ height: 440, marginTop: 12 }}>
-              <MapCanvas
-                mapData={mapData}
-                robotPose={robotPose}
-                poseEstimateMode
-                onPoseEstimate={({ wx, wy, theta }) => {
-                  onSetInitialPose?.(wx, wy, theta)
-                  onNavPoseSet?.(true)
-                  setShowSetPose(false)
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   )
