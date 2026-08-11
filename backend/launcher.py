@@ -456,12 +456,12 @@ def _read_orders_db():
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT sp.label, o.order_id, o.total_amount, o.order_status, o.confirmed_at, o.created_at
+                """SELECT sp.label, o.order_id, o.total_amount, o.order_status, o.confirmed_at, o.placed_at
                    FROM service_points sp
                    JOIN visits v ON v.service_point_id = sp.service_point_id AND v.visit_status = 'active'
                    JOIN orders o ON o.visit_id = v.visit_id
                    WHERE sp.location_id = %s
-                   ORDER BY o.created_at""",
+                   ORDER BY o.placed_at""",
                 (location_id,),
             )
             order_rows = cur.fetchall()
@@ -483,7 +483,7 @@ def _read_orders_db():
         return {}
 
     result = {}
-    for label, order_id, total_amount, status, confirmed_at, created_at in order_rows:
+    for label, order_id, total_amount, status, confirmed_at, placed_at in order_rows:
         table_id = (label or '').replace('Table ', '').strip()
         if not table_id:
             continue
@@ -491,7 +491,7 @@ def _read_orders_db():
         entry['items'].extend(items_by_order.get(order_id, []))
         entry['total'] += float(total_amount)
         entry['status'] = status
-        updated_at = confirmed_at or created_at
+        updated_at = confirmed_at or placed_at
         if updated_at and (entry['updatedAt'] is None or updated_at.isoformat() > entry['updatedAt']):
             entry['updatedAt'] = updated_at.isoformat()
     return result

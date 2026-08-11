@@ -714,11 +714,12 @@ def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
     return transcript or None
 
 
-def listen_with_reprompt(prompt_text: str) -> Optional[str]:
-    speak_text(prompt_text)
-    reply = listen()
-    if reply is not None:
-        return reply
+def listen_once(prompt_text: str) -> Optional[str]:
+    """Speak the prompt exactly once and listen exactly once — no
+    silence-reprompt. A guest who doesn't answer within SILENCE_ONSET_TIMEOUT_S
+    gets the idle/farewell handling (see get_reply_or_route /
+    n_intent_classify's TIMEOUT_SENTINEL branches) rather than being asked
+    the same question twice."""
     speak_text(prompt_text)
     return listen()
 
@@ -1510,7 +1511,7 @@ def run_graph_session(app) -> None:
             return
         payload = interrupts[0].value
         prompt_text = payload["prompt"] if isinstance(payload, dict) else str(payload)
-        transcript = listen_with_reprompt(prompt_text)
+        transcript = listen_once(prompt_text)
         resume_value = transcript if transcript is not None else TIMEOUT_SENTINEL
         result = app.invoke(Command(resume=resume_value), config)
 
