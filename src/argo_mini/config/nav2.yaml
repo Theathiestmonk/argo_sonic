@@ -42,7 +42,7 @@
       goal_checker:
         plugin: "nav2_controller::SimpleGoalChecker"
         xy_goal_tolerance: 0.20
-        yaw_goal_tolerance: 3.14
+        yaw_goal_tolerance: 0.13
         stateful: true
       FollowPath:
         plugin: "nav2_mppi_controller::MPPIController"
@@ -92,7 +92,7 @@
         GoalAngleCritic:
           enabled: true
           cost_power: 1
-          cost_weight: 0.0
+          cost_weight: 3.0
           threshold_to_consider: 0.5
         PreferForwardCritic:
           enabled: true

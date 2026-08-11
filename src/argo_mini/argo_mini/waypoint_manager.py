@@ -34,8 +34,16 @@ class WaypointManager(Node):
         #   ros2 run argo_mini waypoint_manager --ros-args -p map_name:=office_map
         self.declare_parameter('map_name', 'office_map')
         self.declare_parameter('waypoints_dir', DEFAULT_WAYPOINTS_DIR)
+        # Nav2 reporting STATUS_SUCCEEDED only guarantees its own goal
+        # checker's tolerance was met, which may be loose (or position-only)
+        # depending on nav2 params. Verify heading explicitly before we
+        # call a waypoint reached: require at least 98% of the full turn
+        # circle matched, i.e. actual heading within 2% of 360° of target.
+        self.declare_parameter('goal_angle_tolerance_percent', 2.0)
         map_name = self.get_parameter('map_name').value
         waypoints_dir = self.get_parameter('waypoints_dir').value
+        goal_angle_tolerance_percent = float(self.get_parameter('goal_angle_tolerance_percent').value)
+        self.yaw_tolerance_deg = (goal_angle_tolerance_percent / 100.0) * 360.0
         self.waypoints_file = os.path.join(waypoints_dir, f'{map_name}.json')
 
         qos = QoSProfile(depth=10, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
@@ -99,6 +107,20 @@ class WaypointManager(Node):
         yaw = math.atan2(siny_cosp, cosy_cosp)
         return yaw
 
+    def _orientation_reached(self, n):
+        """True if the robot's current heading is within tolerance of the
+        waypoint's saved theta. Nav2 reaching the goal position doesn't by
+        itself mean the final heading matches what was saved."""
+        wp = self.waypoints.get(str(n))
+        pose = self.get_current_pose()
+        if not wp or not pose:
+            return True
+        target_yaw = math.radians(float(wp.get('theta', 0.0)))
+        actual_yaw = self.quaternion_to_yaw(pose.orientation)
+        diff_deg = math.degrees(abs(math.atan2(math.sin(target_yaw - actual_yaw),
+                                                 math.cos(target_yaw - actual_yaw))))
+        return diff_deg <= self.yaw_tolerance_deg
+
     def load_waypoints(self):
         if os.path.exists(self.waypoints_file):
             try:
@@ -157,16 +179,29 @@ class WaypointManager(Node):
         if not self.clicked_point:
             print("ERROR: Click a point in RViz first.")
             return
+        # RViz's "Publish Point" only carries x/y/z, no orientation, so
+        # there's nothing to read a target heading from. Fall back to the
+        # robot's current heading (AMCL > odom) rather than hardcoding
+        # identity — still an approximation, not the desired final heading.
+        pose = self.get_current_pose()
+        if pose:
+            yaw = self.quaternion_to_yaw(pose.orientation)
+            qz = float(pose.orientation.z)
+            qw = float(pose.orientation.w)
+        else:
+            yaw, qz, qw = 0.0, 0.0, 1.0
+
         key = str(n)
         self.waypoints[key] = {
             "x": float(self.clicked_point.x),
             "y": float(self.clicked_point.y),
-            "qz": 0.0,
-            "qw": 1.0,
-            "theta": 0.0
+            "qz": qz,
+            "qw": qw,
+            "theta": float(math.degrees(yaw))
         }
         self.save_waypoints()
-        print(f"Saved waypoint {n} from clicked point (facing forward).")
+        print(f"Saved waypoint {n} from clicked point (x={self.clicked_point.x:.3f}, "
+              f"y={self.clicked_point.y:.3f}, theta={math.degrees(yaw):.1f}° from current heading).")
 
     def cancel_current(self):
         """Cancel the active goal and stop any retry loop."""
@@ -238,9 +273,15 @@ class WaypointManager(Node):
         status  = result.status
 
         if status == 4:            # STATUS_SUCCEEDED
-            self._retry_wp  = None
-            self._attempt   = 1
-            print(f"\n[SUCCESS] Reached waypoint {n}!")
+            if self._orientation_reached(n):
+                self._retry_wp  = None
+                self._attempt   = 1
+                print(f"\n[SUCCESS] Reached waypoint {n}!")
+            elif self._stop_retry.is_set():
+                print(f"\n[CANCELLED] Navigation to waypoint {n} stopped.")
+            else:
+                print(f"\n[FAIL] Position reached but heading off target – retrying waypoint {n}…")
+                self._schedule_retry(n)
         elif self._stop_retry.is_set():
             print(f"\n[CANCELLED] Navigation to waypoint {n} stopped.")
         else:
