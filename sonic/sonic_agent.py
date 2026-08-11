@@ -33,11 +33,15 @@ If TABLE_NO is set (backend/launcher.py sets this when staff dispatch the
 robot to a specific table from the dashboard), the wake-word gate is skipped
 — see main_loop(). SONIC_ACTION_HINT selects order/bill/room_service vs.
 deliver:
-  - order/bill/room_service: the graph itself owns the Kitchen -> Table N
-    trip (n_navigate_to_table, the graph's entry point) and the
-    Table -> Kitchen return (n_return_to_kitchen, its terminal step,
-    reached however the session ends — order completed, guest said bye, or
-    a silence timeout) via navigate_and_wait(), which blocks on an actual
+  - order/bill/room_service: intent_classify's first turn skips straight to
+    the target flow (intent/table are already known — no need to greet and
+    re-classify a free-text answer), and that flow's own entry node
+    (n_new_order_start/n_get_bill) makes the real Kitchen -> Table N trip
+    via _ensure_at_table()/navigate_and_wait() before doing anything else
+    — table_reached tracks whether it's already there. The
+    Table -> Kitchen return (n_return_to_kitchen, the graph's terminal
+    step) fires however the session ends — order completed, guest said
+    bye, or a silence timeout. navigate_and_wait() blocks on an actual
     Nav2 result — see nav_bridge.py.
   - deliver: run_delivery_session() — not part of this graph (it's not a
     conversation) — waits at the kitchen for a spoken pickup confirmation
@@ -190,6 +194,16 @@ FORCED_ACTION = os.environ.get("SONIC_ACTION_HINT") or None
 # nav_bridge.py reads this file for real robot coordinates.
 MAP_NAME = os.environ.get("SONIC_MAP_NAME", "office_map")
 
+# Staff already told us the purpose by clicking a specific action button —
+# no need to greet and re-classify it from a free-text answer (see
+# n_intent_classify's pre-seeded-intent fast path). "deliver" isn't here:
+# it never reaches the graph at all, see run_delivery_session() in main_loop().
+DISPATCH_ACTION_TO_INTENT = {
+    "order": "take_order",
+    "bill": "get_bill",
+    "room_service": "take_order",  # no dedicated intent yet — treated as an order
+}
+
 
 def require_api_keys(need_sarvam: bool = True) -> None:
     missing = []
@@ -223,6 +237,9 @@ class DialogueState:
     table_no: Optional[str] = None
     table_no_locked: bool = False   # True once table_no has been captured once — protects against a
                                      # later misheard number silently redirecting the whole visit
+    table_reached: bool = False     # True once the robot has physically arrived at table_no this
+                                     # visit (staff-dispatched sessions only — see _ensure_at_table).
+                                     # Reset to False once the robot leaves for the kitchen.
     bill_total: float = 0.0
 
     # DB-backed persistence handles (all None if DATABASE_URL isn't set)
@@ -1443,6 +1460,33 @@ def perform_travel_action(announce_text: str, destination: str,
     return True
 
 
+def _ensure_at_table(state: DialogueState) -> bool:
+    """Called from a graph node (e.g. n_new_order_start, n_get_bill) that
+    needs the robot physically at the guest's table before it does
+    anything else. For a staff-dispatched session that hasn't arrived yet
+    (table_reached False), this makes the real Nav2 trip right here — as
+    part of that intent's own flow, not a blind step before intent is even
+    known. A no-op (returns True immediately) once already there, or for
+    the general wake-word loop where the robot's already wherever a guest
+    walked up to it.
+
+    Returns True if the caller should proceed. Returns False if the trip
+    failed — state is already set up to go idle (respond -> return_to_kitchen
+    -> END), so the caller should just `return asdict(state)` immediately."""
+    if not FORCED_TABLE_NO or state.table_reached:
+        return True
+    arrived = perform_travel_action(
+        f"Heading to Table {state.table_no} now, I'll be right there!",
+        f"Table {state.table_no}",
+    )
+    if not arrived:
+        state.went_idle = True
+        state.next_node = "respond"
+        return False
+    state.table_reached = True
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Simple (single-turn) intent handlers — pure logic, called from their node
 # ---------------------------------------------------------------------------
@@ -1569,37 +1613,18 @@ def place_order(state: DialogueState) -> None:
 MAX_CLARIFICATIONS = 3
 
 
-def n_navigate_to_table(state: DialogueState) -> dict:
-    """Graph entry point. For a staff-dispatched session (FORCED_TABLE_NO
-    set — the dashboard's Take Order/Give Bill/room_service buttons), this
-    is where the physical Kitchen -> Table trip actually happens, as a real
-    graph step rather than a wrapper main_loop() ran around the whole
-    session — so a failed trip can route straight to going idle (see
-    below) instead of ever starting a conversation the robot isn't
-    physically present for. A no-op for the general wake-word loop
-    (FORCED_TABLE_NO unset) — the robot might be wherever a guest walked up
-    to it, not necessarily the kitchen."""
-    trace_node("navigate_to_table", state)
-    if FORCED_TABLE_NO and not state.table_no:
-        state.table_no = FORCED_TABLE_NO
-        state.table_no_locked = True
-
-    if FORCED_TABLE_NO:
-        arrived = perform_travel_action(
-            f"Heading to Table {FORCED_TABLE_NO} now, I'll be right there!",
-            f"Table {FORCED_TABLE_NO}",
-        )
-        if not arrived:
-            state.went_idle = True
-            state.next_node = "respond"
-            return asdict(state)
-
-    state.next_node = "intent_classify"
-    return asdict(state)
-
-
 def n_intent_classify(state: DialogueState) -> dict:
     trace_node("intent_classify", state)
+
+    # Staff-dispatched session, first turn: intent is already known (which
+    # button was clicked), and so is the table — skip greeting and NLU
+    # classification entirely and go straight to that flow. Navigation to
+    # the table happens inside it (e.g. n_new_order_start), not here.
+    if state.first_turn and FORCED_TABLE_NO and state.active_intent:
+        trace("pre-seeded intent — skipping greet/classify", intent=state.active_intent)
+        state.first_turn = False
+        state.next_node = route_intent_to_node(state.active_intent)
+        return asdict(state)
 
     if state.active_item is not None:
         item_name = state.active_item.get("name", "that item")
@@ -1852,6 +1877,7 @@ def n_return_to_kitchen(state: DialogueState) -> dict:
     trace_node("return_to_kitchen", state)
     if FORCED_TABLE_NO:
         navigate_and_wait("Kitchen")
+        state.table_reached = False
     state.next_node = "END"
     return asdict(state)
 
@@ -1895,6 +1921,8 @@ def n_about(state: DialogueState) -> dict:
 
 def n_get_bill(state: DialogueState) -> dict:
     trace_node("get_bill_node", state)
+    if not _ensure_at_table(state):
+        return asdict(state)
     get_bill_handler(state)
     state.next_node = "respond"
     return asdict(state)
@@ -1911,6 +1939,8 @@ def n_normal_conv(state: DialogueState) -> dict:
 
 def n_new_order_start(state: DialogueState) -> dict:
     trace_node("new_order_start", state)
+    if not _ensure_at_table(state):
+        return asdict(state)
     nlu = state.last_outcome or {}
     slots = nlu.get("slots", {})
     order_action = slots.get("order_action")
@@ -2210,7 +2240,6 @@ def n_cancel_order_start(state: DialogueState) -> dict:
 # ---------------------------------------------------------------------------
 
 NODE_FUNCS = {
-    "navigate_to_table": n_navigate_to_table,
     "intent_classify": n_intent_classify,
     "handle_switch": n_handle_switch,
     "respond": n_respond,
@@ -2245,7 +2274,7 @@ def build_graph():
     g = StateGraph(DialogueState)
     for name, fn in NODE_FUNCS.items():
         g.add_node(name, fn)
-    g.set_entry_point("navigate_to_table")
+    g.set_entry_point("intent_classify")
 
     edge_map = {name: name for name in NODE_FUNCS}
     edge_map["END"] = END
@@ -2277,6 +2306,12 @@ def run_graph_session(app, carried_state: Optional[DialogueState], thread_id: st
         # resolves the visit against this immediately.
         state.table_no = FORCED_TABLE_NO
         state.table_no_locked = True
+        state.table_reached = False
+        # Intent is already known from which dashboard button was clicked —
+        # n_intent_classify's fast path uses this to skip straight to the
+        # target flow instead of asking "How can I help?" and re-classifying
+        # the answer via NLU.
+        state.active_intent = DISPATCH_ACTION_TO_INTENT.get(FORCED_ACTION, "take_order")
     # Per-wake-word-activation fields reset; per-visit fields (current_order,
     # table_no, bill_total, db_visit_id, db_service_point_id...) are left as
     # carried forward from the previous session.
@@ -2374,12 +2409,15 @@ def main_loop() -> None:
         # The robot's home base is the kitchen: every dispatched task is
         # Kitchen -> (task) -> Kitchen.
         #
-        # For order/bill/room_service, the Kitchen->Table trip and the
-        # Table->Kitchen return are graph nodes now (n_navigate_to_table,
-        # n_return_to_kitchen) — owned by the graph itself, run every time
-        # regardless of how the session ends (order completed, guest said
-        # bye, or a genuine silence timeout), rather than an unconditional
-        # wrapper here that couldn't tell those cases apart.
+        # For order/bill/room_service, the Kitchen->Table trip happens
+        # inside the target intent's own node (_ensure_at_table(), called
+        # from n_new_order_start/n_get_bill) once intent_classify's
+        # pre-seeded-intent fast path routes there, and the Table->Kitchen
+        # return is n_return_to_kitchen, the graph's terminal step — run
+        # every time the session ends regardless of how (order completed,
+        # guest said bye, or a genuine silence timeout), owned by the graph
+        # itself rather than an unconditional wrapper here that couldn't
+        # tell those cases apart.
         require_api_keys()
         action_label = FORCED_ACTION or "order"
         print(f"Sonic dispatched: table={FORCED_TABLE_NO} action={action_label!r} (no wake word needed).")

@@ -125,23 +125,36 @@ python3 nav_bridge.py --map office_map --destination Kitchen --timeout 60
 
 ## Graph-owned navigation
 
-For staff-dispatched order/bill/room_service sessions, the outbound and
-return trips are graph nodes, not a wrapper `main_loop()` runs around
-`run_graph_session()`:
+For staff-dispatched order/bill/room_service sessions, the intent and table
+are known before the graph even starts — the dashboard button click already
+says which — so the graph is entered with that state pre-seeded instead of
+running a generic greet-and-classify turn first:
 
-- **`n_navigate_to_table`** — the graph's entry point (`build_graph()`'s
-  `set_entry_point`). Runs the Kitchen→Table trip before `intent_classify`
-  ever asks "How can I help?". If the trip fails, it routes straight to
-  going idle — the graph never starts a conversation the robot isn't
-  physically at the table for.
+- **Entry point is still `intent_classify`** (`build_graph()`'s
+  `set_entry_point`), but for a dispatched session `run_graph_session()`
+  pre-seeds `state.active_intent` (via `DISPATCH_ACTION_TO_INTENT`,
+  keyed off `SONIC_ACTION_HINT`) and `state.table_no`/`table_no_locked`
+  before the graph runs. `n_intent_classify`'s first line checks
+  `state.first_turn and FORCED_TABLE_NO and state.active_intent` and, if
+  true, skips greeting/NLU entirely and routes straight to that intent's
+  node via `route_intent_to_node()`.
+- **Navigation happens inside the intent's own node, not before it.**
+  `_ensure_at_table(state)` is called at the top of `n_new_order_start` and
+  `n_get_bill`: if this is a dispatched session that hasn't physically
+  arrived yet (`state.table_reached` is False), it makes the real Nav2
+  trip to `state.table_no` right there. If the trip fails, it puts the
+  state into going-idle and returns False so the caller bails out
+  immediately (`return asdict(state)`) — the graph never starts a
+  conversation the robot isn't physically at the table for. Once arrived,
+  `state.table_reached` is set True so a resumed/looping session doesn't
+  re-navigate.
 - **`n_return_to_kitchen`** — the graph's terminal step. Every path that
   ends the session (`n_respond`'s `went_idle` handling) routes here instead
   of straight to `END`, so the Table→Kitchen return happens exactly once,
   regardless of *why* the session ended (order completed, guest said bye,
-  or a genuine silence timeout) — the graph itself decides when it's truly
-  done, instead of an external wrapper that couldn't tell those cases
-  apart and returned to the kitchen unconditionally the moment
-  `run_graph_session()` returned for any reason.
+  or a genuine silence timeout). It also clears `state.table_reached` back
+  to False, so a later re-dispatch to the same table navigates again
+  instead of assuming it's still there.
 
 Both are no-ops for the general wake-word loop (`FORCED_TABLE_NO` unset) —
 the robot might be wherever a guest walked up to it, not necessarily the
