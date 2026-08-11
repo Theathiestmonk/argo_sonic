@@ -36,7 +36,7 @@ const TABLE_ACTIONS = [
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [selectedTask, setSelectedTask] = useState('Deliver')
@@ -130,19 +130,20 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   useEffect(() => {
     if (navState !== 'running' || navMap !== selectedMap) {
       setNavProgress({ status: null, message: null })
+      onNavProgress?.(null)
       return
     }
     let cancelled = false
     const check = () => {
       fetch(`${launcherUrl}/nav_progress`)
         .then(r => r.json())
-        .then(d => { if (!cancelled) setNavProgress(d) })
+        .then(d => { if (!cancelled) { setNavProgress(d); onNavProgress?.(d.message || null) } })
         .catch(() => {})
     }
     check()
     const id = setInterval(check, 2000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [navState, navMap, selectedMap, launcherUrl])
+  }, [navState, navMap, selectedMap, launcherUrl, onNavProgress])
 
   const checkNav = useCallback(() => {
     fetch(`${launcherUrl}/status`)
@@ -505,35 +506,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             </div>
           ))}
         </div>
-
-        {navState === 'running' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-            {!navActionReady ? (
-              <div className="glass-card" style={{ padding: 12 }}>
-                <div style={{ fontSize: 9.5, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>⏳ Initializing</div>
-                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
-                  {navProgress.message || 'Starting navigation stack...'}
-                </div>
-              </div>
-            ) : (
-              <div className="glass-card" style={{ padding: 12, background: 'rgba(59,240,155,0.15)' }}>
-                <div style={{ fontSize: 9.5, color: 'var(--ok)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>✓ Ready</div>
-                <div style={{ fontSize: 11, color: 'var(--ok)', marginTop: 6 }}>Navigation stack is active</div>
-              </div>
-            )}
-            <button
-              onClick={sendZeroVelocity}
-              title="Emergency stop - send zero velocity"
-              style={{
-                width: '100%', padding: '12px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
-                background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.3)', color: 'var(--danger)',
-                cursor: 'pointer',
-              }}
-            >
-              🛑 Stop
-            </button>
-          </div>
-        )}
 
         {/* ── Live map — always visible here (not tucked behind a modal),
             so it's obvious at a glance whether map data is actually

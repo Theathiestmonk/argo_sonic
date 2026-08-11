@@ -36,6 +36,7 @@ export default function App() {
   const [navInitializing, setNavInitializing] = useState(false)
   const [navReady, setNavReady] = useState(false)
   const [navPoseSet, setNavPoseSet] = useState(false)
+  const [navProgress, setNavProgress] = useState(null)   // live step-by-step message (e.g. "Starting Serial Bridge"), shown on the Start Argo button while initializing
   const retryRef = useRef(null)
 
   const [mapData, setMapData]     = useState(null)
@@ -338,6 +339,7 @@ export default function App() {
           <button
             onClick={() => { setNavInitializing(true); dashboardRef.current?.startNav?.() }}
             disabled={navInitializing}
+            title={navInitializing ? (navProgress || 'Starting navigation stack...') : undefined}
             style={{
               padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
               background: navReady ? 'rgba(59,240,155,0.12)' : 'rgba(226,179,92,0.14)',
@@ -346,12 +348,15 @@ export default function App() {
               display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
               opacity: navInitializing ? 0.6 : 1,
               cursor: navInitializing ? 'not-allowed' : 'pointer',
+              maxWidth: 240,
             }}
           >
             {navInitializing ? (
               <>
-                <span style={{ display: 'inline-block', animation: 'spin-slow 1s linear infinite' }}>⏳</span>
-                Starting...
+                <span style={{ display: 'inline-block', animation: 'spin-slow 1s linear infinite', flexShrink: 0 }}>⏳</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {navProgress || 'Starting...'}
+                </span>
               </>
             ) : navReady ? (
               <>✓ Nav Ready</>
@@ -365,6 +370,7 @@ export default function App() {
               setNavInitializing(false);
               setNavReady(false);
               setNavPoseSet(false);
+              setNavProgress(null);
               dashboardRef.current?.stopNav?.();
               dashboardRef.current?.estop?.()
             }}
@@ -411,6 +417,7 @@ export default function App() {
             onNavInitializing={setNavInitializing}
             onNavReady={setNavReady}
             onNavPoseSet={setNavPoseSet}
+            onNavProgress={setNavProgress}
           />
         )}
 
