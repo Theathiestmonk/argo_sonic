@@ -37,7 +37,7 @@ Endpoints (CORS-open so the browser can call them directly):
                       full-overwrite upsert into Postgres (deletions included —
                       an item missing from the body is removed). menu-data.js
                       POSTs here after every localStorage save in menu.html.
-                      sonic/sonic_agent.py reads the same tables directly at
+                      sonic/main_agent.py reads the same tables directly at
                       startup (load_menu_from_db()), not through this endpoint.
     GET  /orders/<map_name>            →  {table_id: {items, total, status,
                                            updatedAt}, ...} for every table with
@@ -49,7 +49,7 @@ Endpoints (CORS-open so the browser can call them directly):
                                            location, not per map.
     GET  /orders/<map_name>/<table_id> →  just that table's order ({} if none)
     POST /orders/<map_name>/<table_id> →  501 — orders are now written directly
-                                           by sonic/sonic_agent.py's
+                                           by sonic/main_agent.py's
                                            db_place_order() as the guest orders,
                                            not through this endpoint.
     DELETE /orders/<map_name>/<table_id> → closes that table's active visit
@@ -70,7 +70,7 @@ Endpoints (CORS-open so the browser can call them directly):
                       was actually asked for (e.g. switching which map to navigate on).
                       For "navigate" specifically: a background thread
                       (_watch_for_nav_ready) polls NAV_PROGRESS_PATH for THIS run
-                      reporting READY, then auto-starts sonic_agent.py's continuous
+                      reporting READY, then auto-starts main_agent.py's continuous
                       wake-word loop ("Hi Sonic") — so a guest can talk to the robot
                       without staff separately starting it by hand. See GET
                       /voice/status's wake_loop_* fields.
@@ -107,14 +107,14 @@ Endpoints (CORS-open so the browser can call them directly):
                            ("wake_loop_pending" — paused for a table dispatch, or
                            still starting up after nav just went READY)?
     POST /voice/start  →  body {"action": "order"|"deliver"|"bill"|"room_service",
-                           "map": str, "table": str}. Spawns sonic/sonic_agent.py
+                           "map": str, "table": str}. Spawns sonic/main_agent.py
                            as a subprocess scoped to that table — this is what a
                            table's action buttons in the UI actually call. Pauses
                            the wake-word loop for the dispatch's duration (shared
                            mic/speaker, can't run both at once) and restarts it
                            once the dispatch process exits, if it's still supposed
                            to be running.
-                           sonic_agent.py is normally a continuous wake-word
+                           main_agent.py is normally a continuous wake-word
                            loop that discovers its table conversationally; a
                            TABLE_NO env var (set here from "table") makes it
                            skip that and run exactly one Kitchen->Table N->
@@ -122,11 +122,13 @@ Endpoints (CORS-open so the browser can call them directly):
                            Nav2 navigation, see sonic/nav_bridge.py), then
                            exit — same click-to-dispatch lifecycle the old
                            sonic/test_harness.py had. "action" is passed
-                           through as SONIC_ACTION_HINT: order/bill/
-                           room_service run the round trip plus the normal
-                           conversation; deliver runs a distinct routine
-                           that waits at the kitchen for a spoken pickup
-                           confirmation before departing. SONIC_MAP_NAME
+                           through as SONIC_ACTION_HINT: order and room_service
+                           both run the full humanized take-order conversation;
+                           bill and deliver currently get a brief spoken apology
+                           and a return to the kitchen (not yet rewired into
+                           main_agent.py — see its module docstring) rather than
+                           the dedicated bill/pickup-confirmation behavior the
+                           older sonic_agent.py had. SONIC_MAP_NAME
                            (from "map") selects which
                            src/argo_mini/waypoints/<map>.json to navigate
                            against.
@@ -142,13 +144,14 @@ Endpoints (CORS-open so the browser can call them directly):
                            session must never contend with or depend on
                            whether the nav stack is running).
     GET  /voice/nav_enabled  → {"enabled": bool} — staff-facing kill-switch
-                           (locations.voice_nav_enabled) that
-                           sonic_agent.py's navigation_handler() checks before
-                           acting on a guest's spoken "take me to X" request.
-                           Defaults true. Real Nav2 goal-sending is still a
-                           stub (dispatch_robot_action()) — this switch exists
-                           now so it already gates real navigation once that
-                           lands.
+                           (locations.voice_nav_enabled) that main_agent.py's
+                           navigate_and_wait() checks before every Kitchen<->
+                           Table trip (dispatched or voice-triggered take_order
+                           alike). Defaults true so a missing DB doesn't read
+                           as "disabled". A guest's own free-form "take me to
+                           X" request isn't a live intent yet (see n_stub) —
+                           this switch already covers it once that's rewired
+                           in, since it gates navigate_and_wait() itself.
     POST /voice/nav_enabled → body {"enabled": bool}; toggled from the
                            dashboard (see TablesPanel.jsx).
 
@@ -203,12 +206,12 @@ NAV_SCRIPT     = os.path.join(_ROOT, 'argo_sonic_nav.py')
 MAPS_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'maps')
 WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
 SONIC_DIR      = os.path.join(_ROOT, 'sonic')
-SONIC_SCRIPT   = os.path.join(SONIC_DIR, 'sonic_agent.py')
+SONIC_SCRIPT   = os.path.join(SONIC_DIR, 'main_agent.py')
 VOICE_LOG_PATH = os.path.join(SONIC_DIR, 'voice_session.log')
 
 # Menu + orders now live in Postgres (see sonic/*.sql, sonic/seed_db.py)
 # instead of src/argo_mini/menu/menu.json + src/argo_mini/orders/*.json —
-# load the same .env sonic_agent.py uses so DATABASE_URL/ROBOT_UID agree.
+# load the same .env main_agent.py uses so DATABASE_URL/ROBOT_UID agree.
 load_dotenv(os.path.join(SONIC_DIR, '.env'))
 DATABASE_URL = os.environ.get('DATABASE_URL')
 ROBOT_UID    = os.environ.get('ROBOT_UID', 'SONIC-001')
@@ -275,7 +278,7 @@ _location_id_cache = None
 
 def _menu_location_id():
     """Resolves the single location_id this deployment's menu/orders belong
-    to, via the same ROBOT_UID -> robots -> location_id lookup sonic_agent.py
+    to, via the same ROBOT_UID -> robots -> location_id lookup main_agent.py
     uses (see sonic/seed_db.py) — one robot, one venue, one menu/table set."""
     global _location_id_cache
     if _location_id_cache is not None:
@@ -443,7 +446,7 @@ def _read_orders_db():
     path segment callers still pass is accepted for URL compatibility with
     the frontend (which scopes by SLAM map) but not filtered on — Postgres
     models one menu/table-set per location, not per map (see seed_db.py).
-    Multiple `orders` rows can exist per active visit (sonic_agent.py's
+    Multiple `orders` rows can exist per active visit (main_agent.py's
     db_place_order() writes one per confirm) — these are summed into a
     single per-table entry to match the old one-order-per-table file shape."""
     location_id = _menu_location_id()
@@ -518,8 +521,8 @@ def _clear_table_order(table_id):
 
 
 def _get_voice_nav_enabled():
-    """Staff-facing kill-switch sonic_agent.py's navigation_handler() checks
-    before dispatching a "go to X" action. Defaults to True (including when
+    """Staff-facing kill-switch main_agent.py's navigate_and_wait() checks
+    before every Kitchen<->Table trip. Defaults to True (including when
     DB is unset) so a missing DB doesn't read as 'disabled'."""
     location_id = _menu_location_id()
     conn = _db()
@@ -596,7 +599,7 @@ def _voice_stop_locked():
     _voice_proc, _voice_action, _voice_map, _voice_table = None, None, None, None
 
 
-# Continuous wake-word loop ("Hi Sonic") — sonic_agent.py run with no
+# Continuous wake-word loop ("Hi Sonic") — main_agent.py run with no
 # TABLE_NO, auto-started once Nav2 reports READY (see
 # _watch_for_nav_ready, spawned from POST /start's navigate branch) and
 # auto-stopped when the nav stack stops (_stop_locked). It shares the same
@@ -1063,7 +1066,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'error': 'invalid map name or table id'}, 400)
                 return
             # No frontend caller writes here (orders are written directly by
-            # sonic_agent.py's db_place_order() as the guest orders) — kept
+            # main_agent.py's db_place_order() as the guest orders) — kept
             # as a 501 rather than silently dropped, in case something else
             # starts depending on it.
             self._json({'error': 'orders are now written by the voice agent (db_place_order) — '
@@ -1111,17 +1114,18 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({'ok': False, 'error': f'script not found: {SONIC_SCRIPT}'}, 500)
                     return
 
-                # sonic_agent.py has no --table/--map/--action CLI flags (it's
+                # main_agent.py has no --table/--map/--action CLI flags (it's
                 # a continuous wake-word loop that discovers the table
                 # conversationally) — TABLE_NO tells it to skip that
                 # discovery and run one real Kitchen->Table->Kitchen round
                 # trip for this table (nav_bridge.py sends the actual Nav2
                 # goals), preserving the old click-to-dispatch UX.
-                # SONIC_ACTION_HINT selects order/bill/room_service (round
-                # trip + normal conversation) vs. deliver (kitchen
-                # pickup-confirmation routine, see run_delivery_session()).
-                # SONIC_MAP_NAME picks which waypoints file to navigate
-                # against.
+                # SONIC_ACTION_HINT selects order/room_service (round trip +
+                # full humanized take-order conversation) vs. bill/deliver,
+                # which currently just get a brief spoken apology and a
+                # return to the kitchen (n_stub — not yet rewired into
+                # main_agent.py). SONIC_MAP_NAME picks which waypoints file
+                # to navigate against.
                 args = [_sonic_python(), SONIC_SCRIPT]
                 # Appended, not overwritten — so a prior session's output is
                 # still there to compare against. A clear separator per
@@ -1287,7 +1291,7 @@ if __name__ == '__main__':
     print(f'[launcher] sonic interpreter → {_sonic_python()}')
     print(f'[launcher] voice session log → {VOICE_LOG_PATH}')
     if not os.path.isfile(SONIC_SCRIPT):
-        print(f'[launcher] WARNING: sonic_agent.py not found — check path above')
+        print(f'[launcher] WARNING: main_agent.py not found — check path above')
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')
     try:
