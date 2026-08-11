@@ -99,13 +99,18 @@ Endpoints (CORS-open so the browser can call them directly):
 
     GET  /voice/status →  {"running": bool, "pid": int|null, "action": str|null,
                            "map": str|null, "table": str|null,
-                           "wake_loop_running": bool, "wake_loop_pending": bool} —
+                           "wake_loop_running": bool, "wake_loop_pending": bool,
+                           "phase": str|null, "phase_text": str|null} —
                            is Sonic currently mid-conversation at a table
                            ("running"/action/map/table), and separately, is the
                            continuous wake-word loop up ("wake_loop_running") or
                            does it want to be but isn't right now
                            ("wake_loop_pending" — paused for a table dispatch, or
-                           still starting up after nav just went READY)?
+                           still starting up after nav just went READY)? "phase"/
+                           "phase_text" (e.g. "heading_to_table"/"Heading to
+                           Table 3") come from main_agent.py's own report_phase()
+                           via VOICE_PROGRESS_PATH — null once stale (see
+                           VOICE_PROGRESS_MAX_AGE_S) or if nothing's in progress.
     POST /voice/start  →  body {"action": "order"|"deliver"|"bill"|"room_service",
                            "map": str, "table": str}. Spawns sonic/main_agent.py
                            as a subprocess scoped to that table — this is what a
@@ -155,6 +160,28 @@ Endpoints (CORS-open so the browser can call them directly):
     POST /voice/nav_enabled → body {"enabled": bool}; toggled from the
                            dashboard (see TablesPanel.jsx).
 
+    GET  /nav/goto/status → {"running": bool, "destination": str|null,
+                           "phase": "heading"|"arrived"|"failed"|null,
+                           "phase_text": str|null} — status of the current/
+                           last /nav/goto trip (see below).
+    POST /nav/goto     →  body {"destination": str, "map": str}. A plain,
+                           conversation-free single-destination trip — e.g.
+                           the "Go to kitchen" button — run in a background
+                           thread inside this process (_nav_goto_worker),
+                           shelling out to sonic/nav_bridge.py exactly the
+                           way main_agent.py's own navigate_and_wait() does,
+                           gated by the same voice_nav_enabled() kill-switch.
+                           Rejected (409) while a table dispatch is active
+                           (voice_session_busy) or another /nav/goto trip is
+                           already running (nav_goto_busy) — same reasoning
+                           as /voice/start's own busy check, since a voice
+                           dispatch and a plain goto trip can likewise never
+                           run at once. This replaces the frontend's old
+                           direct rosbridge goal-sending for such buttons —
+                           the frontend now only ever triggers navigation
+                           through this endpoint or POST /voice/start, never
+                           by publishing a Nav2 goal itself.
+
     GET  /estop/status →  {"estopped": bool} — is serial_bridge currently
                            killed via /estop?
     POST /estop        →  emergency stop: immediately kills serial_bridge
@@ -176,6 +203,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import threading
@@ -208,6 +236,11 @@ WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
 SONIC_DIR      = os.path.join(_ROOT, 'sonic')
 SONIC_SCRIPT   = os.path.join(SONIC_DIR, 'main_agent.py')
 VOICE_LOG_PATH = os.path.join(SONIC_DIR, 'voice_session.log')
+# Same ROS-aware one-shot bridge main_agent.py's navigate_and_wait() shells
+# out to — used directly here (background thread, not a subprocess of
+# main_agent.py) for single-destination trips that have no conversation
+# attached (POST /nav/goto, e.g. the "Go to kitchen" button).
+NAV_BRIDGE_SCRIPT = os.path.join(SONIC_DIR, 'nav_bridge.py')
 
 # Menu + orders now live in Postgres (see sonic/*.sql, sonic/seed_db.py)
 # instead of src/argo_mini/menu/menu.json + src/argo_mini/orders/*.json —
@@ -224,6 +257,8 @@ _VOICE_ACTIONS = {'order', 'deliver', 'bill', 'room_service'}
 NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by NAV_SCRIPT (whichever nav script is active)
 NAV_LOG_PATH       = '/tmp/argo_nav_output.log'  # full stdout+stderr of the current/last NAV_SCRIPT run
 NAV_LOG_TAIL_LINES = 300
+VOICE_PROGRESS_PATH = '/tmp/argo_voice_progress'  # written by main_agent.py's report_phase() — read by /voice/status
+VOICE_PROGRESS_MAX_AGE_S = 30  # ignore (and don't surface) a phase report older than this — self-heals a stale file
 PORT    = 8888
 
 
@@ -551,6 +586,74 @@ def _set_voice_nav_enabled(enabled):
     except Exception as e:
         print(f'[launcher] voice_nav_enabled write failed: {e}')
         return False
+
+
+def _read_voice_progress():
+    """Reads main_agent.py's report_phase() output — {phase, text, table,
+    updated_at} — same idea as /nav_progress reading NAV_PROGRESS_PATH.
+    Returns (None, None) if the file is missing, unparseable, or older than
+    VOICE_PROGRESS_MAX_AGE_S (a stale phase, e.g. from an uncleanly killed
+    session, must never be shown as current)."""
+    if not os.path.isfile(VOICE_PROGRESS_PATH):
+        return None, None
+    try:
+        with open(VOICE_PROGRESS_PATH, 'r') as f:
+            data = json.loads(f.read())
+        updated_at = datetime.datetime.fromisoformat(data['updated_at'])
+        age_s = (datetime.datetime.now() - updated_at).total_seconds()
+        if age_s > VOICE_PROGRESS_MAX_AGE_S:
+            return None, None
+        return data.get('phase'), data.get('text')
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+
+
+def _run_nav_bridge(destination, map_name, timeout_s=90.0):
+    """Same sourced-ROS-env one-shot trip as main_agent.py's
+    navigate_and_wait() — used directly by the /nav/goto background worker
+    below, gated by the same staff kill-switch."""
+    if not _get_voice_nav_enabled():
+        print(f'[launcher] voice_nav_enabled is off — skipping /nav/goto trip to {destination!r}')
+        return False
+    cmd = (
+        'source /opt/ros/humble/setup.bash && '
+        f'source {_ROOT}/install/setup.bash && '
+        'export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && '
+        f'python3 {shlex.quote(NAV_BRIDGE_SCRIPT)} --map {shlex.quote(map_name)} '
+        f'--destination {shlex.quote(destination)} --timeout {timeout_s}'
+    )
+    try:
+        result = subprocess.run(['bash', '-c', cmd], capture_output=True, text=True, timeout=timeout_s + 15)
+    except subprocess.TimeoutExpired:
+        print(f'[launcher] /nav/goto {destination!r}: bridge process itself timed out')
+        return False
+    ok = result.returncode == 0 and 'RESULT:SUCCESS' in result.stdout
+    print(f"[launcher] /nav/goto {destination!r}: {'arrived' if ok else 'FAILED'} (rc={result.returncode})")
+    return ok
+
+
+# Independent from _voice_proc above (table dispatch / wake loop) and from
+# _proc above (SLAM/Nav2 stack) — a single-destination trip with no
+# conversation attached, e.g. "Go to kitchen". Mutual exclusion against
+# _voice_proc is enforced where each is started (POST /nav/goto and
+# POST /voice/start), since both ultimately drive the same Nav2 action
+# server and can never really run at once.
+_nav_goto_lock = threading.Lock()
+_nav_goto_status = {'running': False, 'destination': None, 'phase': None, 'phase_text': None}
+
+
+def _nav_goto_worker(destination, map_name):
+    global _nav_goto_status
+    with _nav_goto_lock:
+        _nav_goto_status = {'running': True, 'destination': destination,
+                             'phase': 'heading', 'phase_text': f'Heading to {destination}'}
+    ok = _run_nav_bridge(destination, map_name)
+    with _nav_goto_lock:
+        _nav_goto_status = {
+            'running': False, 'destination': destination,
+            'phase': 'arrived' if ok else 'failed',
+            'phase_text': f'Arrived at {destination}' if ok else f'Could not reach {destination}',
+        }
 
 # ── State ────────────────────────────────────────────────────────────────────
 
@@ -913,11 +1016,17 @@ class Handler(BaseHTTPRequestHandler):
             with _wake_lock:
                 wake_running = _wake_proc is not None and _wake_proc.poll() is None
                 wake_pending = _wake_should_run and not wake_running  # paused for a dispatch, or still starting up
+            phase, phase_text = _read_voice_progress()
             self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table,
-                        'wake_loop_running': wake_running, 'wake_loop_pending': wake_pending})
+                        'wake_loop_running': wake_running, 'wake_loop_pending': wake_pending,
+                        'phase': phase, 'phase_text': phase_text})
 
         elif self.path == '/voice/nav_enabled':
             self._json({'enabled': _get_voice_nav_enabled()})
+
+        elif self.path == '/nav/goto/status':
+            with _nav_goto_lock:
+                self._json(dict(_nav_goto_status))
 
         elif self.path == '/estop/status':
             with _serial_lock:
@@ -1092,6 +1201,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'ok': False, 'error': 'invalid or missing "map"/"table"'}, 400)
                 return
 
+            with _nav_goto_lock:
+                if _nav_goto_status['running']:
+                    # Same physical robot, same Nav2 action server — a plain
+                    # /nav/goto trip (e.g. "Go to kitchen") and a table
+                    # dispatch can never run at once.
+                    self._json({'ok': False, 'error': 'nav_goto_busy',
+                                'active': {'destination': _nav_goto_status['destination']}}, 409)
+                    return
+
             with _voice_lock:
                 already = _voice_proc and _voice_proc.poll() is None
                 if already and _voice_action == action and _voice_map == map_name and _voice_table == table_id:
@@ -1213,6 +1331,38 @@ class Handler(BaseHTTPRequestHandler):
                 return
             print(f"[launcher] voice-triggered navigation {'enabled' if body['enabled'] else 'disabled'}")
             self._json({'ok': True, 'enabled': bool(body['enabled'])})
+
+        elif self.path == '/nav/goto':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+            except (ValueError, json.JSONDecodeError):
+                self._json({'ok': False, 'error': 'invalid JSON body'}, 400)
+                return
+
+            destination = _safe_name(body.get('destination'))
+            map_name    = _safe_name(body.get('map'))
+            if not destination or not map_name:
+                self._json({'ok': False, 'error': 'invalid or missing "destination"/"map"'}, 400)
+                return
+
+            with _voice_lock:
+                voice_busy = _voice_proc and _voice_proc.poll() is None
+            if voice_busy:
+                # Same reasoning as /voice/start's own busy check, the other
+                # way around — a table dispatch already owns the robot.
+                self._json({'ok': False, 'error': 'voice_session_busy',
+                            'active': {'action': _voice_action, 'table': _voice_table}}, 409)
+                return
+
+            with _nav_goto_lock:
+                if _nav_goto_status['running']:
+                    self._json({'ok': False, 'error': 'nav_goto_busy',
+                                'active': {'destination': _nav_goto_status['destination']}}, 409)
+                    return
+                threading.Thread(target=_nav_goto_worker, args=(destination, map_name), daemon=True).start()
+            print(f'[launcher] /nav/goto -> {destination!r} (map={map_name!r})')
+            self._json({'ok': True, 'status': 'started', 'destination': destination, 'map': map_name})
 
         elif self.path == '/estop':
             with _serial_lock:

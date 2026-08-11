@@ -4,20 +4,20 @@ import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
 
-// Faithful React port of frontend/public/dashboard.html's layout and copy —
-// same rail (Argo Status → What do you need → Where should Argo go → Send
-// Argo), same stats row, same "Saved Places" grid, same Recent Activity /
-// Alerts panels. The only real change from the original: places come from
-// GET /waypoints/<selectedMap> (live, per-map) instead of localStorage.
-// Same plain '$'-prefixed formatting TablesPanel.jsx uses for the same
-// reason — no shared access to menu-data.js's currency/tax settings here.
+// React port of frontend/public/dashboard.html's layout and copy — same
+// stats row, same "Saved Places" grid, same Recent Activity / Alerts
+// panels. Places come from GET /waypoints/<selectedMap> (live, per-map)
+// instead of localStorage. Navigation itself is never triggered from here
+// directly — every trip is either a table action (below, backend-managed by
+// main_agent.py via POST /voice/start) or the "Go to kitchen" button
+// (backend-managed by POST /nav/goto) — this component only displays status
+// polled back from those, it never publishes a Nav2 goal itself. Same plain
+// '$'-prefixed formatting TablesPanel.jsx uses for the same reason — no
+// shared access to menu-data.js's currency/tax settings here.
 const money = (n) => '$' + Number(n || 0).toFixed(2)
 
-const TASKS = ['Deliver', 'Call Argo', 'Take order', 'Billing', 'Room service']
-
-// Maps a task chip to the voice action backend/launcher.py's POST /voice/start
-// expects. 'Call Argo' has no entry on purpose — it's a plain summon, not an
-// order/bill/delivery/room-service interaction, so it never triggers Sonic.
+// Maps a table-card task to the voice action backend/launcher.py's
+// POST /voice/start expects.
 const TASK_TO_ACTION = {
   'Take order':   'order',
   'Deliver':      'deliver',
@@ -25,30 +25,24 @@ const TASK_TO_ACTION = {
   'Room service': 'room_service',
 }
 
-// Direct per-card buttons on a Saved Place — [task, button label]. task is a
-// TASK_TO_ACTION key, so clicking one fires the exact same voice action the
-// 3-step "What do you need? → Where should Argo go? → Confirm" rail does,
-// just without needing that separate select-then-confirm detour for the
-// common case of "do X at table Y" (see sendArgo's taskOverride param).
+// Direct per-card buttons on a Saved Place — [task, button label].
 const TABLE_ACTIONS = [
   ['Take order',   'Take Order'],
   ['Deliver',      'Deliver'],
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
-  const [selectedTask, setSelectedTask] = useState('Deliver')
-  const [selectedDest, setSelectedDest] = useState(null)
-  const autoReturnTimeoutRef = useRef(null)
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
   const [taskLabel, setTaskLabel]   = useState('—')
   const [activity, setActivity]     = useState([])
   const [greeting, setGreeting]     = useState('Good day')
   const [time, setTime]             = useState('—')
-  const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null })
+  const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null, phase: null, phase_text: null })
+  const [navGotoStatus, setNavGotoStatus] = useState({ running: false, destination: null, phase: null, phase_text: null })
   const [orders, setOrders]         = useState({})
   const [expandedBills, setExpandedBills] = useState(() => new Set())
   const [showTeleopPad, setShowTeleopPad] = useState(false)
@@ -229,7 +223,11 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
   // Is Sonic currently mid-conversation at some table? Same poll pattern as
   // TablesPanel.jsx's identical hook — used to show a busy banner and avoid
-  // firing a second voice session the backend would just 409 anyway.
+  // firing a second voice session the backend would just 409 anyway. Also
+  // carries main_agent.py's own real phase/phase_text now (see
+  // report_phase() in sonic/main_agent.py) — this is the sole source of
+  // truth for "moving/arrived/taking order" status, not anything simulated
+  // locally.
   useEffect(() => {
     let cancelled = false
     const load = () => {
@@ -242,6 +240,38 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     const id = setInterval(load, 3000)
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
+
+  // Status of the current/last plain single-destination trip (POST
+  // /nav/goto — e.g. "Go to kitchen"), same poll pattern as voiceStatus.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/nav/goto/status`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setNavGotoStatus(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
+
+  // Left rail's Status stat card, driven entirely by real backend state now
+  // (no more local nav simulation): prefer main_agent.py's own phase while a
+  // voice session is active, else the plain /nav/goto trip's phase, else Idle.
+  useEffect(() => {
+    if (voiceStatus.running && voiceStatus.phase_text) {
+      setCurStatus(voiceStatus.phase_text)
+      setCurPos(voiceStatus.table ? `Table ${voiceStatus.table}` : curPos)
+      setTaskLabel(voiceStatus.action || taskLabel)
+    } else if (navGotoStatus.running && navGotoStatus.phase_text) {
+      setCurStatus(navGotoStatus.phase_text)
+      setCurPos(navGotoStatus.destination || curPos)
+    } else if (!voiceStatus.running && !navGotoStatus.running) {
+      setCurStatus('Idle')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceStatus, navGotoStatus])
 
   // Mirrors voiceStatus's polling pattern — independent state, own endpoint,
   // so the E-Stop button's label always reflects the actual backend state
@@ -314,9 +344,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     .filter(([key]) => key !== '0')
     .sort((a, b) => Number(a[0]) - Number(b[0]))
 
-  // Kitchen/Docker are reachable via the Home card's own buttons, so hide
-  // their duplicate cards from the grid — keep them in `entries`/`destinations`
-  // (below) so sendArgo('Kitchen')/sendArgo('Docker Station') still resolve.
+  // Kitchen is reachable via the Home card's own "Go to kitchen" button, so
+  // hide its duplicate card from the grid. Docker has no UI trigger at all
+  // right now (not needed) but stays hidden the same way in case it's
+  // wired back in later.
   const HIDDEN_CARD_NAMES = ['Kitchen', 'Docker']
   const visibleEntries = entries.filter(([, t]) => !HIDDEN_CARD_NAMES.includes(t.name))
 
@@ -334,80 +365,60 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     setActivity(prev => [{ dest, task, time }, ...prev].slice(0, 6))
   }, [])
 
-  const sendArgo = useCallback((destNameOverride, taskOverride) => {
-    const destName = destNameOverride ?? selectedDest
-    // taskOverride lets a direct per-card action button (see TABLE_ACTIONS)
-    // fire with an explicit task in the same click — reading selectedTask
-    // here instead would race the setSelectedTask() call right before it,
-    // since state updates aren't visible until the next render.
-    const task = taskOverride ?? selectedTask
-    if (!destName) { showToast('Select a destination first', 'danger'); return }
-    const dest = destinations.find(d => d.name === destName)
-    if (!dest) return
-
+  // Starts a table's voice action. This is now the ONLY thing this call
+  // does — main_agent.py owns the entire physical trip (Kitchen -> table ->
+  // conversation -> Kitchen) once POST /voice/start spawns it, and reports
+  // real status back via /voice/status's phase/phase_text (see the useEffect
+  // above). No direct Nav2 goal, no local arrival simulation, no auto-return
+  // timer here anymore — those were racing main_agent.py's own navigation,
+  // which is what caused the double-navigation seen in testing.
+  const dispatchVoiceAction = useCallback((tableLabel, task) => {
+    const dest = destinations.find(d => d.name === tableLabel)
+    if (!dest || !dest.key || dest.key === '0') return   // '0' = Home — no table context
     const action = TASK_TO_ACTION[task]
-    const startVoiceSession = () => {
-      if (!action || !dest.key || dest.key === '0') return   // '0' = Home — no table context, never voice-trigger
-      if (voiceStatus.running && voiceStatus.table !== dest.key) {
-        showToast(`Sonic is busy with another table — wait for that session to finish`, 'warn')
-        return
-      }
-      fetch(`${launcherUrl}/voice/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, map: selectedMap, table: dest.key }),
-      })
-        .then(r => r.json())
-        .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger') })
-        .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
-    }
-    const updateArrivedUI = () => {
-      setCurPos(destName)
-      setCurStatus('Arrived')
-      showToast(`Argo arrived at ${destName}`, 'ok')
+    if (!action) return
 
-      // Auto-return to kitchen after 10 seconds (unless already at kitchen)
-      if (destName !== 'Kitchen') {
-        console.log(`[ARRIVAL] Robot reached ${destName}. Auto-return in 10 seconds...`)
-        autoReturnTimeoutRef.current = setTimeout(() => {
-          console.log('[AUTO-RETURN] Triggering return to kitchen')
-          showToast('Auto-returning to kitchen...', 'info')
-          sendArgo('Kitchen')
-        }, 10000)
-      }
+    if (voiceStatus.running && voiceStatus.table !== dest.key) {
+      showToast('Sonic is busy with another table — wait for that session to finish', 'warn')
+      return
+    }
+    if (navGotoStatus.running) {
+      showToast('Argo is on a trip right now — wait for it to finish', 'warn')
+      return
     }
 
-    // Cancel auto-return if user sends new goal while auto-return is pending
-    if (autoReturnTimeoutRef.current) {
-      clearTimeout(autoReturnTimeoutRef.current)
-      autoReturnTimeoutRef.current = null
-      console.log('[CANCEL] Auto-return cancelled - user sent new goal')
-    }
+    fetch(`${launcherUrl}/voice/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, map: selectedMap, table: dest.key }),
+    })
+      .then(r => r.json())
+      .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger') })
+      .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
 
-    const live = connected && navReady
-    setCurStatus('Moving')
-    setTaskLabel(`${task} → ${destName}`)
-    if (live) {
-      // Sonic used to fire the instant this button was clicked, regardless
-      // of whether the robot had actually reached the table yet — customers
-      // could get greeted by a robot that was still ten meters away. Now
-      // gated on onNavigate's real arrival detection (see App.jsx's
-      // sendNavGoal) instead of a flat click-time trigger.
-      onNavigate(dest.x, dest.y, dest.qz, dest.qw, `Argo is heading to ${destName}`,
-        () => { updateArrivedUI(); startVoiceSession() })
-    } else {
-      // No real rosbridge/Nav2 to send a goal to — never block the click for
-      // this (testing without a robot connected is a normal, expected state,
-      // not an error) — just say plainly that this trip is simulated. No
-      // real arrival to wait for either, so keep the original flat-timer
-      // simulated trip (10s) with Sonic firing immediately, same as this
-      // has always worked for testing without a robot present.
-      showToast(`Argo is heading to ${destName} (simulated — no live robot connection)`, 'info')
-      startVoiceSession()
-      setTimeout(updateArrivedUI, 10000)
+    addActivity(tableLabel, task)
+  }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
+
+  // "Go to kitchen" — a plain, conversation-free trip, backend-managed via
+  // POST /nav/goto (shells out to nav_bridge.py directly, same as
+  // main_agent.py's own navigate_and_wait()). Status polled via
+  // navGotoStatus above.
+  const goToKitchen = useCallback(() => {
+    if (voiceStatus.running) {
+      showToast('Sonic is busy with a table — wait for that session to finish', 'warn')
+      return
     }
-    addActivity(destName, task)
-  }, [selectedDest, selectedTask, destinations, onNavigate, showToast, addActivity, connected, navReady, selectedMap, launcherUrl, voiceStatus])
+    if (navGotoStatus.running) return
+    fetch(`${launcherUrl}/nav/goto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination: 'Kitchen', map: selectedMap }),
+    })
+      .then(r => r.json())
+      .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with a table' : 'Could not start the trip', 'danger') })
+      .catch(() => showToast('Could not reach launcher', 'danger'))
+    addActivity('Kitchen', 'Go to kitchen')
+  }, [showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
 
   const stopVoice = () => {
     fetch(`${launcherUrl}/voice/stop`, { method: 'POST' }).catch(() => {})
@@ -442,8 +453,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       .catch(() => showToast('Could not reach launcher to resume motors', 'danger'))
   }
 
-  const recall = () => { setSelectedDest('Home'); sendArgo('Home') }
-
   const radialPages = [
     { id: 'overview', label: 'Overview', action: () => document.getElementById('dash-overview')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg> },
@@ -458,14 +467,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     { id: 'settings', label: 'Settings', action: onOpenSettings,
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg> },
   ]
-
-  const chip = (active) => ({
-    padding: '8px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: active ? 700 : 600,
-    background: active ? 'rgba(226,179,92,0.15)' : 'rgba(255,255,255,0.03)',
-    border: `1px solid ${active ? 'rgba(226,179,92,0.38)' : 'var(--border-glass)'}`,
-    color: active ? 'var(--gold-bright)' : 'var(--muted)',
-    transition: 'all 0.2s',
-  })
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 0, animation: 'slideUp 0.35s ease' }}>
@@ -581,12 +582,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             <div
               className="glass-card"
               style={{
-                padding: '18px 20px', cursor: 'pointer',
-                border: selectedDest === 'Home' ? '2px solid var(--gold)' : 'none',
+                padding: '18px 20px',
                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
                 minHeight: '280px',
               }}
-              onClick={() => setSelectedDest('Home')}
             >
               <div style={{
                 width: '56px', height: '56px', borderRadius: '50%',
@@ -598,26 +597,32 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 </svg>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6, width: '100%' }}>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedDest('Kitchen'); sendArgo('Kitchen') }}
-                  style={{
-                    padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
-                    background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.22)',
-                    color: 'var(--gold-bright)', cursor: 'pointer',
-                  }}
-                >
-                  Go to kitchen
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedDest('Docker Station'); sendArgo('Docker Station') }}
-                  style={{
-                    padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
-                    background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.22)',
-                    color: 'var(--gold-bright)', cursor: 'pointer',
-                  }}
-                >
-                  Go to Docker
-                </button>
+                {(() => {
+                  // Real, backend-sourced status for a kitchen trip, whether
+                  // it was this button that started it or main_agent.py's
+                  // own automatic return trip at the end of an order.
+                  const kitchenBusy = (navGotoStatus.running && navGotoStatus.destination === 'Kitchen')
+                    || voiceStatus.phase === 'heading_to_kitchen'
+                  const kitchenText = voiceStatus.phase === 'heading_to_kitchen'
+                    ? voiceStatus.phase_text
+                    : (navGotoStatus.destination === 'Kitchen' ? navGotoStatus.phase_text : null)
+                  return (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); goToKitchen() }}
+                      disabled={kitchenBusy}
+                      style={{
+                        padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
+                        background: kitchenBusy ? 'rgba(59,240,155,0.15)' : 'rgba(226,179,92,0.08)',
+                        border: `1px solid ${kitchenBusy ? 'rgba(59,240,155,0.35)' : 'rgba(226,179,92,0.22)'}`,
+                        color: kitchenBusy ? 'var(--ok)' : 'var(--gold-bright)',
+                        opacity: kitchenBusy ? 0.85 : 1,
+                        cursor: kitchenBusy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {kitchenBusy ? (kitchenText || 'Heading to Kitchen…') : 'Go to kitchen'}
+                    </button>
+                  )
+                })()}
               </div>
             </div>
 
@@ -635,11 +640,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 <div
                   key={key}
                   className="glass-card"
-                  onClick={() => setSelectedDest(label)}
-                  style={{
-                    padding: '18px 20px', cursor: 'pointer',
-                    border: selectedDest === label ? '2px solid var(--gold)' : 'none',
-                  }}
+                  style={{ padding: '18px 20px' }}
                 >
                   <div style={{ fontFamily: 'var(--font-heading)', fontSize: 16, fontWeight: 800 }}>{label}</div>
                   <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>{Number(t.x).toFixed(1)} m, {Number(t.y).toFixed(1)} m</div>
@@ -667,8 +668,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                   )}
 
                   {/* Direct action buttons — fire immediately with this table
-                      as destination, no detour through the sidebar's
-                      select-task / select-destination / confirm steps. */}
+                      as destination. main_agent.py owns the whole trip once
+                      this click starts it; the label reflects its real
+                      reported phase (voiceStatus.phase_text) while active. */}
                   <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
                     {TABLE_ACTIONS.map(([task, actLabel]) => {
                       const blocked = voiceStatus.running && voiceStatus.table !== key
@@ -679,9 +681,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                           disabled={blocked}
                           onClick={(e) => {
                             e.stopPropagation()
-                            setSelectedTask(task)
-                            setSelectedDest(label)
-                            sendArgo(label, task)
+                            dispatchVoiceAction(label, task)
                           }}
                           style={{
                             padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
@@ -692,7 +692,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                             cursor: blocked ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          {active ? 'On the way…' : actLabel}
+                          {active ? (voiceStatus.phase_text || 'On the way…') : actLabel}
                         </button>
                       )
                     })}

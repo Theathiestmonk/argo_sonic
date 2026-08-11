@@ -112,6 +112,12 @@ NAV_BRIDGE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "na
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAV_TIMEOUT_S = 90.0
 
+# Cross-process status feed for the dashboard — backend/launcher.py's
+# /voice/status reads this the same way it already reads NAV_PROGRESS_PATH
+# for the nav stack's own startup status. Written best-effort (see
+# report_phase()); a failed write must never break the conversation.
+VOICE_PROGRESS_PATH = "/tmp/argo_voice_progress"
+
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
@@ -772,6 +778,20 @@ def wait_for_wake_word(oww_model) -> None:
 # Navigation — shells out to the existing, unmodified sonic/nav_bridge.py
 # ---------------------------------------------------------------------------
 
+def report_phase(phase: Optional[str], text: str = "", table: Optional[str] = None) -> None:
+    """Writes the current macro-phase (heading_to_table/arrived/taking_order/
+    heading_to_kitchen, or None to clear) to VOICE_PROGRESS_PATH so
+    backend/launcher.py's /voice/status can surface real status to the
+    dashboard instead of the frontend simulating it. Best-effort — this is
+    display plumbing, never allowed to affect the conversation itself."""
+    try:
+        with open(VOICE_PROGRESS_PATH, "w") as f:
+            json.dump({"phase": phase, "text": text, "table": table,
+                       "updated_at": datetime.now().isoformat()}, f)
+    except OSError as e:
+        print(f"[warn] report_phase write failed: {e}")
+
+
 def navigate_and_wait(destination: str, timeout_s: float = NAV_TIMEOUT_S) -> bool:
     if not voice_nav_enabled():
         print(f"[nav] voice_nav_enabled is off — skipping trip to {destination!r}")
@@ -1189,6 +1209,7 @@ def n_navigate_to_table(state: OrderState) -> dict:
     if state.location_reached:
         state.next_node = "n_greet_and_ask_order"
         return asdict(state)
+    report_phase("heading_to_table", f"Heading to Table {state.table_no}", state.table_no)
     arrived = perform_travel_action(state, "heading_to_table", f"Table {state.table_no}", table_no=state.table_no)
     if not arrived:
         say("apology_nav_failed", state)
@@ -1196,6 +1217,7 @@ def n_navigate_to_table(state: OrderState) -> dict:
         state.next_node = "n_respond"
         return asdict(state)
     state.location_reached = True
+    report_phase("arrived", f"Arrived at Table {state.table_no}", state.table_no)
     db_start_session(state)
     state.next_node = "n_greet_and_ask_order"
     return asdict(state)
@@ -1203,6 +1225,7 @@ def n_navigate_to_table(state: OrderState) -> dict:
 
 def n_greet_and_ask_order(state: OrderState) -> dict:
     trace_node("n_greet_and_ask_order", state)
+    report_phase("taking_order", "Taking order", state.table_no)
     if state.pending_seed is not None and state.pending_seed.get("items"):
         state.next_node = "n_extract_items"
         return asdict(state)
@@ -1453,6 +1476,7 @@ def n_respond(state: OrderState) -> dict:
 def n_return_to_kitchen(state: OrderState) -> dict:
     trace_node("n_return_to_kitchen", state)
     if state.location_reached:
+        report_phase("heading_to_kitchen", "Heading back to kitchen", state.table_no)
         navigate_and_wait("Kitchen")
     state.table_no = None
     state.location_reached = False
@@ -1523,16 +1547,21 @@ def run_graph_session(app) -> None:
 
     thread_id = f"main-agent-{uuid_module.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
-    result = app.invoke(asdict(state), config)
-    while True:
-        interrupts = result.get("__interrupt__")
-        if not interrupts:
-            return
-        payload = interrupts[0].value
-        prompt_text = payload["prompt"] if isinstance(payload, dict) else str(payload)
-        transcript = listen_with_patience(prompt_text)
-        resume_value = transcript if transcript is not None else TIMEOUT_SENTINEL
-        result = app.invoke(Command(resume=resume_value), config)
+    try:
+        result = app.invoke(asdict(state), config)
+        while True:
+            interrupts = result.get("__interrupt__")
+            if not interrupts:
+                return
+            payload = interrupts[0].value
+            prompt_text = payload["prompt"] if isinstance(payload, dict) else str(payload)
+            transcript = listen_with_patience(prompt_text)
+            resume_value = transcript if transcript is not None else TIMEOUT_SENTINEL
+            result = app.invoke(Command(resume=resume_value), config)
+    finally:
+        # Whether the session ended normally, on an exception, or mid-visit,
+        # the dashboard must never keep showing a stale in-progress phase.
+        report_phase(None)
 
 
 # ---------------------------------------------------------------------------
