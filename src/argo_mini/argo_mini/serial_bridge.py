@@ -8,7 +8,7 @@ import serial
 import math
 import time
 
-WHEEL_RADIUS    = 0.0762
+WHEEL_RADIUS    = 0.08255
 WHEEL_BASE      = 0.41
 POLE_PAIRS      = 10
 TICKS_PER_REV   = POLE_PAIRS * 6   # 60 ticks/rev (10 pole pairs ? 6 Hall edges)
@@ -19,7 +19,7 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 IMU_ALPHA = 0.95
 
 # Velocity limits
-VMAX   = 0.40    # m/s ? cap wheel speed to match nav2 vx_max
+VMAX   = 0.60    # m/s ? cap wheel speed to match nav2 vx_max
 V_DEAD = 0.02    # m/s ? below this send 0 RPM (stops motor)
 
 
