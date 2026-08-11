@@ -116,7 +116,8 @@ SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 
-SILENCE_ONSET_TIMEOUT_S = 8.0
+SILENCE_ONSET_TIMEOUT_S = 30.0  # how long a single listen attempt waits for speech to start
+SILENCE_GIVEUP_TOTAL_S = 120.0  # cumulative silence (across reprompts) before giving up on a question
 TRAILING_SILENCE_MS = 600
 SPEECH_RMS_THRESHOLD = 500
 
@@ -714,14 +715,26 @@ def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
     return transcript or None
 
 
-def listen_once(prompt_text: str) -> Optional[str]:
-    """Speak the prompt exactly once and listen exactly once — no
-    silence-reprompt. A guest who doesn't answer within SILENCE_ONSET_TIMEOUT_S
-    gets the idle/farewell handling (see get_reply_or_route /
-    n_intent_classify's TIMEOUT_SENTINEL branches) rather than being asked
-    the same question twice."""
+def listen_with_patience(prompt_text: str) -> Optional[str]:
+    """Speak the prompt, then wait through silence rather than bailing
+    quickly: each listen attempt gets up to SILENCE_ONSET_TIMEOUT_S (30s) to
+    hear speech start; if it doesn't, the same prompt is repeated and it
+    waits again, accumulating elapsed silence, until SILENCE_GIVEUP_TOTAL_S
+    (2 minutes) total has passed with no reply — only then does the caller
+    get None (-> the idle/farewell handling). An actual reply at any point
+    returns immediately, however long the conversation's been going."""
     speak_text(prompt_text)
-    return listen()
+    elapsed = 0.0
+    while elapsed < SILENCE_GIVEUP_TOTAL_S:
+        remaining = SILENCE_GIVEUP_TOTAL_S - elapsed
+        reply = listen(timeout_s=min(SILENCE_ONSET_TIMEOUT_S, remaining))
+        if reply is not None:
+            return reply
+        elapsed += SILENCE_ONSET_TIMEOUT_S
+        if elapsed >= SILENCE_GIVEUP_TOTAL_S:
+            break
+        speak_text(prompt_text)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -965,8 +978,14 @@ What was just asked: {state.pending_question or "nothing yet — this is the ope
 Order so far: {json.dumps(state.order_items, ensure_ascii=False) if state.order_items else "empty"}
 
 Rules:
-- answers_pending=true if the utterance actually addresses what was just asked (even partially); false if \
-it's unrelated small talk, silence-filler, or garbled/unintelligible.
+- answers_pending=false is a LAST RESORT — the guest is on a real mic/STT pipeline, so transcripts are often \
+imperfect (dropped words, odd phrasing, mis-transcribed terms). Set answers_pending=true whenever there is ANY \
+reasonable reading of the utterance as addressing what was just asked, even if it's incomplete, oddly \
+phrased, or only partially matches — extract whatever you confidently can and leave the rest null rather than \
+rejecting the whole utterance. Only set answers_pending=false when the utterance is genuinely about something \
+else entirely, or is pure noise/unintelligible with no plausible connection to what was asked.
+- Similarly, only leave yes_no null when the utterance truly gives no signal either way — when in doubt \
+between a weak yes and null, prefer the yes/no reading over forcing a re-ask.
 - Quantity: singular phrasing or "a"/"an" with no explicit number given -> quantity=1. Plural with no \
 number given -> quantity=null (the caller will ask). An explicit number always wins.
 - If multiple distinct dishes are named in one utterance (e.g. "two pizzas and a coke"), return one entry \
@@ -1511,7 +1530,7 @@ def run_graph_session(app) -> None:
             return
         payload = interrupts[0].value
         prompt_text = payload["prompt"] if isinstance(payload, dict) else str(payload)
-        transcript = listen_once(prompt_text)
+        transcript = listen_with_patience(prompt_text)
         resume_value = transcript if transcript is not None else TIMEOUT_SENTINEL
         result = app.invoke(Command(resume=resume_value), config)
 
