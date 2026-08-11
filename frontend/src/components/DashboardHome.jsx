@@ -206,7 +206,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       .then(r => r.json())
       .then(d => setTables(d || {}))
       .catch(() => setTables({}))
-    setSelectedDest(null)
   }, [launcherUrl, selectedMap])
 
   // Full-overwrite save, same semantics as TablesPanel.jsx's own persist()
