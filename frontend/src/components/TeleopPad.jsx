@@ -79,6 +79,51 @@ export default function TeleopPad({ connected, compact = false }) {
     publishStopUntilZero()
   }, [publishStopUntilZero])
 
+  // Keyboard driving — arrow keys + WASD, mirroring the on-screen buttons
+  // exactly (same press()/release(), same continuous-hold behavior). The
+  // listener is attached for as long as this component is mounted, which
+  // is exactly "the teleop window is open" — nothing else to gate on.
+  const activeKeyRef = useRef(null)
+  useEffect(() => {
+    const KEY_DIRS = {
+      arrowup:    ['fwd',   0.3,  0],    w: ['fwd',   0.3,  0],
+      arrowdown:  ['back', -0.2,  0],    s: ['back', -0.2,  0],
+      arrowleft:  ['left',  0,    0.7],  a: ['left',  0,    0.7],
+      arrowright: ['right', 0,   -0.7],  d: ['right', 0,   -0.7],
+    }
+    const isTypingTarget = (el) =>
+      !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+
+    const handleKeyDown = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return          // don't eat browser/OS shortcuts
+      if (isTypingTarget(document.activeElement)) return      // e.g. the "save spot" name field
+      const mapped = KEY_DIRS[e.key.toLowerCase()]
+      if (!mapped) return
+      e.preventDefault()                                       // stop arrow keys from scrolling the page
+      if (e.repeat) return                                     // OS key-repeat — press()'s own interval already drives movement
+      activeKeyRef.current = e.key.toLowerCase()
+      press(mapped[0], mapped[1], mapped[2])
+    }
+    const handleKeyUp = (e) => {
+      const key = e.key.toLowerCase()
+      if (!KEY_DIRS[key]) return
+      e.preventDefault()
+      // Only release if this key is the one actually driving movement —
+      // e.g. releasing an already-overridden key (w held, then d pressed,
+      // then w released) shouldn't stop the newer direction.
+      if (activeKeyRef.current === key) {
+        activeKeyRef.current = null
+        release()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [press, release])
+
   const sz = compact ? 68 : 80
   const br = compact ? 18 : 22
 
