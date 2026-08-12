@@ -297,7 +297,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     : formatHm(battery.estimated_remaining_hours)
   const workingHoursSub = !battery.connected ? (
     <span style={{ animation: 'pulse-dot 1.4s ease-in-out infinite' }}>Connecting to battery…</span>
-  ) : battery.charging ? 'Charging — time to full'
+  ) : battery.charging ? `${Math.round(battery.battery_percent)}% · Charging · About ${formatHm(battery.estimated_charge_remaining_hours)} until full`
     : `${Math.round(battery.battery_percent)}% battery`
   // Card label swaps to "Charging" while plugged in — the value below it is
   // a completely different number (time-to-full vs. time-remaining), so the
