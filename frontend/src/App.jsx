@@ -42,11 +42,10 @@ export default function App() {
   const [mapData, setMapData]     = useState(null)
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
-  // Map-frame localized pose (slam_toolbox's /pose), kept separate from
-  // robotPose above (which is /odom — the odom frame drifts from the map
-  // frame over time, so it isn't safe to compare against a map-frame nav
-  // goal for arrival detection). A ref, not state, since this updates fast
-  // and arrival-checking doesn't need a re-render on every tick.
+  // Same map-frame localized pose as robotPose above (slam_toolbox's
+  // /pose) but kept in a ref too, not just state — arrival-checking polls
+  // this on an interval and doesn't need a re-render on every tick the way
+  // the on-screen marker (robotPose state) does.
   const mapPoseRef = useRef(null)
   const arrivalWatch = useRef(null) // { intervalId, timeoutId } while awaiting arrival
 
@@ -71,16 +70,6 @@ export default function App() {
       }))
       subRefs.current.map = t
     }
-    if (!subRefs.current.odom) {
-      const t = ros.topic('/odom', 'nav_msgs/Odometry', { throttle_rate: 100 })
-      t?.subscribe(msg => {
-        const { x, y } = msg.pose.pose.position
-        const q = msg.pose.pose.orientation
-        const theta = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        setRobotPose({ x, y, theta })
-      })
-      subRefs.current.odom = t
-    }
     if (!subRefs.current.frontiers) {
       const t = ros.topic('/frontier_markers', 'visualization_msgs/MarkerArray')
       t?.subscribe(msg => {
@@ -89,9 +78,21 @@ export default function App() {
       subRefs.current.frontiers = t
     }
     if (!subRefs.current.pose) {
+      // slam_toolbox's map-frame-corrected localized pose — deliberately NOT
+      // /odom, which is raw dead-reckoning and drifts from the true
+      // map-frame position over time/distance. That drift is exactly why
+      // the on-screen robot marker used to end up in the wrong spot on the
+      // map while RViz (which visualizes the map->base_link TF, informed by
+      // this same correction) showed the right one. Drives both the
+      // reactive robotPose state (marker rendering, MapCanvas.jsx) and
+      // mapPoseRef (arrival-distance checks below).
       const t = ros.topic('/pose', 'geometry_msgs/msg/PoseWithCovarianceStamped', { throttle_rate: 200 })
       t?.subscribe(msg => {
-        mapPoseRef.current = { x: msg.pose.pose.position.x, y: msg.pose.pose.position.y }
+        const { x, y } = msg.pose.pose.position
+        const q = msg.pose.pose.orientation
+        const theta = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        mapPoseRef.current = { x, y }
+        setRobotPose({ x, y, theta })
       })
       subRefs.current.pose = t
     }
