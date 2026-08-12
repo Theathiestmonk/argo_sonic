@@ -625,7 +625,7 @@ def main():
             raw = str(Path(REPO_ROOT) / "src/argo_mini/maps" / raw)
         map_base = str(Path(raw).with_suffix(""))
     elif sys.stdin.isatty():
-        map_base = select_map(home, default="office_map")
+        map_base = select_map(home, default="office_map2")
     else:
         # No --map and no terminal to prompt on (e.g. launched headlessly by
         # backend/launcher.py) — select_map()'s input() would hang forever
@@ -728,7 +728,7 @@ def main():
     if r.returncode == 0:
         log("Robot pose initialized at kitchen", "ok")
     else:
-        log("Pose initialization failed – check office_map.json", "warn")
+        log("Pose initialization failed – check office_map2.json", "warn")
     time.sleep(2); step_done("Pose Initializer")
 
     # ── 7. NTFields Planner ───────────────────────────────────────────────────
