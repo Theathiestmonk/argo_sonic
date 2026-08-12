@@ -146,6 +146,13 @@ ROBOT_UID = os.environ.get("ROBOT_UID", "SONIC-001")
 FORCED_LOCATION = os.environ.get("TABLE_NO") or None
 FORCED_ACTION = os.environ.get("SONIC_ACTION_HINT") or None
 MAP_NAME = os.environ.get("SONIC_MAP_NAME", "office_map")
+# Test-only escape hatch: skip real Nav2 trips entirely and treat every
+# navigate_and_wait() call as an instant arrival, so the rest of the
+# conversation (ordering, confirm, etc.) can be exercised without a working
+# ROS/Nav2 setup. Never set this in production — a genuine nav failure
+# should end the session (see n_navigate_to_table), not silently pretend
+# the robot arrived somewhere it never went.
+SONIC_SKIP_NAV = os.environ.get("SONIC_SKIP_NAV") == "1"
 
 # order/room_service both run the full take_order flow (room_service has no
 # dedicated flow yet, same as sonic_agent.py). bill/deliver are stubbed this
@@ -698,6 +705,12 @@ def speak_text(text: str) -> None:
 
 
 def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
+    """Returns the transcript — which may be "" — or None specifically when
+    no speech was ever detected within timeout_s (record_utterance's RMS
+    gate never triggered: genuine silence). "" means something DID trigger
+    the mic (noise, a false RMS blip, a garbled attempt, an STT error) but
+    produced no usable text — callers must treat that differently from real
+    silence, see listen_with_patience()."""
     if TEXT_MODE:
         try:
             text = input("You: ").strip()
@@ -716,31 +729,37 @@ def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
         transcript = sarvam_stt(audio)
     except Exception as e:
         print(f"[warn] STT failed: {e}")
-        return None
+        transcript = ""
     print(f"You said: {transcript}")
-    return transcript or None
+    return transcript
 
 
 def listen_with_patience(prompt_text: str) -> Optional[str]:
     """Speak the prompt, then wait through silence rather than bailing
-    quickly: each listen attempt gets up to SILENCE_ONSET_TIMEOUT_S (30s) to
-    hear speech start; if it doesn't, the same prompt is repeated and it
-    waits again, accumulating elapsed silence, until SILENCE_GIVEUP_TOTAL_S
-    (2 minutes) total has passed with no reply — only then does the caller
-    get None (-> the idle/farewell handling). An actual reply at any point
-    returns immediately, however long the conversation's been going."""
+    quickly. Tracks real elapsed wall-clock time (not an assumed fixed
+    increment per attempt), and treats two kinds of "no reply" differently:
+      - genuine silence (RMS gate never triggered for a full listen window)
+        — worth repeating the question, in case they missed it or stepped
+        away.
+      - something was heard but didn't transcribe to anything usable (a
+        stray noise, a false trigger) — NOT treated as silence, and does
+        NOT repeat the question; just listens again immediately, since
+        talking over someone who's mid-answer is worse than trying again
+        quietly.
+    Gives up only once SILENCE_GIVEUP_TOTAL_S of total real elapsed time has
+    passed with no actual reply. An actual reply at any point returns
+    immediately, however long the exchange has been going."""
     speak_text(prompt_text)
-    elapsed = 0.0
-    while elapsed < SILENCE_GIVEUP_TOTAL_S:
-        remaining = SILENCE_GIVEUP_TOTAL_S - elapsed
+    start = time.monotonic()
+    while True:
+        remaining = SILENCE_GIVEUP_TOTAL_S - (time.monotonic() - start)
+        if remaining <= 0:
+            return None
         reply = listen(timeout_s=min(SILENCE_ONSET_TIMEOUT_S, remaining))
-        if reply is not None:
+        if reply:
             return reply
-        elapsed += SILENCE_ONSET_TIMEOUT_S
-        if elapsed >= SILENCE_GIVEUP_TOTAL_S:
-            break
-        speak_text(prompt_text)
-    return None
+        if reply is None and (time.monotonic() - start) < SILENCE_GIVEUP_TOTAL_S:
+            speak_text(prompt_text)
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +812,9 @@ def report_phase(phase: Optional[str], text: str = "", table: Optional[str] = No
 
 
 def navigate_and_wait(destination: str, timeout_s: float = NAV_TIMEOUT_S) -> bool:
+    if SONIC_SKIP_NAV:
+        print(f"[nav] SONIC_SKIP_NAV=1 — treating {destination!r} as instantly reached (test mode)")
+        return True
     if not voice_nav_enabled():
         print(f"[nav] voice_nav_enabled is off — skipping trip to {destination!r}")
         return False
