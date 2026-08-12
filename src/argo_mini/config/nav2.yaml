@@ -169,24 +169,17 @@
   velocity_smoother:
     ros__parameters:
       use_sim_time: false
-      # Was 30.0 — controller_server's controller_frequency (above) is 20.0,
-      # so a 30Hz consumer resampling a 20Hz source aliased: sometimes
-      # re-reading the same command, sometimes straddling a boundary oddly,
-      # producing bigger-than-expected deltas downstream. serial_bridge.py's
-      # ramp assumes Nav2 output arrives in tiny steps and only clamps large
-      # jumps hard — those aliasing-induced jumps were exactly what tripped
-      # that clamp and showed up as jerky motion. Matched to 20.0 to remove
-      # the beat frequency entirely.
-      smoothing_frequency: 20.0
-      # REVERTED to OPEN_LOOP — tried CLOSED_LOOP (tracks /odom instead of
-      # its own assumed model) to ground the ramp in the robot's actual
-      # measured velocity, but CLOSED_LOOP needs live /odom to produce ANY
-      # output at all, unlike OPEN_LOOP. Right after this changed, the robot
-      # stopped moving to any goal at all (RViz AND the UI) — exactly the
-      # symptom of the smoother going silent because odom isn't reaching it
-      # cleanly (QoS mismatch, timing, or something else not yet diagnosed).
-      # Back to OPEN_LOOP until that's root-caused; smoothing_frequency=20.0
-      # above is unrelated and stays.
+      # FULLY REVERTED to the original 30.0/OPEN_LOOP — after changing these
+      # to fix jerkiness, the robot stopped responding to any goal at all
+      # (RViz AND the UI), and reverting feedback alone wasn't enough to
+      # restore motion. Rolling back smoothing_frequency too so we're testing
+      # against the exact pre-change config, to confirm whether this file is
+      # the cause at all before looking elsewhere. Once nav is confirmed
+      # working again on this exact config, re-apply and re-test ONE change
+      # at a time (smoothing_frequency first, feedback second) rather than
+      # both together, so a future regression is unambiguous about which one
+      # did it.
+      smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
       max_velocity: [0.60, 0.0, 0.8]
       min_velocity: [-0.15, 0.0, -0.8]
