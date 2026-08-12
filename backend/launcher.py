@@ -194,11 +194,31 @@ Endpoints (CORS-open so the browser can call them directly):
                            control after an /estop, without restarting the
                            whole nav stack.
 
+    GET  /battery →  {"connected": bool, "voltage": float, "current": float,
+                      "battery_percent": float, "charging": bool,
+                      "estimated_remaining_hours": float,
+                      "estimated_remaining_seconds": int,
+                      "estimated_charge_remaining_hours": float,
+                      "estimated_charge_remaining_seconds": int,
+                      "temperatures": [float, ...]} — live BMS reading over
+                      Bluetooth (same JBD-protocol pack src/argo_mini/argo_mini/
+                      dashboard.py originally read), polled in a background
+                      thread started at the bottom of this file. "connected":
+                      false means the BMS hasn't been reached yet (still
+                      scanning, or the pack is off/out of range) — every
+                      other field is 0/empty in that case, not stale data.
+                      "charging" is derived from the pack's own current sign
+                      (positive = charging); estimated_remaining_* is only
+                      meaningful while discharging, estimated_charge_
+                      remaining_* only while charging — the frontend picks
+                      whichever applies via "charging".
+
 These *_ui.sh scripts are dedicated copies of the hand-run sh/start_slam.sh
 and sh/start_slam_explore.sh — kept separate so UI-driven launches never
 disturb the scripts used directly over SSH.
 """
 
+import asyncio
 import datetime
 import json
 import os
@@ -260,6 +280,262 @@ NAV_LOG_TAIL_LINES = 300
 VOICE_PROGRESS_PATH = '/tmp/argo_voice_progress'  # written by main_agent.py's report_phase() — read by /voice/status
 VOICE_PROGRESS_MAX_AGE_S = 30  # ignore (and don't surface) a phase report older than this — self-heals a stale file
 PORT    = 8888
+
+
+# ── Battery (BMS over Bluetooth) ─────────────────────────────────────────────
+# Ported from src/argo_mini/argo_mini/dashboard.py, which already had this
+# working (JBD-protocol BLE pack, GET /api/bms) — moved here instead of
+# calling out to that separate process, since this file is the one backend
+# the frontend actually talks to for everything else. Only the BMS
+# read/estimate logic is ported, not dashboard.py's own Bluetooth-cache-reset
+# step in main() (a `sudo rm -rf /var/lib/bluetooth/*` on every launch) —
+# that's a separate, riskier concern this file shouldn't take on silently.
+BMS_ADDRESS = "A5:C2:37:2A:22:EC"
+BMS_RX_CHAR = "0000ff01-0000-1000-8000-00805f9b34fb"
+BMS_TX_CHAR = "0000ff02-0000-1000-8000-00805f9b34fb"
+
+# Calibrated runtime: measured hours for a full pack under normal load.
+# ETA is linear against this, same model dashboard.py used.
+CALIBRATED_FULL_RUNTIME_HOURS = 7.0
+
+_latest_bms_data = {
+    "voltage": 0.0,
+    "current": 0.0,
+    "remaining_capacity": 0.0,
+    "full_capacity": 0.0,
+    "battery_percent": 0.0,
+    "charging": False,
+    "estimated_remaining_hours": 0.0,
+    "estimated_remaining_seconds": 0,
+    "estimated_charge_remaining_hours": 0.0,
+    "estimated_charge_remaining_seconds": 0,
+    "temperatures": [],
+    "connected": False,
+}
+
+# JBD's basic-info current field is signed: positive = charging (current
+# flowing into the pack), negative = discharging. A small deadband around
+# zero avoids "charging" flapping on/off from noise while the pack sits
+# essentially idle. Flip the sign here if this reads backwards on your
+# actual wiring — the JBD spec is consistent about it, but pack-to-pack
+# integrations have been seen wired with current reversed.
+_CHARGE_CURRENT_DEADBAND_A = 0.05
+
+
+def _estimate_remaining_hours(percent: float) -> float:
+    if percent <= 0:
+        return 0.0
+    return CALIBRATED_FULL_RUNTIME_HOURS * (percent / 100.0)
+
+
+def _estimate_charge_remaining_hours(current_a: float, remaining_ah: float, full_ah: float) -> float:
+    """Hours until full, from the pack's own reported capacity gap and its
+    actual live charge current — not the calibrated-runtime model above,
+    since charge current (charger-limited) has nothing to do with discharge
+    load. 0.0 if not actually charging or full_ah is unknown."""
+    if current_a <= _CHARGE_CURRENT_DEADBAND_A or full_ah <= 0:
+        return 0.0
+    capacity_needed_ah = max(0.0, full_ah - remaining_ah)
+    return capacity_needed_ah / current_a
+
+
+def _bms_notification_handler(_sender, data, _packet_buf: bytearray):
+    _packet_buf.extend(data)
+
+
+def _try_power_on_bluetooth():
+    """Best-effort: clear any rfkill soft-block, then power the adapter on
+    via bluetoothctl — the actual fix for bleak's "No powered Bluetooth
+    adapters found" error. Deliberately NOT dashboard.py's approach
+    (`rm -rf /var/lib/bluetooth/*` + `systemctl restart bluetooth`): that
+    wipes every paired Bluetooth device on the machine, needs sudo, and
+    only re-powers the radio at all if AutoEnable=true happens to be set in
+    /etc/bluetooth/main.conf. Neither step here needs sudo on a normal
+    desktop polkit setup (confirmed: `rfkill unblock bluetooth` runs as a
+    plain user; `bluetoothctl power on` then succeeds once the soft-block
+    dropped from a laptop's Fn-key/airplane-mode toggle is cleared — that
+    combination, not a powered-off radio, was the actual cause here).
+    Silently no-ops if either tool is missing or the calls fail — the BMS
+    loop just keeps retrying either way."""
+    try:
+        subprocess.run(['rfkill', 'unblock', 'bluetooth'], capture_output=True, timeout=5, text=True)
+    except Exception:
+        pass
+    try:
+        subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=10, text=True)
+    except Exception:
+        pass
+
+
+def _bluetoothctl_info(address: str) -> str:
+    """Raw `bluetoothctl info <address>` output (stdout+stderr), or '' on
+    any failure. This is a local query against what BlueZ already knows —
+    it does NOT require the device to be actively advertising right now,
+    unlike a scan. Used to tell apart "BlueZ has never heard of this
+    device" (needs a real scan) from "BlueZ already knows/holds it"
+    (a scan would be pointless, or actively misleading)."""
+    try:
+        result = subprocess.run(['bluetoothctl', 'info', address], capture_output=True, timeout=8, text=True)
+        return (result.stdout or '') + (result.stderr or '')
+    except Exception:
+        return ''
+
+
+def _bluetoothctl_disconnect(address: str):
+    try:
+        subprocess.run(['bluetoothctl', 'disconnect', address], capture_output=True, timeout=8, text=True)
+    except Exception:
+        pass
+
+
+async def _bms_poll_session(client, packet_buf: bytearray):
+    """Poll loop for an already-connected client — runs until disconnected
+    or an unrecoverable error. Shared by both connection paths below."""
+    cmd = bytes.fromhex("DD A5 03 00 FF FD 77")
+    while client.is_connected:
+        packet_buf.clear()
+        await client.write_gatt_char(BMS_TX_CHAR, cmd, response=False)
+        await asyncio.sleep(2.5)  # wait for the notify stream
+
+        data = bytes(packet_buf)
+        if len(data) >= 30:
+            try:
+                voltage  = int.from_bytes(data[4:6], "big") / 100.0
+                current  = int.from_bytes(data[6:8], "big", signed=True) / 100.0
+                rem_cap  = int.from_bytes(data[8:10], "big") / 100.0
+                full_cap = int.from_bytes(data[10:12], "big") / 100.0
+                percent  = (rem_cap / full_cap * 100.0) if full_cap > 0 else 0.0
+
+                temp_count = data[26]
+                temps, offset = [], 27
+                for _ in range(min(temp_count, 4)):
+                    if offset + 2 <= len(data):
+                        temps.append((int.from_bytes(data[offset:offset + 2], "big") - 2731) / 10.0)
+                        offset += 2
+
+                charging = current > _CHARGE_CURRENT_DEADBAND_A
+                eta_hours = _estimate_remaining_hours(percent)
+                charge_eta_hours = _estimate_charge_remaining_hours(current, rem_cap, full_cap)
+                _latest_bms_data.update({
+                    "voltage": voltage, "current": current,
+                    "remaining_capacity": rem_cap, "full_capacity": full_cap,
+                    "battery_percent": percent,
+                    "charging": charging,
+                    "estimated_remaining_hours": eta_hours,
+                    "estimated_remaining_seconds": max(0, int(round(eta_hours * 3600))),
+                    "estimated_charge_remaining_hours": charge_eta_hours,
+                    "estimated_charge_remaining_seconds": max(0, int(round(charge_eta_hours * 3600))),
+                    "temperatures": temps, "connected": True,
+                })
+            except Exception as parse_error:
+                print(f'[launcher][bms] packet parse failed: {parse_error}')
+
+        await asyncio.sleep(3.0)
+
+
+async def _bms_telemetry_loop():
+    """Runs forever in its own thread/event loop (see run_bms_thread below).
+    Same JBD BLE protocol dashboard.py used, reconnecting on any failure
+    rather than crashing this whole server.
+
+    Connects by address FIRST, without scanning — if BlueZ already knows
+    the device (paired, or seen earlier this boot/run), that succeeds
+    immediately. dashboard.py's original version always scanned first on
+    every single retry, which is what produced an endless "searching..."
+    loop even once the pack was already reachable — a fresh discovery scan
+    every ~15s instead of just reconnecting to a known device.
+
+    A raw scan (BleakScanner.find_device_by_address) only ever finds a
+    device that's currently ADVERTISING — most BLE peripherals (this BMS
+    included) stop advertising once something already holds a connection to
+    them. So if the pack is already connected elsewhere (a previous run of
+    this same process that didn't exit cleanly, another tool, a phone app),
+    a plain scan would just hang for its own timeout and find nothing, over
+    and over, even though the device is right there. Before falling back to
+    a real scan, check what BlueZ itself already knows via `bluetoothctl
+    info` (a local query, doesn't need the device to be advertising) —
+    if it's already connected, disconnect it so we can take over cleanly;
+    if BlueZ already has it cached at all, a direct connect retry should
+    just work without needing a scan."""
+    from bleak import BleakClient, BleakScanner  # optional dep — see run_bms_thread's guard
+
+    packet_buf = bytearray()
+
+    def on_notify(sender, data):
+        _bms_notification_handler(sender, data, packet_buf)
+
+    async def try_direct_connect() -> bool:
+        """One direct-by-address connect + full session. True if a session
+        actually ran (i.e. it connected — whether it later disconnected
+        normally or errored out mid-session doesn't matter, the caller's
+        job either way is just to loop back and try again)."""
+        try:
+            async with BleakClient(BMS_ADDRESS, timeout=10.0) as client:
+                print('[launcher][bms] connected (direct)')
+                await client.start_notify(BMS_RX_CHAR, on_notify)
+                await _bms_poll_session(client, packet_buf)
+            return True
+        except Exception as direct_err:
+            print(f'[launcher][bms] direct connect failed ({direct_err})')
+            return False
+
+    loop = asyncio.get_event_loop()
+
+    while True:
+        try:
+            if await try_direct_connect():
+                continue  # ran a session — go straight back to another direct attempt
+
+            info = await loop.run_in_executor(None, _bluetoothctl_info, BMS_ADDRESS)
+            already_connected = 'Connected: yes' in info
+            known_to_bluez = bool(info.strip()) and 'not available' not in info.lower()
+
+            if already_connected:
+                print('[launcher][bms] BlueZ already shows this device connected (elsewhere) — disconnecting it so we can take over...')
+                await loop.run_in_executor(None, _bluetoothctl_disconnect, BMS_ADDRESS)
+                await asyncio.sleep(1.0)
+                if await try_direct_connect():
+                    continue
+            elif known_to_bluez:
+                print('[launcher][bms] BlueZ already knows this device — retrying a direct connect instead of scanning...')
+                if await try_direct_connect():
+                    continue
+
+            print(f'[launcher][bms] scanning for {BMS_ADDRESS}...')
+            device = await BleakScanner.find_device_by_address(BMS_ADDRESS, timeout=15.0)
+            if not device:
+                await asyncio.sleep(5.0)
+                continue
+
+            async with BleakClient(device, timeout=20.0) as client:
+                print('[launcher][bms] connected (via scan)')
+                await client.start_notify(BMS_RX_CHAR, on_notify)
+                await _bms_poll_session(client, packet_buf)
+        except Exception as e:
+            print(f'[launcher][bms] loop error: {e}')
+            _latest_bms_data["connected"] = False
+            if 'power' in str(e).lower():
+                # e.g. bleak's "No powered Bluetooth adapters found" —
+                # try to fix the actual cause instead of just sleeping and
+                # hitting the exact same error again next retry.
+                print('[launcher][bms] adapter appears powered off — running `bluetoothctl power on`...')
+                await loop.run_in_executor(None, _try_power_on_bluetooth)
+            await asyncio.sleep(5.0)
+
+
+def run_bms_thread():
+    """Started as a daemon thread from __main__ below. Silently does nothing
+    if bleak isn't installed — /battery just keeps returning connected:false
+    rather than this whole server failing to start over an optional dep."""
+    try:
+        import bleak  # noqa: F401 — presence check only
+    except ImportError:
+        print('[launcher] bleak not installed — /battery will report connected:false (pip install bleak)')
+        return
+    _try_power_on_bluetooth()  # covers the common case: Bluetooth was off when this server started
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_bms_telemetry_loop())
 
 
 def _sonic_python():
@@ -970,7 +1246,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            self._write(data)
 
         elif len(parts) == 2 and parts[0] == 'waypoints':
             name = _safe_name(parts[1])
@@ -1031,6 +1307,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/estop/status':
             with _serial_lock:
                 self._json({'estopped': _serial_estopped})
+
+        elif self.path == '/battery':
+            self._json(dict(_latest_bms_data))
 
         else:
             self._json({'error': 'not found'}, 404)
@@ -1407,7 +1686,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self._write(body)
+
+    def _write(self, data: bytes):
+        """Client disconnected (tab closed, a poll superseded by a newer
+        one, page navigated away) before we finished writing — harmless and
+        expected under the dashboard's own polling load, not a real error.
+        BaseHTTPRequestHandler otherwise dumps a full traceback to the
+        console for this every single time; route it through log_message
+        instead so it's suppressed the same as every other per-request line
+        (see log_message's override below), rather than printed raw."""
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.log_message('client disconnected before response finished (%s)', self.path)
 
     def _cors(self, code: int):
         self.send_response(code)
@@ -1442,6 +1734,7 @@ if __name__ == '__main__':
     print(f'[launcher] voice session log → {VOICE_LOG_PATH}')
     if not os.path.isfile(SONIC_SCRIPT):
         print(f'[launcher] WARNING: main_agent.py not found — check path above')
+    threading.Thread(target=run_bms_thread, daemon=True).start()
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')
     try:
