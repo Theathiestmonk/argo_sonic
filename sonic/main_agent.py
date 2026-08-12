@@ -228,6 +228,29 @@ TIMEOUT_SENTINEL = "__MAIN_AGENT_TIMEOUT__"
 _current_state: Optional[OrderState] = None
 
 
+def table_ref_for_nav(table_no: str) -> str:
+    """What nav_bridge.py should search for. It already matches a waypoint
+    by its exact name field, case-insensitively — "Kitchen" finds whatever
+    waypoint is named "Kitchen" regardless of its JSON key, "table 1" finds
+    the waypoint actually named "table 1", no number-guessing involved.
+    table_no is normally already the real waypoint name (the UI sends the
+    clicked card's own name directly; a voice-triggered session's spoken
+    table number goes through the SAME "Table {n}" convention every
+    waypoint taught so far uses) — only a bare digit string needs wrapping,
+    which happens for a guest's spoken "table 1" (NLU extracts just "1")."""
+    return f"Table {table_no}" if table_no.isdigit() else table_no
+
+
+def table_number_for_db(table_no: str) -> str:
+    """Postgres service_points.label is seeded as "Table N" — a separate,
+    numbered system from the nav waypoints above, unaffected by whatever a
+    waypoint happens to be named. Pulls just the digits back out regardless
+    of whether table_no is already a full name ("table 1"/"Table 3") or a
+    bare number ("1") to begin with."""
+    m = re.search(r"\d+", table_no)
+    return m.group(0) if m else table_no
+
+
 def order_summary(state: OrderState) -> str:
     if not state.order_items:
         return "no items yet"
@@ -290,7 +313,7 @@ def resolve_visit(state: OrderState) -> None:
     conn = db()
     if conn is None or DB_LOCATION_ID is None or state.db_visit_id or not state.table_no:
         return
-    label = f"Table {state.table_no}"
+    label = f"Table {table_number_for_db(state.table_no)}"
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -942,7 +965,7 @@ RENDER_PURPOSE_HINTS = {
     "ask_how_can_i_help": "Greet the guest for the first time this session and ask how you can help them today.",
     "ask_table": "Ask which table you should come to.",
     "ask_table_retry": "You didn't catch a valid table number. Ask again, briefly.",
-    "heading_to_table": "Let them know you're heading to Table {table_no} now and will be right there.",
+    "heading_to_table": "Let them know you're heading to {table_ref} now and will be right there.",
     "arrived_greet_and_ask_order": "You've just arrived at the table. Greet them warmly and ask what they'd like to order.",
     "ask_what_would_you_like": "Ask what they'd like to order.",
     "item_not_found": "You couldn't find \"{item_name}\" on the menu. Apologize briefly and ask them to say the dish name again.",
@@ -1247,15 +1270,20 @@ def n_navigate_to_table(state: OrderState) -> dict:
     if state.location_reached:
         state.next_node = "n_greet_and_ask_order"
         return asdict(state)
-    report_phase("heading_to_table", f"Heading to Table {state.table_no}", state.table_no)
-    arrived = perform_travel_action(state, "heading_to_table", f"Table {state.table_no}", table_no=state.table_no)
+    # table_ref is what actually gets searched for in the waypoints file —
+    # the real waypoint name (see table_ref_for_nav), not a guessed/rebuilt
+    # string — used identically for the nav_bridge call, the phase report,
+    # and the spoken line so all three always agree with each other.
+    table_ref = table_ref_for_nav(state.table_no)
+    report_phase("heading_to_table", f"Heading to {table_ref}", state.table_no)
+    arrived = perform_travel_action(state, "heading_to_table", table_ref, table_ref=table_ref)
     if not arrived:
         say("apology_nav_failed", state)
         state.went_idle = True
         state.next_node = "n_respond"
         return asdict(state)
     state.location_reached = True
-    report_phase("arrived", f"Arrived at Table {state.table_no}", state.table_no)
+    report_phase("arrived", f"Arrived at {table_ref}", state.table_no)
     db_start_session(state)
     state.next_node = "n_greet_and_ask_order"
     return asdict(state)

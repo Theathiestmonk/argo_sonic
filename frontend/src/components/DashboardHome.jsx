@@ -16,6 +16,21 @@ import TeleopPad from './TeleopPad'
 // shared access to menu-data.js's currency/tax settings here.
 const money = (n) => '$' + Number(n || 0).toFixed(2)
 
+// A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
+// waypoints/<map>.json file — it has NO guaranteed relationship to the
+// table's actual number. main_agent.py's nav_bridge lookup ("Table {N}")
+// and Postgres's service_points.label both expect the real number embedded
+// in the waypoint's own name ("Table 3" -> "3"). Sending the raw key
+// instead (as this used to) silently routed to whichever OTHER table
+// happened to share that number as its name on a fully-populated map, and
+// failed outright on a map that didn't have that many waypoints yet — used
+// everywhere a table needs identifying (dispatch, order lookup, busy/active
+// status) instead of the raw key.
+function tableNumberFromName(name, fallbackKey) {
+  const m = String(name || '').match(/\d+/)
+  return m ? m[0] : fallbackKey
+}
+
 // Maps a table-card task to the voice action backend/launcher.py's
 // POST /voice/start expects.
 const TASK_TO_ACTION = {
@@ -332,7 +347,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   useEffect(() => {
     if (voiceStatus.running && voiceStatus.phase_text) {
       setCurStatus(voiceStatus.phase_text)
-      setCurPos(voiceStatus.table ? `Table ${voiceStatus.table}` : curPos)
+      setCurPos(voiceStatus.table || curPos)   // already the full waypoint name, e.g. "Table 3" or "table 1"
       setTaskLabel(voiceStatus.action || taskLabel)
     } else if (navGotoStatus.running && navGotoStatus.phase_text) {
       setCurStatus(navGotoStatus.phase_text)
@@ -449,7 +464,13 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     const action = TASK_TO_ACTION[task]
     if (!action) return
 
-    if (voiceStatus.running && voiceStatus.table !== dest.key) {
+    // dest.name (the waypoint's own name, e.g. "Table 3"/"table 1") is what
+    // gets sent, searched for, and echoed back — never dest.key, which is
+    // just this waypoint's arbitrary position in the waypoints JSON and has
+    // no guaranteed relationship to which table it actually is. See
+    // table_ref_for_nav() in main_agent.py, which searches for this exact
+    // name too, instead of reconstructing a guess from a number.
+    if (voiceStatus.running && voiceStatus.table !== dest.name) {
       showToast('Sonic is busy with another table — wait for that session to finish', 'warn')
       return
     }
@@ -463,7 +484,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     fetch(`${launcherUrl}/voice/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, map: selectedMap, table: dest.key }),
+      body: JSON.stringify({ action, map: selectedMap, table: dest.name }),
     })
       .then(r => r.json())
       .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger') })
@@ -495,9 +516,24 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     addActivity('Kitchen', 'Go to kitchen')
   }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
 
-  const stopVoice = () => {
-    fetch(`${launcherUrl}/voice/stop`, { method: 'POST' }).catch(() => {})
-  }
+  // Cancels whichever table's order-processing session is currently
+  // running and frees that table's lock. Only one voice session runs at a
+  // time system-wide, so /voice/stop always targets the right one — no
+  // table param needed. Used by the per-card Cancel button, which only
+  // renders on the table that's actually locked (voiceStatus.table === label).
+  const cancelVoice = useCallback((label) => {
+    fetch(`${launcherUrl}/voice/stop`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          showToast(`Cancelled — ${label} is free again`, 'warn')
+          addActivity(label, 'Cancelled')
+        } else {
+          showToast('Could not cancel — try again', 'danger')
+        }
+      })
+      .catch(() => showToast('Could not reach launcher', 'danger'))
+  }, [launcherUrl, showToast, addActivity])
 
   // No confirm() dialog here on purpose, unlike stopNav() — this is a real
   // emergency stop (cuts motor commands immediately if the robot is
@@ -735,7 +771,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               </div>
             ) : visibleEntries.map(([key, t]) => {
               const label = t.name || `Table ${key}`
-              const orderRaw = orders[key]
+              // Postgres/orders is a separate, numbered system (service_points.label
+              // is always "Table N") independent of whatever this waypoint is
+              // actually named — orders stays keyed by that extracted number,
+              // same as backend/launcher.py's _read_orders_db() already does.
+              const orderTableNo = tableNumberFromName(label, key)
+              const orderRaw = orders[orderTableNo]
               const order = orderRaw && orderRaw.items && orderRaw.items.length ? orderRaw : null
               const billOpen = expandedBills.has(key)
               return (
@@ -760,7 +801,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                           <span style={{ fontFamily: 'monospace' }}>{money(order.total)}</span>
                         </div>
                         <button
-                          onClick={(e) => { e.stopPropagation(); clearOrder(key) }}
+                          onClick={(e) => { e.stopPropagation(); clearOrder(orderTableNo) }}
                           title="Clear this table's order history"
                           style={{ marginTop: 8, fontSize: 10.5, fontWeight: 600, color: 'var(--danger)', opacity: 0.75, padding: '2px 6px' }}
                         >
@@ -775,8 +816,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                       reported phase (voiceStatus.phase_text) while active. */}
                   <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
                     {TABLE_ACTIONS.map(([task, actLabel]) => {
-                      const blocked = voiceStatus.running && voiceStatus.table !== key
-                      const active = voiceStatus.running && voiceStatus.table === key && voiceStatus.action === TASK_TO_ACTION[task]
+                      const blocked = voiceStatus.running && voiceStatus.table !== label
+                      const active = voiceStatus.running && voiceStatus.table === label && voiceStatus.action === TASK_TO_ACTION[task]
                       return (
                         <button
                           key={task}
@@ -799,6 +840,27 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                       )
                     })}
                   </div>
+
+                  {/* Cancel — only shown on the table that's actually
+                      locked right now (this session's own table). Kills the
+                      running main_agent.py session via /voice/stop, which
+                      frees the lock immediately (voiceStatus.running goes
+                      false on the next poll) instead of waiting for the
+                      order flow to finish or time out on its own. */}
+                  {voiceStatus.running && voiceStatus.table === label && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); cancelVoice(label) }}
+                      title="Cancel order processing and free this table"
+                      style={{
+                        marginTop: 6, width: '100%', padding: '7px 8px', borderRadius: 10,
+                        fontSize: 11, fontWeight: 700, color: 'var(--danger)',
+                        background: 'rgba(224,90,90,0.08)', border: '1px solid rgba(224,90,90,0.25)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
               )
             })}
