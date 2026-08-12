@@ -72,6 +72,16 @@ US_FRONT_DIST    = 0.30    # m   – hard stop forward
 US_REAR_DIST     = 0.30    # m   – hard stop reverse
 US_STALE_SECS    = 1.0     # s
 
+# ── Graduated-speed smoothing ─────────────────────────────────────────────────
+# _vel_scale() used to run straight off each new lidar/depth reading with zero
+# smoothing, so a few cm of ordinary sensor noise near the slow-zone boundary
+# translated directly into the commanded speed surging/easing every tick —
+# "oscillating, then moving" instead of one smooth ramp. DIST_FILTER_ALPHA
+# exponentially smooths the distance fed to the graduated scale only; the
+# hard-stop trigger itself always uses the raw, unfiltered reading (see
+# _on_scan/_on_cloud) so an actual closing obstacle is never stopped for late.
+DIST_FILTER_ALPHA = 0.35  # weight on the newest reading; lower = smoother but slower to react
+
 # ── Pipeline topics ───────────────────────────────────────────────────────────
 INPUT_TOPIC  = "/cmd_vel_smoothed"
 OUTPUT_TOPIC = "/cmd_vel"
@@ -109,6 +119,15 @@ def _vel_scale(dist: float, stop: float, slow: float) -> float:
     if dist >= slow:
         return 1.0
     return (dist - stop) / (slow - stop)
+
+
+def _scale_for(raw_dist: float, smooth_dist: float, stop: float, slow: float) -> float:
+    """Hard stop always reacts to the raw, unfiltered reading — never delayed
+    by smoothing. Otherwise the graduated scale runs off the smoothed
+    distance, damping frame-to-frame sensor noise out of the slow-zone ramp."""
+    if raw_dist <= stop:
+        return 0.0
+    return _vel_scale(smooth_dist, stop, slow)
 
 
 def _play_alert_clip() -> bool:
@@ -172,12 +191,14 @@ class SafetyShield(Node):
 
         # ── Internal state (all guarded by _lock) ─────────────────────────────
         # Lidar
-        self._lidar_fwd_dist = math.inf   # nearest obstacle in corridor
+        self._lidar_fwd_dist = math.inf          # raw — drives the hard-stop trigger, never filtered
+        self._lidar_fwd_dist_smooth = math.inf   # EMA'd — drives the graduated slow-zone scale only
         self._lidar_blocked  = False       # dist < LIDAR_STOP_DIST
         self._lidar_slowing  = False       # in slow zone, not yet stopped
 
         # Depth
         self._depth_fwd_dist = math.inf
+        self._depth_fwd_dist_smooth = math.inf
         self._depth_blocked  = False
         self._depth_slowing  = False
 
@@ -277,6 +298,15 @@ class SafetyShield(Node):
         with self._lock:
             prev_blocked = self._lidar_blocked
             prev_slowing = self._lidar_slowing
+            # Snap instead of blend across an inf<->finite transition (an
+            # obstacle newly appearing/disappearing) — EMA-blending against
+            # inf would otherwise stay pinned at inf forever. Otherwise EMA
+            # smooths ordinary frame-to-frame noise between two real readings.
+            if math.isinf(self._lidar_fwd_dist_smooth) or math.isinf(fwd_dist):
+                self._lidar_fwd_dist_smooth = fwd_dist
+            else:
+                self._lidar_fwd_dist_smooth = (
+                    DIST_FILTER_ALPHA * fwd_dist + (1 - DIST_FILTER_ALPHA) * self._lidar_fwd_dist_smooth)
             self._lidar_fwd_dist = fwd_dist
             self._lidar_blocked  = hard_blocked
             self._lidar_slowing  = slowing
@@ -340,6 +370,11 @@ class SafetyShield(Node):
         with self._lock:
             prev_blocked = self._depth_blocked
             prev_slowing = self._depth_slowing
+            if math.isinf(self._depth_fwd_dist_smooth) or math.isinf(fwd_dist):
+                self._depth_fwd_dist_smooth = fwd_dist
+            else:
+                self._depth_fwd_dist_smooth = (
+                    DIST_FILTER_ALPHA * fwd_dist + (1 - DIST_FILTER_ALPHA) * self._depth_fwd_dist_smooth)
             self._depth_fwd_dist = fwd_dist
             self._depth_blocked  = hard_blocked
             self._depth_slowing  = slowing
@@ -399,14 +434,16 @@ class SafetyShield(Node):
         us_stale     = (now - self._last_us)    > US_STALE_SECS
 
         with self._lock:
-            lidar_dist     = self._lidar_fwd_dist if not lidar_stale else math.inf
-            depth_dist     = self._depth_fwd_dist if not depth_stale else math.inf
+            lidar_dist        = self._lidar_fwd_dist if not lidar_stale else math.inf
+            lidar_dist_smooth = self._lidar_fwd_dist_smooth if not lidar_stale else math.inf
+            depth_dist        = self._depth_fwd_dist if not depth_stale else math.inf
+            depth_dist_smooth = self._depth_fwd_dist_smooth if not depth_stale else math.inf
             us_fwd_blocked = not us_stale and self._us_front_blocked
             us_rear_blocked = not us_stale and self._us_rear_blocked
 
         fwd_scale = min(
-            _vel_scale(lidar_dist, LIDAR_STOP_DIST, LIDAR_SLOW_DIST),
-            _vel_scale(depth_dist, DEPTH_STOP_DIST, DEPTH_SLOW_DIST),
+            _scale_for(lidar_dist, lidar_dist_smooth, LIDAR_STOP_DIST, LIDAR_SLOW_DIST),
+            _scale_for(depth_dist, depth_dist_smooth, DEPTH_STOP_DIST, DEPTH_SLOW_DIST),
             0.0 if us_fwd_blocked else 1.0,
         )
 
