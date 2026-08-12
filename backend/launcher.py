@@ -17,6 +17,22 @@ Endpoints (CORS-open so the browser can call them directly):
                       on THIS checkout — the frontend uses this instead of a
                       hardcoded guess, since where the repo is cloned can vary)
     GET  /maps    →  {"maps": [str, ...]}  (map names, from *.yaml in MAPS_DIR)
+    GET  /ntfields_models →  {"models": [str, ...]}  (map names with a trained
+                      <name>.pt in NTFIELDS_MODELS_DIR — SettingsPanel.jsx's
+                      "NTFields model ready"/"No NTFields model" badge)
+    GET  /ntfields/train/status → {"running": bool, "map": str|null,
+                      "phase": "training"|"done"|"failed"|null, "phase_text": str|null}
+    POST /ntfields/train  →  body {"map": str}. Starts offline NTFields
+                      training (src/argo_mini/argo_mini/ntfields_offline_train.py)
+                      for that map in a background thread (_ntfields_train_worker),
+                      writing NTFIELDS_MODELS_DIR/<map>.pt — argo_sonic_nav.py's
+                      "navigate" mode needs that file to exist for the map it's
+                      given. Triggered automatically by the setup wizard right
+                      after a map is saved (ExplorationPanel.jsx's saveMap()).
+                      404 if that map hasn't been saved yet; 409
+                      (ntfields_train_busy) if a training job is already
+                      running — no exclusion against /voice/start or
+                      /nav/goto, training never touches Nav2/serial/the mic.
     GET  /maps/<name>/meta         →  {"resolution": float, "origin": [x,y,theta]}
                                        parsed from <name>.yaml — lets the frontend
                                        place waypoints on the map image correctly
@@ -261,6 +277,14 @@ VOICE_LOG_PATH = os.path.join(SONIC_DIR, 'voice_session.log')
 # main_agent.py) for single-destination trips that have no conversation
 # attached (POST /nav/goto, e.g. the "Go to kitchen" button).
 NAV_BRIDGE_SCRIPT = os.path.join(SONIC_DIR, 'nav_bridge.py')
+# Offline NTFields training (POST /ntfields/train) — pure Python/torch, no
+# rclpy import at all (confirmed by reading the script), so unlike
+# NAV_BRIDGE_SCRIPT this needs no ROS environment sourced, just a plain
+# `python3` subprocess. NTFIELDS_MODELS_DIR matches the exact convention
+# antfields-demo/train_ntfields.py and argo_sonic_nav.py's own "navigate"
+# mode already use — a model is looked up by map name at <dir>/<map>.pt.
+NTFIELDS_TRAIN_SCRIPT = os.path.join(_ROOT, 'src', 'argo_mini', 'argo_mini', 'ntfields_offline_train.py')
+NTFIELDS_MODELS_DIR = os.path.expanduser('~/ntfields_models')
 
 # Menu + orders now live in Postgres (see sonic/*.sql, sonic/seed_db.py)
 # instead of src/argo_mini/menu/menu.json + src/argo_mini/orders/*.json —
@@ -931,6 +955,39 @@ def _nav_goto_worker(destination, map_name):
             'phase_text': f'Arrived at {destination}' if ok else f'Could not reach {destination}',
         }
 
+
+# Independent from everything above — a CPU/GPU-bound subprocess (torch),
+# never touches Nav2/serial/the mic, so it needs no mutual exclusion against
+# _voice_proc/_nav_goto/_proc, only against a second training job stepping
+# on the same GPU/output file at once (self-exclusion via _ntfields_train_lock).
+_ntfields_train_lock = threading.Lock()
+_ntfields_train_status = {'running': False, 'map': None, 'phase': None, 'phase_text': None}
+
+
+def _ntfields_train_worker(map_name):
+    global _ntfields_train_status
+    with _ntfields_train_lock:
+        _ntfields_train_status = {'running': True, 'map': map_name, 'phase': 'training',
+                                   'phase_text': f'Training NTFields model for "{map_name}"…'}
+    os.makedirs(NTFIELDS_MODELS_DIR, exist_ok=True)
+    map_yaml = os.path.join(MAPS_DIR, f'{map_name}.yaml')
+    output_pt = os.path.join(NTFIELDS_MODELS_DIR, f'{map_name}.pt')
+    cmd = ['python3', NTFIELDS_TRAIN_SCRIPT, '--map', map_yaml, '--output', output_pt]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        ok = result.returncode == 0 and os.path.isfile(output_pt)
+        if not ok:
+            print(f'[launcher] ntfields training failed for {map_name!r}: {result.stderr[-1000:]}')
+    except subprocess.TimeoutExpired:
+        ok = False
+        print(f'[launcher] ntfields training for {map_name!r} timed out after 1h')
+    with _ntfields_train_lock:
+        _ntfields_train_status = {
+            'running': False, 'map': map_name,
+            'phase': 'done' if ok else 'failed',
+            'phase_text': f'NTFields model ready for "{map_name}"' if ok else f'Training failed for "{map_name}"',
+        }
+
 # ── State ────────────────────────────────────────────────────────────────────
 
 _proc: subprocess.Popen | None = None
@@ -1201,6 +1258,17 @@ class Handler(BaseHTTPRequestHandler):
             ) if os.path.isdir(MAPS_DIR) else []
             self._json({'maps': names})
 
+        elif self.path == '/ntfields_models':
+            # SettingsPanel.jsx already expects exactly this shape (see its
+            # "NTFields model ready"/"No NTFields model" badge) — this was
+            # the missing half of that wiring.
+            names = sorted(
+                os.path.splitext(f)[0]
+                for f in os.listdir(NTFIELDS_MODELS_DIR)
+                if f.endswith('.pt')
+            ) if os.path.isdir(NTFIELDS_MODELS_DIR) else []
+            self._json({'models': names})
+
         elif len(parts) == 3 and parts[0] == 'maps' and parts[2] == 'meta':
             name = _safe_name(parts[1])
             if not name:
@@ -1303,6 +1371,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/nav/goto/status':
             with _nav_goto_lock:
                 self._json(dict(_nav_goto_status))
+
+        elif self.path == '/ntfields/train/status':
+            with _ntfields_train_lock:
+                self._json(dict(_ntfields_train_status))
 
         elif self.path == '/estop/status':
             with _serial_lock:
@@ -1642,6 +1714,31 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=_nav_goto_worker, args=(destination, map_name), daemon=True).start()
             print(f'[launcher] /nav/goto -> {destination!r} (map={map_name!r})')
             self._json({'ok': True, 'status': 'started', 'destination': destination, 'map': map_name})
+
+        elif self.path == '/ntfields/train':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+            except (ValueError, json.JSONDecodeError):
+                self._json({'ok': False, 'error': 'invalid JSON body'}, 400)
+                return
+
+            map_name = _safe_name(body.get('map'))
+            if not map_name:
+                self._json({'ok': False, 'error': 'invalid or missing "map"'}, 400)
+                return
+            if not os.path.isfile(os.path.join(MAPS_DIR, f'{map_name}.yaml')):
+                self._json({'ok': False, 'error': f'no saved map named {map_name!r}'}, 404)
+                return
+
+            with _ntfields_train_lock:
+                if _ntfields_train_status['running']:
+                    self._json({'ok': False, 'error': 'ntfields_train_busy',
+                                'active': {'map': _ntfields_train_status['map']}}, 409)
+                    return
+                threading.Thread(target=_ntfields_train_worker, args=(map_name,), daemon=True).start()
+            print(f'[launcher] /ntfields/train -> {map_name!r}')
+            self._json({'ok': True, 'status': 'started', 'map': map_name})
 
         elif self.path == '/estop':
             with _serial_lock:

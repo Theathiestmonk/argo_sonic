@@ -52,6 +52,11 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
   const [stackState, setStackState] = useState('unknown') // 'unknown'|'starting'|'running'|'stopped'
   const [saving, setSaving]        = useState(false)  // map save in progress
   const [mapsDir, setMapsDir]      = useState(null)   // src/argo_mini/maps on the robot, from launcher /config
+  // NTFields training kicked off automatically once a map save succeeds
+  // (see saveMap() below) — polled the same way /nav/goto/status and
+  // /voice/status already are elsewhere, non-blocking: doesn't gate
+  // "Map is ready — label places", just shown alongside it.
+  const [trainStatus, setTrainStatus] = useState({ running: false, map: null, phase: null, phase_text: null })
   const pauseTopicRef = useRef(null)
   const pollRef = useRef(null)
   const failCountRef = useRef(0)
@@ -62,6 +67,19 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     fetch(`${launcherUrl}/config`).then(r => r.json()).then(d => setMapsDir(d.maps_dir)).catch(() => {})
     return () => clearInterval(pollRef.current)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/ntfields/train/status`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setTrainStatus(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
 
   // Poll stack status every 5 s so UI stays in sync
   useEffect(() => {
@@ -165,7 +183,8 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     if (!connected) { showToast('Not connected to Argo', 'danger'); return }
     if (!mapsDir) { showToast('Maps folder not known yet — try again in a moment', 'danger'); return }
     if (saving) return
-    const path = `${mapsDir}/${saveName.trim() || 'my_map'}`
+    const mapName = saveName.trim() || 'my_map'
+    const path = `${mapsDir}/${mapName}`
     setSaving(true)
 
     // Step 1 — Serialize SLAM Toolbox pose graph (.posegraph + .data)
@@ -184,6 +203,20 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
           () => {
             setSaving(false)
             showToast(`Map saved → ${path}`, 'ok')
+
+            // Kick off NTFields training in the background — fire-and-forget
+            // from this component's point of view, doesn't block the wizard.
+            // Status shown next to the save button via trainStatus polling
+            // above; argo_sonic_nav.py's "navigate" mode needs the resulting
+            // <map>.pt to actually work for this map.
+            fetch(`${launcherUrl}/ntfields/train`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ map: mapName }),
+            })
+              .then(r => r.json())
+              .then(d => { if (!d.ok && d.error !== 'ntfields_train_busy') showToast('Could not start NTFields training', 'danger') })
+              .catch(() => showToast('Could not reach launcher to start NTFields training', 'danger'))
           },
           () => {
             setSaving(false)
@@ -343,6 +376,23 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
               )}
               {saving ? 'Saving…' : 'Save map to robot'}
             </button>
+
+            {/* NTFields training kicked off automatically on save (see
+                saveMap()) — non-blocking status, doesn't gate "label
+                places" below. Nothing shown once there's no map trained or
+                training yet (phase === null). */}
+            {trainStatus.running && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12, color: 'var(--gold-bright)' }}>
+                <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid currentColor', borderTopColor: 'transparent', animation: 'spin-slow 0.8s linear infinite', display: 'inline-block', flexShrink: 0 }} />
+                {trainStatus.phase_text}
+              </div>
+            )}
+            {!trainStatus.running && trainStatus.phase === 'done' && (
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--ok)' }}>✓ {trainStatus.phase_text}</div>
+            )}
+            {!trainStatus.running && trainStatus.phase === 'failed' && (
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)' }}>{trainStatus.phase_text}</div>
+            )}
           </div>
         )}
 
