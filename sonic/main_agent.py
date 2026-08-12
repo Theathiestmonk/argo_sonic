@@ -201,6 +201,9 @@ class OrderState:
     went_idle: bool = False
     item_attempts: int = 0
     pending_seed: Optional[dict] = None    # a not-yet-consumed extraction outcome for the next node
+    ask_retry: bool = False                # next ask_table/ask_qty should use its retry-flavored purpose,
+                                            # not a second, unrelated fresh ask — see n_ask_table/n_ask_qty
+    last_unmatched_item: Optional[str] = None   # n_extract_items' most recent no-menu-match name, for the retry prompt
 
     # Postgres handles (same schema sonic_agent.py used — no migration needed)
     db_session_id: Optional[str] = None
@@ -1215,13 +1218,18 @@ def n_intent_classify(state: OrderState) -> dict:
 
 def n_ask_table(state: OrderState) -> dict:
     trace_node("n_ask_table", state)
-    outcome = get_reply_or_route(state, "n_ask_table", "ask_table", expects="table_no")
+    purpose = "ask_table_retry" if state.ask_retry else "ask_table"
+    outcome = get_reply_or_route(state, "n_ask_table", purpose, expects="table_no")
     if outcome is None:
         return asdict(state)
     if not state.table_no:
-        say("ask_table_retry", state)
+        # loop back into THIS SAME ask (retry-flavored) instead of speaking
+        # a retry line and then separately re-asking the original question —
+        # one spoken line, one listen, every time
+        state.ask_retry = True
         state.next_node = "n_ask_table"
         return asdict(state)
+    state.ask_retry = False
     state.next_node = "n_navigate_to_table"
     return asdict(state)
 
@@ -1274,7 +1282,15 @@ def n_extract_items(state: OrderState) -> dict:
     elif state.pending_items:
         outcome = {"items": [state.pending_items.pop(0)], "answers_pending": True}
     else:
-        outcome = get_reply_or_route(state, "n_extract_items", "ask_what_would_you_like", expects="items")
+        # A prior menu-match failure asks WITH the "sorry, couldn't find X,
+        # say it again" purpose directly, instead of speaking that as a
+        # standalone aside and then separately re-asking a generic
+        # "what would you like" question before ever listening.
+        if state.item_attempts > 0:
+            outcome = get_reply_or_route(state, "n_extract_items", "item_not_found", expects="items",
+                                          item_name=state.last_unmatched_item or "that")
+        else:
+            outcome = get_reply_or_route(state, "n_extract_items", "ask_what_would_you_like", expects="items")
         if outcome is None:
             return asdict(state)
 
@@ -1286,7 +1302,7 @@ def n_extract_items(state: OrderState) -> dict:
             state.went_idle = True
             state.next_node = "n_respond"
             return asdict(state)
-        say("item_not_found", state, item_name="that")
+        state.last_unmatched_item = "that"
         state.next_node = "n_extract_items"
         return asdict(state)
 
@@ -1299,10 +1315,11 @@ def n_extract_items(state: OrderState) -> dict:
             state.went_idle = True
             state.next_node = "n_respond"
             return asdict(state)
-        say("item_not_found", state, item_name=first.get("item_name") or "that")
+        state.last_unmatched_item = first.get("item_name") or "that"
         state.next_node = "n_extract_items"
         return asdict(state)
     state.item_attempts = 0
+    state.last_unmatched_item = None
 
     if rest:
         state.pending_items.extend(rest)
@@ -1318,15 +1335,17 @@ def n_extract_items(state: OrderState) -> dict:
 
 def n_ask_qty(state: OrderState) -> dict:
     trace_node("n_ask_qty", state)
-    outcome = get_reply_or_route(state, "n_ask_qty", "ask_quantity", expects="quantity",
+    purpose = "ask_quantity_retry" if state.ask_retry else "ask_quantity"
+    outcome = get_reply_or_route(state, "n_ask_qty", purpose, expects="quantity",
                                   item_name=state.active_item["name"])
     if outcome is None:
         return asdict(state)
     qty = outcome.get("quantity")
     if not qty:
-        say("ask_quantity_retry", state, item_name=state.active_item["name"])
+        state.ask_retry = True
         state.next_node = "n_ask_qty"
         return asdict(state)
+    state.ask_retry = False
     state.active_item["quantity"] = qty
     state.next_node = "n_ask_preference" if not state.active_item["preference_asked"] else commit_and_continue(state)
     return asdict(state)
@@ -1490,6 +1509,8 @@ def n_respond(state: OrderState) -> dict:
     state.pending_question = None
     state.item_attempts = 0
     state.pending_seed = None
+    state.ask_retry = False
+    state.last_unmatched_item = None
     db_end_session(state)
     state.next_node = "n_return_to_kitchen"
     return asdict(state)
