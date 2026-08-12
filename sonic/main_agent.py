@@ -125,7 +125,15 @@ FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 SILENCE_ONSET_TIMEOUT_S = 30.0  # how long a single listen attempt waits for speech to start
 SILENCE_GIVEUP_TOTAL_S = 120.0  # cumulative silence (across reprompts) before giving up on a question
 TRAILING_SILENCE_MS = 600
-SPEECH_RMS_THRESHOLD = 500
+# int16 RMS energy a frame must exceed to count as "speech started" in
+# record_utterance() — lower picks up quieter voices but also more room
+# noise. Was 500 (required speaking with real effort/volume); 150 is more
+# sensitive to a normal-volume or soft voice. Safe to tune lower than before
+# a false trigger no longer interrupts the conversation (see listen()/
+# listen_with_patience() — a noise-triggered empty transcript is retried
+# quietly, not spoken over) — override per-deployment via SONIC_RMS_THRESHOLD
+# if your mic/room still needs a different value.
+SPEECH_RMS_THRESHOLD = int(os.environ.get("SONIC_RMS_THRESHOLD", "150"))
 
 TEXT_MODE = False
 
