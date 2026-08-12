@@ -14,7 +14,7 @@ function worldToCanvas(wx, wy, md, offX, offY, scale) {
 }
 
 export default function MapCanvas({
-  mapData, robotPose, labels = [], frontiers = [], clickable = false, onMapClick,
+  mapData, robotPose, goalPose, labels = [], frontiers = [], clickable = false, onMapClick,
   // poseEstimateMode mirrors RViz's "2D Pose Estimate" tool — click-drag
   // instead of a plain click, since a pose needs a heading too, not just a
   // position. Mutually exclusive with `clickable`'s plain-click "add table"
@@ -130,17 +130,31 @@ export default function MapCanvas({
       ctx.fillText(l.name, px, py - 11)
     })
 
-    // Robot (gold arrow)
+    // Robot (maroon arrow)
     if (robotPose) {
       const [px, py] = toC(robotPose.x, robotPose.y)
       ctx.save()
       ctx.translate(px, py)
       ctx.rotate(-robotPose.theta)
       ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(226,179,92,0.22)'; ctx.fill()
-      ctx.strokeStyle = '#ffd485'; ctx.lineWidth = 2; ctx.stroke()
+      ctx.fillStyle = 'rgba(128,0,0,0.22)'; ctx.fill()
+      ctx.strokeStyle = '#800000'; ctx.lineWidth = 2; ctx.stroke()
       ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(-6, 5); ctx.lineTo(6, 5); ctx.closePath()
-      ctx.fillStyle = '#ffd485'; ctx.fill()
+      ctx.fillStyle = '#800000'; ctx.fill()
+      ctx.restore()
+    }
+
+    // Goal marker (blue) — set whenever a table action or "Go to kitchen"
+    // is clicked (DashboardHome.jsx), cleared once that trip finishes. No
+    // orientation, just a target point, so no rotation like the robot arrow.
+    if (goalPose) {
+      const [gx, gy] = toC(goalPose.x, goalPose.y)
+      ctx.save()
+      ctx.beginPath(); ctx.arc(gx, gy, 9, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(127,168,232,0.22)'; ctx.fill()
+      ctx.strokeStyle = '#7fa8e8'; ctx.lineWidth = 2; ctx.stroke()
+      ctx.beginPath(); ctx.arc(gx, gy, 3, 0, Math.PI * 2)
+      ctx.fillStyle = '#7fa8e8'; ctx.fill()
       ctx.restore()
     }
 

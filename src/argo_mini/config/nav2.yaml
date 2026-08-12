@@ -178,12 +178,16 @@
       # that clamp and showed up as jerky motion. Matched to 20.0 to remove
       # the beat frequency entirely.
       smoothing_frequency: 20.0
-      # Was OPEN_LOOP — tracked its own assumed internal velocity model
-      # instead of the robot's actual measured velocity, so it had no way to
-      # account for real response lag (serial_bridge's own RPM ramp, motor
-      # response, wheel slip). odom_topic below was already configured for
-      # this and simply unused. CLOSED_LOOP grounds the ramp in reality.
-      feedback: "CLOSED_LOOP"
+      # REVERTED to OPEN_LOOP — tried CLOSED_LOOP (tracks /odom instead of
+      # its own assumed model) to ground the ramp in the robot's actual
+      # measured velocity, but CLOSED_LOOP needs live /odom to produce ANY
+      # output at all, unlike OPEN_LOOP. Right after this changed, the robot
+      # stopped moving to any goal at all (RViz AND the UI) — exactly the
+      # symptom of the smoother going silent because odom isn't reaching it
+      # cleanly (QoS mismatch, timing, or something else not yet diagnosed).
+      # Back to OPEN_LOOP until that's root-caused; smoothing_frequency=20.0
+      # above is unrelated and stays.
+      feedback: "OPEN_LOOP"
       max_velocity: [0.60, 0.0, 0.8]
       min_velocity: [-0.15, 0.0, -0.8]
       max_accel: [0.5, 0.0, 1.0]

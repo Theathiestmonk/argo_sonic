@@ -37,6 +37,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
+  // Blue goal marker on the map — set whenever a table action or "Go to
+  // kitchen" is clicked (see dispatchVoiceAction/goToKitchen below),
+  // cleared once that trip is no longer running (below).
+  const [goalMarker, setGoalMarker] = useState(null)
   const [taskLabel, setTaskLabel]   = useState('—')
   const [activity, setActivity]     = useState([])
   const [greeting, setGreeting]     = useState('Good day')
@@ -335,6 +339,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       setCurPos(navGotoStatus.destination || curPos)
     } else if (!voiceStatus.running && !navGotoStatus.running) {
       setCurStatus('Idle')
+      setGoalMarker(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceStatus, navGotoStatus])
@@ -453,6 +458,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       return
     }
 
+    setGoalMarker({ x: dest.x, y: dest.y })
+
     fetch(`${launcherUrl}/voice/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -475,6 +482,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       return
     }
     if (navGotoStatus.running) return
+    const dest = destinations.find(d => d.name === 'Kitchen')
+    if (dest) setGoalMarker({ x: dest.x, y: dest.y })
     fetch(`${launcherUrl}/nav/goto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -484,7 +493,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with a table' : 'Could not start the trip', 'danger') })
       .catch(() => showToast('Could not reach launcher', 'danger'))
     addActivity('Kitchen', 'Go to kitchen')
-  }, [showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
+  }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
 
   const stopVoice = () => {
     fetch(`${launcherUrl}/voice/stop`, { method: 'POST' }).catch(() => {})
@@ -639,6 +648,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             <MapCanvas
               mapData={mapData}
               robotPose={robotPose}
+              goalPose={goalMarker}
               poseEstimateMode={poseMode}
               onPoseEstimate={({ wx, wy, theta }) => {
                 onSetInitialPose?.(wx, wy, theta)
