@@ -1543,7 +1543,13 @@ class Handler(BaseHTTPRequestHandler):
 
             action   = body.get('action')
             map_name = _safe_name(body.get('map'))
-            table_id = _safe_name(str(body.get('table', '')))
+            # Not run through _safe_name — that's for names that get joined
+            # into filesystem paths (map/waypoint-set files). table_id here
+            # is only ever passed as an env var, compared in memory, and
+            # logged, so it's taken as-is from the waypoint's own name (e.g.
+            # "Table 3", "table 1") straight off the table card — no
+            # character restrictions needed, just non-empty.
+            table_id = str(body.get('table', '')).strip()
 
             if action not in _VOICE_ACTIONS:
                 self._json({'ok': False, 'error': f'invalid action — must be one of {sorted(_VOICE_ACTIONS)}'}, 400)
