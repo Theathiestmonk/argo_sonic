@@ -169,8 +169,21 @@
   velocity_smoother:
     ros__parameters:
       use_sim_time: false
-      smoothing_frequency: 30.0
-      feedback: "OPEN_LOOP"
+      # Was 30.0 — controller_server's controller_frequency (above) is 20.0,
+      # so a 30Hz consumer resampling a 20Hz source aliased: sometimes
+      # re-reading the same command, sometimes straddling a boundary oddly,
+      # producing bigger-than-expected deltas downstream. serial_bridge.py's
+      # ramp assumes Nav2 output arrives in tiny steps and only clamps large
+      # jumps hard — those aliasing-induced jumps were exactly what tripped
+      # that clamp and showed up as jerky motion. Matched to 20.0 to remove
+      # the beat frequency entirely.
+      smoothing_frequency: 20.0
+      # Was OPEN_LOOP — tracked its own assumed internal velocity model
+      # instead of the robot's actual measured velocity, so it had no way to
+      # account for real response lag (serial_bridge's own RPM ramp, motor
+      # response, wheel slip). odom_topic below was already configured for
+      # this and simply unused. CLOSED_LOOP grounds the ramp in reality.
+      feedback: "CLOSED_LOOP"
       max_velocity: [0.60, 0.0, 0.8]
       min_velocity: [-0.15, 0.0, -0.8]
       max_accel: [0.5, 0.0, 1.0]
