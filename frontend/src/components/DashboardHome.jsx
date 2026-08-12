@@ -293,11 +293,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       border: '2px solid rgba(255,255,255,0.15)', borderTopColor: 'var(--muted)',
       animation: 'spin-slow 0.8s linear infinite', verticalAlign: 'middle',
     }} />
-  ) : battery.charging ? formatHm(battery.estimated_charge_remaining_hours)
+  ) : battery.charging ? `Charging · About ${formatHm(battery.estimated_charge_remaining_hours)} until full`
+    // Discharging value is unchanged — still just the plain "5h 30m" it always was.
     : formatHm(battery.estimated_remaining_hours)
   const workingHoursSub = !battery.connected ? (
     <span style={{ animation: 'pulse-dot 1.4s ease-in-out infinite' }}>Connecting to battery…</span>
-  ) : battery.charging ? `${Math.round(battery.battery_percent)}% · Charging · About ${formatHm(battery.estimated_charge_remaining_hours)} until full`
+  ) : battery.charging ? `${Math.round(battery.battery_percent)}%`
     : `${Math.round(battery.battery_percent)}% battery`
   // Card label swaps to "Charging" while plugged in — the value below it is
   // a completely different number (time-to-full vs. time-remaining), so the
@@ -574,7 +575,11 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 {workingHoursLabelText}
                 {battery.connected && battery.charging && <ThunderboltIcon />}
               </div>
-              <div style={{ fontSize: 18, fontWeight: 700, marginTop: 5, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{
+                fontSize: battery.charging ? 15 : 18, fontWeight: 700, marginTop: 5, color: '#fff',
+                whiteSpace: battery.charging ? 'normal' : 'nowrap', lineHeight: 1.3,
+                overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
                 {workingHoursLabel}
               </div>
               <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>{workingHoursSub}</div>
