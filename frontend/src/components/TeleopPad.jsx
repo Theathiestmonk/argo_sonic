@@ -62,6 +62,13 @@ export default function TeleopPad({ connected, compact = false }) {
   const press = useCallback((dir, lx, az) => {
     if (!connected) return
     clearInterval(stopRef.current)
+    // Switching direction without releasing the previous one (e.g. 'd'
+    // pressed while 'w' is still held) used to overwrite holdRef.current
+    // with the new interval, orphaning the old one — its id was lost, so
+    // it could never be cleared again and kept publishing that stale
+    // direction forever, racing the new one. Always clear before
+    // reassigning so there's ever only one live interval.
+    clearInterval(holdRef.current)
     setActive(dir)
     publish(lx, az)
     holdRef.current = setInterval(() => publish(lx, az), 80)
@@ -97,6 +104,12 @@ export default function TeleopPad({ connected, compact = false }) {
     const handleKeyDown = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return          // don't eat browser/OS shortcuts
       if (isTypingTarget(document.activeElement)) return      // e.g. the "save spot" name field
+      if (e.key === 'Escape') {                                // always-available keyboard stop
+        e.preventDefault()
+        activeKeyRef.current = null
+        stopNow()
+        return
+      }
       const mapped = KEY_DIRS[e.key.toLowerCase()]
       if (!mapped) return
       e.preventDefault()                                       // stop arrow keys from scrolling the page
@@ -116,13 +129,27 @@ export default function TeleopPad({ connected, compact = false }) {
         release()
       }
     }
+    // If the window loses focus while a key is held (alt-tab, clicking
+    // outside the page, a browser dialog stealing focus, ...), the
+    // browser never delivers that key's keyup — activeKeyRef would stay
+    // set and press()'s interval would keep publishing indefinitely with
+    // no keyboard event left to stop it. Force a release whenever focus
+    // leaves, same as physically letting go of the key.
+    const handleBlur = () => {
+      if (activeKeyRef.current) {
+        activeKeyRef.current = null
+        release()
+      }
+    }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleBlur)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleBlur)
     }
-  }, [press, release])
+  }, [press, release, stopNow])
 
   const sz = compact ? 68 : 80
   const br = compact ? 18 : 22
