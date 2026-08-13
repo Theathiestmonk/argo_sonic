@@ -56,7 +56,7 @@
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
-        wz_max: 0.8
+        wz_max: 0.4
         # Lowered alongside vx_max — top speed alone doesn't prevent wheel
         # slip on a slippery floor, quick accel/decel does (F=ma exceeding
         # available friction is what actually breaks traction). At the old
@@ -191,8 +191,8 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.15, 0.0, 0.8]
-      min_velocity: [-0.15, 0.0, -0.8]
+      max_velocity: [0.15, 0.0, 0.4]
+      min_velocity: [-0.15, 0.0, -0.4]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
@@ -219,6 +219,6 @@
       wait:
         plugin: "nav2_behaviors/Wait"
       simulate_ahead_time: 2.0
-      max_rotational_vel: 0.8
-      min_rotational_vel: 0.25
+      max_rotational_vel: 0.4
+      min_rotational_vel: 0.15
       rotational_acc_lim: 1.5
