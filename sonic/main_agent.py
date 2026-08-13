@@ -869,8 +869,15 @@ def navigate_and_wait(destination: str, timeout_s: float = NAV_TIMEOUT_S) -> boo
 
     ok = result.returncode == 0 and "RESULT:SUCCESS" in result.stdout
     print(f"[nav] {destination!r}: {'arrived' if ok else 'FAILED'} (rc={result.returncode})")
-    if not ok and result.stderr:
-        print(f"[nav] stderr: {result.stderr.strip()[-500:]}")
+    if not ok:
+        # nav_bridge.py logs its own diagnosis (action server not found,
+        # goal rejected, timeout reason, ...) via plain print() — stdout,
+        # not stderr — so stderr alone was silently swallowing the actual
+        # reason for every failure, leaving only an uninformative rc=1.
+        if result.stdout:
+            print(f"[nav] stdout: {result.stdout.strip()[-1000:]}")
+        if result.stderr:
+            print(f"[nav] stderr: {result.stderr.strip()[-500:]}")
     return ok
 
 
