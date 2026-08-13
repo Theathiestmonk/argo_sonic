@@ -52,16 +52,26 @@
         vx_std: 0.2
         vy_std: 0.2
         wz_std: 0.4
-        vx_max: 0.30
+        vx_max: 0.15
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
         wz_max: 0.8
-        ax_max: 0.5
-        ax_min: -0.5
+        # Lowered alongside vx_max — top speed alone doesn't prevent wheel
+        # slip on a slippery floor, quick accel/decel does (F=ma exceeding
+        # available friction is what actually breaks traction). At the old
+        # 0.5 m/s^2 the robot would reach the new 0.15 m/s vx_max in 0.3s,
+        # still a sharp torque spike; 0.15 m/s^2 gives it a full second to
+        # ramp up/down instead.
+        ax_max: 0.15
+        ax_min: -0.15
         ay_min: 0.0
         ay_max: 0.0
-        az_max: 1.0
+        # Angular accel also lowered, less aggressively — in-place rotation
+        # on a differential-drive base can skid too (one wheel reversing
+        # under the other), but turning responsiveness still matters for a
+        # service robot working close to tables/people.
+        az_max: 0.6
         iteration_count: 1
         temperature: 0.3
         gamma: 0.015
@@ -181,10 +191,14 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.30, 0.0, 0.8]
+      max_velocity: [0.15, 0.0, 0.8]
       min_velocity: [-0.15, 0.0, -0.8]
-      max_accel: [0.5, 0.0, 1.0]
-      max_decel: [-0.5, 0.0, -1.0]
+      # Matched to the MPPI controller's ax_max/az_max above — the smoother
+      # sits downstream and must never allow a sharper ramp than the
+      # controller was already tuned for, or its output would just get
+      # clamped there anyway.
+      max_accel: [0.15, 0.0, 0.6]
+      max_decel: [-0.15, 0.0, -0.6]
       odom_topic: /odom
       velocity_timeout: 1.0
 
