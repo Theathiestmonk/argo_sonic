@@ -10,14 +10,15 @@ Three independent sensor sources with graduated forward-speed response:
   Lidar (LaserScan)  – /scan_corrected
     > LIDAR_SLOW_DIST (1.00 m) : full speed
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
-    < LIDAR_STOP_DIST (0.60 m) : hard stop — larger margin than the other
-      sensors on purpose: this is the robot's primary indoor sensor, and
-      indoor operation calls for extra stopping room over the 40cm baseline
+    < LIDAR_STOP_DIST (0.35 m) : hard stop — lowered from 0.60 m; that
+      margin sat inside the final approach to a table/kitchen waypoint
+      (deliberately close to furniture), hard-stopping the last stretch
+      and leaving NavigateToPose to abort centimeters from the goal
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
     > DEPTH_SLOW_DIST (0.80 m) : full speed
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
-    < DEPTH_STOP_DIST (0.40 m) : hard stop
+    < DEPTH_STOP_DIST (0.25 m) : hard stop — lowered from 0.40 m, same reasoning
 
   Ultrasonic (Range x 4)  – binary, no slow zone needed at 30 cm
     FL/FR < US_FRONT_DIST (0.30 m) : hard stop forward
@@ -51,15 +52,22 @@ from sensor_msgs.msg import LaserScan, PointCloud2, Range
 
 # ── Lidar ─────────────────────────────────────────────────────────────────────
 LIDAR_SLOW_DIST  = 1.00    # m   – begin speed reduction
-LIDAR_STOP_DIST  = 0.60    # m   – hard stop (extra margin over the 40cm baseline —
-                            #       primary indoor sensor, indoor operation needs more room)
+# Lowered from 0.60 — a service-point waypoint (table/kitchen) is
+# deliberately close to furniture, so the old margin sat *inside* the
+# final approach distance: Nav2 kept commanding forward motion for the
+# last stretch while this hard-stopped it every time, distance_remaining
+# plateaued, and the NavigateToPose action eventually reported ABORTED
+# despite the robot being centimeters from the goal (confirmed from
+# voice_session.log: "distance remaining" stuck at 0.00-0.17 m for
+# seconds before the abort). Still stops well before contact.
+LIDAR_STOP_DIST  = 0.35    # m   – hard stop
 LIDAR_WIDTH_HALF = 0.35    # m   – half-width of danger corridor
 LIDAR_MIN_PTS    = 3       # minimum scan points to register an obstacle
 LIDAR_STALE_SECS = 1.0     # s   – treat as stale if no scan arrives
 
 # ── Depth camera ──────────────────────────────────────────────────────────────
 DEPTH_SLOW_DIST  = 0.80    # m   – begin speed reduction
-DEPTH_STOP_DIST  = 0.40    # m   – hard stop
+DEPTH_STOP_DIST  = 0.25    # m   – hard stop — lowered from 0.40, same reasoning as LIDAR_STOP_DIST above
 DEPTH_SLOW_PTS   = 5       # minimum pts to activate slow zone
 DEPTH_MIN_PTS    = 15      # minimum pts for hard stop (noise filter)
 DEPTH_WIDTH_HALF = 0.40    # m   – half-width of danger corridor
