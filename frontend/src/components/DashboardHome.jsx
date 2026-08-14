@@ -52,9 +52,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
-  // Blue goal marker on the map — set whenever a table action or "Go to
-  // kitchen" is clicked (see dispatchVoiceAction/goToKitchen below),
-  // cleared once that trip is no longer running (below).
+  // Blue goal marker on the map — set whenever a table action, "Navigate",
+  // or "Go to kitchen" is clicked (see dispatchVoiceAction/goToDestination
+  // below), cleared once that trip is no longer running (below).
   const [goalMarker, setGoalMarker] = useState(null)
   const [taskLabel, setTaskLabel]   = useState('—')
   const [activity, setActivity]     = useState([])
@@ -493,27 +493,29 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     addActivity(tableLabel, task)
   }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
 
-  // "Go to kitchen" — a plain, conversation-free trip, backend-managed via
-  // POST /nav/goto (shells out to nav_bridge.py directly, same as
-  // main_agent.py's own navigate_and_wait()). Status polled via
-  // navGotoStatus above.
-  const goToKitchen = useCallback(() => {
+  // Plain, conversation-free trip to any named waypoint, backend-managed
+  // via POST /nav/goto (shells out to nav_bridge.py directly, same as
+  // main_agent.py's own navigate_and_wait() — no NLP, no order flow, just
+  // the raw NavigateToPose goal). Status polled via navGotoStatus above.
+  // Used both by "Go to kitchen" and each table card's own "Navigate"
+  // button (a pure nav-stack smoke test, deliberately bypassing Sonic).
+  const goToDestination = useCallback((name) => {
     if (voiceStatus.running) {
       showToast('Sonic is busy with a table — wait for that session to finish', 'warn')
       return
     }
     if (navGotoStatus.running) return
-    const dest = destinations.find(d => d.name === 'Kitchen')
+    const dest = destinations.find(d => d.name === name)
     if (dest) setGoalMarker({ x: dest.x, y: dest.y })
     fetch(`${launcherUrl}/nav/goto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ destination: 'Kitchen', map: selectedMap }),
+      body: JSON.stringify({ destination: name, map: selectedMap }),
     })
       .then(r => r.json())
       .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with a table' : 'Could not start the trip', 'danger') })
       .catch(() => showToast('Could not reach launcher', 'danger'))
-    addActivity('Kitchen', 'Go to kitchen')
+    addActivity(name, 'Navigate')
   }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
 
   // Cancels whichever table's order-processing session is currently
@@ -746,7 +748,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     : (navGotoStatus.destination === 'Kitchen' ? navGotoStatus.phase_text : null)
                   return (
                     <button
-                      onClick={(e) => { e.stopPropagation(); goToKitchen() }}
+                      onClick={(e) => { e.stopPropagation(); goToDestination('Kitchen') }}
                       disabled={kitchenBusy}
                       style={{
                         padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
@@ -840,6 +842,35 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                       )
                     })}
                   </div>
+
+                  {/* Navigate — a pure nav-stack smoke test. Sends this
+                      table's coordinates straight to Nav2 via /nav/goto,
+                      the same plain trip "Go to kitchen" uses: no NLP, no
+                      order flow, no main_agent.py session at all. Exists
+                      so navigation itself can be verified working in
+                      isolation from Sonic's conversation layer. */}
+                  {(() => {
+                    const navBusy = navGotoStatus.running && navGotoStatus.destination === label
+                    const navBlocked = voiceStatus.running || (navGotoStatus.running && !navBusy)
+                    return (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); goToDestination(label) }}
+                        disabled={navBlocked}
+                        title="Send Argo straight to this table's coordinates — no conversation, just navigation"
+                        style={{
+                          marginTop: 6, width: '100%', padding: '7px 8px', borderRadius: 10,
+                          fontSize: 11, fontWeight: 700,
+                          background: navBusy ? 'rgba(59,240,155,0.15)' : 'rgba(255,255,255,0.05)',
+                          border: `1px solid ${navBusy ? 'rgba(59,240,155,0.35)' : 'rgba(255,255,255,0.14)'}`,
+                          color: navBusy ? 'var(--ok)' : 'rgba(255,255,255,0.75)',
+                          opacity: navBlocked ? 0.4 : 1,
+                          cursor: navBlocked ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {navBusy ? (navGotoStatus.phase_text || 'Heading over…') : 'Navigate'}
+                      </button>
+                    )
+                  })()}
 
                   {/* Cancel — only shown on the table that's actually
                       locked right now (this session's own table). Kills the

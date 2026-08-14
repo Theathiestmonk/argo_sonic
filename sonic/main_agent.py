@@ -882,8 +882,19 @@ def navigate_and_wait(destination: str, timeout_s: float = NAV_TIMEOUT_S) -> boo
 
 
 def perform_travel_action(state: OrderState, announce_purpose: str, destination: str, **ctx) -> bool:
+    # Fire the nav goal immediately, in parallel with the spoken
+    # announcement — say() (an LLM call to render the line, TTS synthesis,
+    # then blocking playback of the full sentence) used to run to
+    # completion BEFORE navigate_and_wait() even started the nav_bridge
+    # subprocess, so the robot sat still through the whole announcement.
+    # That read as "waits 10 seconds before moving": the wheels were
+    # waiting on speech, not on Nav2.
+    result: list[bool] = []
+    nav_thread = threading.Thread(target=lambda: result.append(navigate_and_wait(destination)))
+    nav_thread.start()
     say(announce_purpose, state, **ctx)
-    return navigate_and_wait(destination)
+    nav_thread.join()
+    return result[0] if result else False
 
 
 # ---------------------------------------------------------------------------
