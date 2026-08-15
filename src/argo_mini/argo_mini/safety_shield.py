@@ -173,25 +173,8 @@ def _play_alert_clip() -> bool:
         return False
 
 
-def _play_synth_beep():
-    """Two-tone chirp fallback — used whenever the recorded clip can't play."""
-    try:
-        import sounddevice as sd
-        sr  = 16000
-        t   = np.linspace(0, 0.12, int(sr * 0.12))
-        hi  = (np.sin(2 * np.pi * 1000 * t) * ALERT_VOLUME).astype(np.float32)
-        lo  = (np.sin(2 * np.pi * 700  * t) * ALERT_VOLUME).astype(np.float32)
-        gap = np.zeros(int(sr * 0.04), dtype=np.float32)
-        sd.play(np.concatenate([hi, gap, lo]), samplerate=sr, blocking=True)
-    except Exception as e:
-        print(f"[SafetyShield] synth beep fallback ALSO failed — no alert sound played: {e}")
-
-
 def _beep():
-    def _run():
-        if not _play_alert_clip():
-            _play_synth_beep()
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=_play_alert_clip, daemon=True).start()
 
 
 class SafetyShield(Node):
