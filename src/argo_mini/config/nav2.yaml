@@ -57,15 +57,13 @@
         vy_max: 0.0
         vy_min: 0.0
         wz_max: 0.4
-        # Raised 0.15 -> 0.30 — at 0.15, reaching vx_max=0.50 took ~3.3s and
-        # ~0.8m, so on short table-to-table trips the robot barely ever
-        # cruised at the cap before decelerating again for the next
-        # stop/turn: raising vx_max alone wasn't increasing the actual
-        # overall speed. 0.30 still well under the original 0.5 (never
-        # actually confirmed to drift on this floor, just lowered as a
-        # precaution) — a middle step, not a full revert.
-        ax_max: 0.30
-        ax_min: -0.30
+        # Raised further to 0.50 — explicitly called out as a good change
+        # (unlike the safety_shield distances, left as-is). Back near the
+        # original 0.5 accel; reaching vx_max=0.50 now takes ~1s instead
+        # of ~3.3s, so short table-to-table trips actually cruise at the
+        # cap instead of spending most of the trip ramping up/down.
+        ax_max: 0.50
+        ax_min: -0.50
         ay_min: 0.0
         ay_max: 0.0
         # Angular accel also lowered, less aggressively — in-place rotation
@@ -198,8 +196,8 @@
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
       # clamped there anyway.
-      max_accel: [0.30, 0.0, 0.6]
-      max_decel: [-0.30, 0.0, -0.6]
+      max_accel: [0.50, 0.0, 0.6]
+      max_decel: [-0.50, 0.0, -0.6]
       odom_topic: /odom
       velocity_timeout: 1.0
 

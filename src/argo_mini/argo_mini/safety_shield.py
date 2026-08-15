@@ -12,19 +12,18 @@ Three independent sensor sources with graduated forward-speed response:
       margin throttled speed well below vx_max any time something was
       within a full metre of the forward path, common indoors
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
-    < LIDAR_STOP_DIST (0.35 m) : hard stop — lowered from 0.60 m; that
-      margin sat inside the final approach to a table/kitchen waypoint
-      (deliberately close to furniture), hard-stopping the last stretch
-      and leaving NavigateToPose to abort centimeters from the goal
+    < LIDAR_STOP_DIST (0.40 m) : hard stop — raised back up for more
+      stopping margin, taking priority over the final-approach-abort
+      tradeoff that came with lowering it (see git history)
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
     > DEPTH_SLOW_DIST (0.55 m) : full speed — lowered from 0.80 m, same reasoning
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
     < DEPTH_STOP_DIST (0.25 m) : hard stop — lowered from 0.40 m, same reasoning
 
-  Ultrasonic (Range x 4)  – binary, no slow zone needed at 30 cm
-    FL/FR < US_FRONT_DIST (0.30 m) : hard stop forward
-    BL/BR < US_REAR_DIST  (0.30 m) : hard stop reverse
+  Ultrasonic (Range x 4)  – binary, no slow zone needed at 40 cm
+    FL/FR < US_FRONT_DIST (0.40 m) : hard stop forward
+    BL/BR < US_REAR_DIST  (0.40 m) : hard stop reverse
 
 Gate:
     fwd_scale = min(lidar_scale, depth_scale, us_scale)   ∈ [0.0, 1.0]
@@ -59,15 +58,11 @@ from sensor_msgs.msg import LaserScan, PointCloud2, Range
 # whatever the nav stack's own limits allowed. Still a real graduated
 # zone before the hard stop below, just narrower.
 LIDAR_SLOW_DIST  = 0.70    # m   – begin speed reduction
-# Lowered from 0.60 — a service-point waypoint (table/kitchen) is
-# deliberately close to furniture, so the old margin sat *inside* the
-# final approach distance: Nav2 kept commanding forward motion for the
-# last stretch while this hard-stopped it every time, distance_remaining
-# plateaued, and the NavigateToPose action eventually reported ABORTED
-# despite the robot being centimeters from the goal (confirmed from
-# voice_session.log: "distance remaining" stuck at 0.00-0.17 m for
-# seconds before the abort). Still stops well before contact.
-LIDAR_STOP_DIST  = 0.35    # m   – hard stop
+# Raised back to 0.40 — explicitly asked for more margin here, taking
+# priority over the earlier "final approach was landing inside this
+# margin" concern (see git history) — that goal-abort tradeoff is
+# accepted in exchange for stopping farther from an obstacle.
+LIDAR_STOP_DIST  = 0.40    # m   – hard stop
 LIDAR_WIDTH_HALF = 0.35    # m   – half-width of danger corridor
 LIDAR_MIN_PTS    = 3       # minimum scan points to register an obstacle
 LIDAR_STALE_SECS = 1.0     # s   – treat as stale if no scan arrives
@@ -83,8 +78,8 @@ DEPTH_HEIGHT_MAX =  0.05   # opt Y – upper bound (ignore ceiling)
 DEPTH_STALE_SECS = 1.0     # s
 
 # ── Ultrasonic ────────────────────────────────────────────────────────────────
-US_FRONT_DIST    = 0.30    # m   – hard stop forward
-US_REAR_DIST     = 0.30    # m   – hard stop reverse
+US_FRONT_DIST    = 0.40    # m   – hard stop forward
+US_REAR_DIST     = 0.40    # m   – hard stop reverse
 US_STALE_SECS    = 1.0     # s
 
 # ── Graduated-speed smoothing ─────────────────────────────────────────────────
