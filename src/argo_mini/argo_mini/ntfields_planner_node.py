@@ -27,6 +27,34 @@ from tf2_ros import TransformException
 from .ntfields_model import NTFieldsModel, CoordNormalizer
 
 
+def _chaikin_smooth(points: list, iterations: int = 3) -> list:
+    """Chaikin's corner-cutting: replaces each interior corner with two
+    points 1/4 and 3/4 along its adjoining segments, repeated a few times
+    to converge toward a smooth curve. predict_path()'s fixed-step
+    gradient descent (~0.30m/step, see ntfields.yaml) locks in direction
+    per step and only bends sharply right at a learned obstacle boundary
+    — this turns that "polygon" path into one that curves through turns
+    instead of cornering through them.
+
+    Deliberately geometric, not obstacle-aware: each new point is a
+    weighted average of two existing points, so it can never land outside
+    the original polyline's own convex hull — it rounds corners without
+    ever bulging past the space the original (already obstacle-avoiding)
+    path swept out. Endpoints are kept exact — start is the robot's real
+    pose and goal is the exact requested destination, not approximations.
+    """
+    if len(points) < 3:
+        return points
+    for _ in range(iterations):
+        smoothed = [points[0]]
+        for p0, p1 in zip(points[:-1], points[1:]):
+            smoothed.append((0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]))
+            smoothed.append((0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]))
+        smoothed.append(points[-1])
+        points = smoothed
+    return points
+
+
 class NTFieldsPlannerNode(LifecycleNode):
     """
     Drop-in Python replacement for nav2_planner/planner_server.
@@ -60,6 +88,11 @@ class NTFieldsPlannerNode(LifecycleNode):
         self._norm       = None
         self._tf_buf     = tf2_ros.Buffer()
         self._tf_listen  = tf2_ros.TransformListener(self._tf_buf, self)
+        # Republishes each computed path on a plain topic, purely for
+        # visualization (RViz's usual "Path" display, or the web UI's
+        # MapCanvas.jsx via rosbridge) — ComputePathToPose's own result
+        # only reaches bt_navigator, nothing external ever sees it otherwise.
+        self._plan_pub   = self.create_publisher(Path, 'plan', 10)
 
         # Load model at configure time so on_activate is instant
         if not self._model_path or not os.path.exists(self._model_path):
@@ -165,17 +198,27 @@ class NTFieldsPlannerNode(LifecycleNode):
             goal_handle.abort()
             return result
 
+        # World-space points, then smoothed — predict_path()'s fixed-step
+        # gradient descent produces a "polygon" (locks in direction for
+        # each ~0.30m step, only bends sharply at a learned obstacle
+        # boundary); Chaikin smoothing rounds those corners into a curve
+        # MPPI can track without the sharp heading snaps. Smoothed in
+        # world space (metres) rather than normalised model space — purely
+        # geometric, so it doesn't matter which, but keeps this step
+        # decoupled from the model's own coordinate handling.
+        world_pts = [tuple(self._norm.to_world(pt_n)) for pt_n in path_n]
+        smoothed_pts = _chaikin_smooth(world_pts)
+
         # Build nav_msgs/Path
         path_msg              = Path()
         path_msg.header.frame_id = 'map'
         path_msg.header.stamp    = self.get_clock().now().to_msg()
 
-        for pt_n in path_n:
-            pt_w  = self._norm.to_world(pt_n)
+        for x, y in smoothed_pts:
             pose  = PoseStamped()
             pose.header            = path_msg.header
-            pose.pose.position.x   = float(pt_w[0])
-            pose.pose.position.y   = float(pt_w[1])
+            pose.pose.position.x   = float(x)
+            pose.pose.position.y   = float(y)
             pose.pose.position.z   = 0.0
             pose.pose.orientation.w = 1.0
             path_msg.poses.append(pose)
@@ -183,8 +226,9 @@ class NTFieldsPlannerNode(LifecycleNode):
         elapsed = time.time() - t0
         self.get_logger().info(
             f'[NTFieldsPlanner] path ready  '
-            f'waypoints={len(path_n)}  t={elapsed*1000:.1f}ms')
+            f'waypoints={len(path_n)}->{len(smoothed_pts)} (smoothed)  t={elapsed*1000:.1f}ms')
 
+        self._plan_pub.publish(path_msg)
         result.path = path_msg
         result.planning_time.sec     = int(elapsed)
         result.planning_time.nanosec = int((elapsed % 1.0) * 1e9)

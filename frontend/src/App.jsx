@@ -42,6 +42,7 @@ export default function App() {
   const [mapData, setMapData]     = useState(null)
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
+  const [plannedPath, setPlannedPath] = useState([])
   // Same map-frame localized pose as robotPose above (slam_toolbox's
   // /pose) but kept in a ref too, not just state — arrival-checking polls
   // this on an interval and doesn't need a re-render on every tick the way
@@ -76,6 +77,17 @@ export default function App() {
         setFrontiers((msg.markers ?? []).filter(m => m.action === 0).map(m => ({ x: m.pose.position.x, y: m.pose.position.y })))
       })
       subRefs.current.frontiers = t
+    }
+    if (!subRefs.current.plan) {
+      // ntfields_planner_node's ComputePathToPose result, republished as a
+      // plain topic (see planner_node.py's _plan_pub) purely so it can be
+      // drawn on the map — RViz's usual way of seeing "the path formed by
+      // the planner", now available here too since this UI has no RViz.
+      const t = ros.topic('/plan', 'nav_msgs/msg/Path', { throttle_rate: 200 })
+      t?.subscribe(msg => {
+        setPlannedPath((msg.poses ?? []).map(p => ({ x: p.pose.position.x, y: p.pose.position.y })))
+      })
+      subRefs.current.plan = t
     }
     if (!subRefs.current.pose) {
       // slam_toolbox's map-frame-corrected localized pose — deliberately NOT
@@ -208,7 +220,7 @@ export default function App() {
     showToast('Robot position set — localizing…', 'info')
   }, [showToast])
 
-  const shared = { mapData, robotPose, frontiers, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
+  const shared = { mapData, robotPose, frontiers, plannedPath, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
@@ -413,6 +425,7 @@ export default function App() {
             onSetInitialPose={sendInitialPose}
             mapData={mapData}
             robotPose={robotPose}
+            plannedPath={plannedPath}
             onOpenSettings={() => setShowSettings(true)}
             onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
             onNavInitializing={setNavInitializing}

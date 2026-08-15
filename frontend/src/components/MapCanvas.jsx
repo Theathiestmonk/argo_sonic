@@ -14,7 +14,7 @@ function worldToCanvas(wx, wy, md, offX, offY, scale) {
 }
 
 export default function MapCanvas({
-  mapData, robotPose, goalPose, labels = [], frontiers = [], clickable = false, onMapClick,
+  mapData, robotPose, goalPose, plannedPath = [], labels = [], frontiers = [], clickable = false, onMapClick,
   // poseEstimateMode mirrors RViz's "2D Pose Estimate" tool — click-drag
   // instead of a plain click, since a pose needs a heading too, not just a
   // position. Mutually exclusive with `clickable`'s plain-click "add table"
@@ -129,6 +129,24 @@ export default function MapCanvas({
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
       ctx.fillText(l.name, px, py - 11)
     })
+
+    // Planned path (gold dashed line) — ntfields_planner_node's own
+    // ComputePathToPose result, republished on /plan (see App.jsx) purely
+    // for this. Drawn before the robot/goal markers so they sit on top.
+    if (plannedPath.length > 1) {
+      ctx.save()
+      ctx.setLineDash([6, 5])
+      ctx.strokeStyle = '#e2b35c'
+      ctx.lineWidth = 2.5
+      ctx.lineJoin = 'round'
+      ctx.beginPath()
+      plannedPath.forEach((p, i) => {
+        const [px, py] = toC(p.x, p.y)
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py)
+      })
+      ctx.stroke()
+      ctx.restore()
+    }
 
     // Robot (maroon arrow)
     if (robotPose) {

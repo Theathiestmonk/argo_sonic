@@ -47,7 +47,7 @@ const TABLE_ACTIONS = [
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [curPos, setCurPos]         = useState('Home')
@@ -687,6 +687,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               mapData={mapData}
               robotPose={robotPose}
               goalPose={goalMarker}
+              plannedPath={plannedPath}
               poseEstimateMode={poseMode}
               onPoseEstimate={({ wx, wy, theta }) => {
                 onSetInitialPose?.(wx, wy, theta)
