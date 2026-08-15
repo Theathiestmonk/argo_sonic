@@ -1062,6 +1062,9 @@ RENDER_PURPOSE_HINTS = {
     "menu_describe_category": "Tell them warmly what's available in {category} — {items} — like a waiter describing the menu, not reading out a price list. Then ask if anything sounds good, or if they'd like to hear about something else.",
     "menu_answer_question": "They asked: \"{question}\". Answer it naturally using what you know about {category} — {items}. Then let them know they can order, hear about another category, or you're happy to keep chatting.",
     "menu_browse_farewell": "They're done browsing the menu for now and aren't ordering yet. Give a brief, warm sign-off — let them know you're happy to come back whenever they're ready.",
+    "delivery_arrived": "You've just arrived at the table carrying their order. Let them know it's here, and ask them to let you know once they've picked it up so you can head back.",
+    "delivery_confirm_retry": "You're still waiting for them to pick up their order off you. Ask again, briefly and patiently, whether they've got it yet.",
+    "delivery_confirmed": "They've picked up their order. Give a brief, warm sign-off — enjoy the meal — before you head back to the kitchen.",
 }
 
 
@@ -1293,8 +1296,14 @@ def n_intent_classify(state: OrderState) -> dict:
         state.first_turn = False
         state.trigger_source = "ui"
         state.table_no = FORCED_LOCATION
-        state.next_node = "n_navigate_to_table" if FORCED_ACTION in DISPATCH_TAKE_ORDER_ACTIONS else "n_stub"
-        if state.next_node == "n_stub":
+        if FORCED_ACTION in DISPATCH_TAKE_ORDER_ACTIONS:
+            state.post_arrival_node = "n_greet_and_ask_order"
+            state.next_node = "n_navigate_to_table"
+        elif FORCED_ACTION == "deliver":
+            state.post_arrival_node = "n_deliver_announce"
+            state.next_node = "n_navigate_to_table"
+        else:
+            state.next_node = "n_stub"
             state.pending_seed = {"stub_intent": FORCED_ACTION}
         return asdict(state)
 
@@ -1371,6 +1380,29 @@ def n_navigate_to_table(state: OrderState) -> dict:
     return asdict(state)
 
 
+def n_deliver_announce(state: OrderState) -> dict:
+    """Dispatched via the table card's "Deliver" button (SONIC_ACTION_HINT=
+    deliver) — the food's already on the robot, staged by kitchen staff
+    before dispatch; this just announces arrival and waits for the guest to
+    physically take it before heading back. ask_retry reused here exactly
+    like n_ask_table/n_ask_qty use it — same node, retry-flavored purpose
+    on the loop-back rather than repeating the identical "it's here" line."""
+    trace_node("n_deliver_announce", state)
+    purpose = "delivery_confirm_retry" if state.ask_retry else "delivery_arrived"
+    outcome = get_reply_or_route(state, "n_deliver_announce", purpose, expects="yes_no")
+    if outcome is None:
+        return asdict(state)
+    if outcome.get("yes_no") == "yes":
+        state.ask_retry = False
+        say("delivery_confirmed", state)
+        state.went_idle = True
+        state.next_node = "n_respond"
+        return asdict(state)
+    state.ask_retry = True
+    state.next_node = "n_deliver_announce"
+    return asdict(state)
+
+
 def n_greet_and_ask_order(state: OrderState) -> dict:
     trace_node("n_greet_and_ask_order", state)
     report_phase("taking_order", "Taking order", state.table_no)
@@ -1404,6 +1436,20 @@ def _menu_handoff_to_order(state: OrderState, outcome: dict) -> None:
     state.active_menu_category = None
     state.category_intro_said = False
     state.next_node = "n_extract_items"
+
+
+def _order_handoff_to_menu(state: OrderState, outcome: dict) -> None:
+    """Symmetric to _menu_handoff_to_order() — the guest asked about the
+    menu ("what do you have", "what's on the menu") while already in the
+    order flow instead of naming a dish. Without this, n_extract_items has
+    no way to tell that apart from a mis-heard/unmatched dish name, and
+    just apologizes and re-asks for a dish forever. Seeds
+    n_menu_pick_category the same seeded-fast-path way, so a category they
+    already mentioned carries straight through instead of a fresh re-ask."""
+    state.pending_seed = outcome if (outcome.get("items") or outcome.get("category")) else None
+    state.active_menu_category = None
+    state.category_intro_said = False
+    state.next_node = "n_menu_pick_category"
 
 
 def n_menu_pick_category(state: OrderState) -> dict:
@@ -1504,6 +1550,10 @@ def n_extract_items(state: OrderState) -> dict:
             outcome = get_reply_or_route(state, "n_extract_items", "ask_what_would_you_like", expects="items")
         if outcome is None:
             return asdict(state)
+
+    if outcome.get("intent") == "menu" and not outcome.get("items"):
+        _order_handoff_to_menu(state, outcome)
+        return asdict(state)
 
     items = outcome.get("items") or []
     if not items:
@@ -1746,6 +1796,7 @@ NODE_FUNCS = {
     "n_intent_classify": n_intent_classify,
     "n_ask_table": n_ask_table,
     "n_navigate_to_table": n_navigate_to_table,
+    "n_deliver_announce": n_deliver_announce,
     "n_greet_and_ask_order": n_greet_and_ask_order,
     "n_menu_pick_category": n_menu_pick_category,
     "n_menu_answer_questions": n_menu_answer_questions,
