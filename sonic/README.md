@@ -1,8 +1,8 @@
 # Sonic — restaurant voice agent (LangGraph + Postgres)
 
 Real-time voice NLP agent for the cafe robot. Wake word ("Hi Sonic") → greet
-→ listen → Groq LLM NLU (intent classification + slot extraction, with
-mid-conversation intent switching) → dialogue handler (menu / call_people /
+→ listen → OpenAI LLM NLU (intent classification + slot extraction,
+with mid-conversation intent switching) → dialogue handler (menu / call_people /
 take_order / navigation / cutlery / about / normal_conv / get_bill) → Sarvam
 TTS → back to idle.
 
@@ -29,11 +29,16 @@ python3 -m venv venv && venv/bin/pip install -r requirements.txt
 
 Create `sonic/.env` (gitignored — copy `.env.example`):
 ```
-GROQ_API_KEY=gsk_...      # free at console.groq.com
+OPENAI_API_KEY=sk-...     # platform.openai.com
 SARVAM_API_KEY=sk_...     # dashboard.sarvam.ai — not needed for --text-mode
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 ROBOT_UID=SONIC-001
 ```
+
+`main_agent.py`'s LLM defaults to OpenAI's gpt-4o-mini (see `LLM_URL`/
+`LLM_MODEL` in `.env.example` to point elsewhere). A local Ollama model on
+the Jetson was tried and rejected — the robot's own GPU-based path planner
+(`ntfields_planner_node.py`) needs that memory more than chat latency does.
 
 `backend/launcher.py` loads this same `.env` file, so `DATABASE_URL`/
 `ROBOT_UID` only need to be set once here.
