@@ -179,18 +179,24 @@
   velocity_smoother:
     ros__parameters:
       use_sim_time: false
-      # FULLY REVERTED to the original 30.0/OPEN_LOOP — after changing these
-      # to fix jerkiness, the robot stopped responding to any goal at all
-      # (RViz AND the UI), and reverting feedback alone wasn't enough to
-      # restore motion. Rolling back smoothing_frequency too so we're testing
-      # against the exact pre-change config, to confirm whether this file is
-      # the cause at all before looking elsewhere. Once nav is confirmed
-      # working again on this exact config, re-apply and re-test ONE change
-      # at a time (smoothing_frequency first, feedback second) rather than
-      # both together, so a future regression is unambiguous about which one
-      # did it.
-      smoothing_frequency: 30.0
-      feedback: "OPEN_LOOP"
+      # Retrying both together — the "robot stopped responding to any goal
+      # at all" regression that came with this change last time was later
+      # root-caused to something entirely unrelated (argo_sonic_nav.py's
+      # default map + a missing/incomplete office_map2.json waypoints
+      # file), not this file, so that scare no longer blocks retesting it.
+      # smoothing_frequency matched to controller_server's
+      # controller_frequency (20.0) above it, so a 30Hz consumer isn't
+      # aliasing against a 20Hz source (sometimes re-reading the same
+      # command, sometimes straddling a boundary oddly — bigger-than-
+      # expected deltas that read as jerky motion downstream).
+      # feedback=CLOSED_LOOP tracks the robot's actual measured /odom
+      # velocity instead of an assumed model — relevant to the current
+      # drift experiment too, since it reacts to real wheel slip rather
+      # than commanding blind. If nav breaks again, isolate by reverting
+      # feedback to OPEN_LOOP first (that's what didn't fully explain the
+      # regression last time) before touching smoothing_frequency.
+      smoothing_frequency: 20.0
+      feedback: "CLOSED_LOOP"
       max_velocity: [0.60, 0.0, 0.4]
       min_velocity: [-0.15, 0.0, -0.4]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
