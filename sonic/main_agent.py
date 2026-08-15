@@ -1327,6 +1327,11 @@ reasonable reading of the utterance as addressing what was just asked, even if i
 phrased, or only partially matches — extract whatever you confidently can and leave the rest null rather than \
 rejecting the whole utterance. Only set answers_pending=false when the utterance is genuinely about something \
 else entirely, or is pure noise/unintelligible with no plausible connection to what was asked.
+- answers_pending and intent are independent judgments — don't let a guess about intent override a clear, \
+direct answer to the current stage's question. Example: stage=table_no, they say "table four" -> \
+table_no="4", answers_pending=true, intent=null. The fact they'll eventually order food does NOT make \
+intent="take_order" right now — intent is only set when THIS utterance itself expresses that request, not \
+because ordering is where the conversation is generally headed.
 - Similarly, only leave yes_no null when the utterance truly gives no signal either way — when in doubt \
 between a weak yes and null, prefer the yes/no reading over forcing a re-ask.
 - Quantity: singular phrasing or "a"/"an" with no explicit number given -> quantity=1. Plural with no \
@@ -1417,6 +1422,15 @@ def interpret(state: OrderState, transcript: str, expects: str) -> dict:
     db_log_turn(state, "user", transcript, intent=result.get("intent"), slots=result)
     if result.get("table_no") and not state.table_no:
         state.table_no = str(result["table_no"])
+        if expects == "table_no":
+            # Capturing a table number here already proves this utterance
+            # addressed the table question — trust that over answers_pending,
+            # which is occasionally misclassified (e.g. a spurious guessed
+            # intent) even with the extraction prompt's explicit guidance.
+            # Otherwise get_reply_or_route()'s off-topic branch loops the
+            # guest through the same question forever despite having
+            # actually already answered it.
+            result["answers_pending"] = True
     return result
 
 
