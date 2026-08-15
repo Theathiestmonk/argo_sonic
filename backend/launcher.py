@@ -929,6 +929,16 @@ def _run_nav_bridge(destination, map_name, timeout_s=90.0):
         return False
     ok = result.returncode == 0 and 'RESULT:SUCCESS' in result.stdout
     print(f"[launcher] /nav/goto {destination!r}: {'arrived' if ok else 'FAILED'} (rc={result.returncode})")
+    if not ok:
+        # nav_bridge.py logs its own diagnosis (action server not found,
+        # goal rejected, timeout reason, ...) via plain print() -- stdout,
+        # not stderr -- same blind spot main_agent.py's navigate_and_wait()
+        # had until it got fixed; mirrored here so a Navigate-button
+        # failure is diagnosable too, not just "FAILED (rc=1)".
+        if result.stdout:
+            print(f"[launcher] /nav/goto stdout: {result.stdout.strip()[-1000:]}")
+        if result.stderr:
+            print(f"[launcher] /nav/goto stderr: {result.stderr.strip()[-500:]}")
     return ok
 
 
