@@ -23,6 +23,7 @@ export default function App() {
   const [step, setStep]           = useState(0)
   const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
+  const [battery, setBattery] = useState({ connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
   const [rosUrl, setRosUrl]       = useState(() => {
     // Auto-use the same host the page was served from.
     // If opened from http://192.168.1.100:3000 → ws://192.168.1.100:9090
@@ -134,6 +135,22 @@ export default function App() {
 
   useEffect(() => { connect(); return () => clearInterval(retryRef.current) }, [])
 
+  // Live BMS reading (GET /battery, backend/launcher.py) — drives the top
+  // header's battery pill, next to the Argo Sonic brand/connection status.
+  // 10s is plenty; the pack's own state doesn't change meaningfully faster.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl(rosUrl)}/battery`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setBattery(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 10000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [rosUrl])
+
   useEffect(() => { localStorage.setItem('argo_selected_map', selectedMap) }, [selectedMap])
 
   // Land on the dashboard when maps already exist; first-time setup (no maps
@@ -220,6 +237,45 @@ export default function App() {
     showToast('Robot position set — localizing…', 'info')
   }, [showToast])
 
+  // "5h 30m" / "45m" — mirrors dashboard.py's estimate_hours_and_minutes(),
+  // just formatted for display instead of returned as raw seconds. Charging
+  // and discharging use different source fields (see GET /battery's doc in
+  // backend/launcher.py) — same formatting either way.
+  const formatHm = (hours) => {
+    const totalMin = Math.round((hours || 0) * 60)
+    const h = Math.floor(totalMin / 60)
+    const m = totalMin % 60
+    return h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+  // Still waiting on the first real BMS reading (backend/launcher.py's
+  // run_bms_thread is scanning/connecting over Bluetooth, which can take a
+  // few seconds) — show a loading spinner instead of a flat "not connected"
+  // claim, since from here we can't tell "still connecting" apart from
+  // "genuinely unreachable" and shouldn't imply the latter by default.
+  const batteryLabel = !battery.connected ? (
+    <span style={{
+      display: 'inline-block', width: 10, height: 10, borderRadius: '50%',
+      border: '2px solid rgba(255,255,255,0.15)', borderTopColor: 'var(--muted)',
+      animation: 'spin-slow 0.8s linear infinite', verticalAlign: 'middle',
+    }} />
+  ) : battery.charging ? `Charging · ${formatHm(battery.estimated_charge_remaining_hours)} left`
+    : formatHm(battery.estimated_remaining_hours)
+  const batterySub = !battery.connected ? 'Connecting…'
+    : `${Math.round(battery.battery_percent)}% battery`
+  const batteryRgb = !battery.connected ? '160,160,160'   // muted grey
+    : battery.charging ? '127,168,232'                     // blue
+    : battery.battery_percent < 20 ? '255,65,65'           // danger red
+    : battery.battery_percent < 40 ? '226,179,92'           // gold
+    : '59,240,155'                                          // ok green
+  const ThunderboltIcon = () => (
+    <svg
+      width="12" height="12" viewBox="0 0 24 24" fill="var(--blue)"
+      style={{ animation: 'pulse-dot 0.9s ease-in-out infinite', flexShrink: 0 }}
+    >
+      <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+    </svg>
+  )
+
   const shared = { mapData, robotPose, frontiers, plannedPath, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
 
   return (
@@ -269,6 +325,21 @@ export default function App() {
               {connected ? 'Connected' : 'Not connected'}
             </div>
           </div>
+        </div>
+
+        {/* Battery — moved here from the dashboard's left rail so it's
+            visible from every view, not just the dashboard. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 12px', borderRadius: 99, flexShrink: 0,
+          background: `rgba(${batteryRgb},0.14)`,
+          border: `1px solid rgba(${batteryRgb},0.35)`,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12.5, fontWeight: 700, color: '#fff' }}>
+            {battery.connected && battery.charging && <ThunderboltIcon />}
+            {batteryLabel}
+          </div>
+          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.65)' }}>{batterySub}</div>
         </div>
 
         {/* Step indicator — only relevant while running the map/table wizard */}
