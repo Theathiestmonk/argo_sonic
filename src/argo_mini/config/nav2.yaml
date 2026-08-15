@@ -52,7 +52,7 @@
         vx_std: 0.2
         vy_std: 0.2
         wz_std: 0.4
-        vx_max: 0.60
+        vx_max: 0.15
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
@@ -179,19 +179,19 @@
   velocity_smoother:
     ros__parameters:
       use_sim_time: false
-      # smoothing_frequency/feedback confirmed back to 30.0/OPEN_LOOP —
-      # CLOSED_LOOP broke nav ("does not move" at all) a second time, with
-      # the earlier office_map2/waypoints bug no longer in play, so this
-      # combo is the real cause, not coincidental timing. Not retrying
-      # again without a live /odom-reaching-the-smoother investigation
-      # first.
+      # FULLY REVERTED to the original 30.0/OPEN_LOOP — after changing these
+      # to fix jerkiness, the robot stopped responding to any goal at all
+      # (RViz AND the UI), and reverting feedback alone wasn't enough to
+      # restore motion. Rolling back smoothing_frequency too so we're testing
+      # against the exact pre-change config, to confirm whether this file is
+      # the cause at all before looking elsewhere. Once nav is confirmed
+      # working again on this exact config, re-apply and re-test ONE change
+      # at a time (smoothing_frequency first, feedback second) rather than
+      # both together, so a future regression is unambiguous about which one
+      # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      # max_velocity's linear cap was left at the old 0.15 after the
-      # feedback revert above, silently overriding the MPPI controller's
-      # vx_max=0.60 (above) back down to 0.15 regardless — brought back in
-      # sync so the ongoing 0.60 drift retest is actually testing 0.60.
-      max_velocity: [0.60, 0.0, 0.4]
+      max_velocity: [0.15, 0.0, 0.4]
       min_velocity: [-0.15, 0.0, -0.4]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
