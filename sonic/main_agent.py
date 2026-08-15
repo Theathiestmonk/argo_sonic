@@ -34,9 +34,15 @@ intent-switch-and-resume machinery either (sonic_agent.py had this) since
 there's nowhere meaningful to switch to yet; an off-topic reply during any
 ask-node just gets a brief redirect back to the same question.
 
-Run modes (same three as sonic_agent.py):
+Run modes (same three as sonic_agent.py, plus --test-mode):
     python main_agent.py               real mic/speaker/wake-word loop
     python main_agent.py --text-mode   typed input / printed output
+    python main_agent.py --test-mode   real mic/speaker/wake-word loop, but
+        every navigate_and_wait() call is an instant no-op arrival instead
+        of a real Nav2 trip — everything else (wake word, listening, STT,
+        LLM, TTS, ordering, menu browsing, confirm) is exercised for real.
+        Combine with --text-mode too for a fully offline NLP-only test.
+        Same effect as setting SONIC_SKIP_NAV=1.
     TABLE_NO=<n> SONIC_ACTION_HINT=<order|room_service|bill|deliver> set  ->
         one dispatched Kitchen->Table->Kitchen round trip, no wake word.
 
@@ -95,8 +101,21 @@ SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_STT_MODEL = "saarika:v2.5"
 SARVAM_TTS_MODEL = "bulbul:v3"
+# Default/fallback only now — STT auto-detects per utterance (language_code=
+# "unknown", see sarvam_stt()) and each turn's actual detected language lives
+# on state.spoken_language instead. Still used as the TTS language before the
+# first utterance ever comes in, and as a fallback if detection ever fails.
 SARVAM_LANGUAGE_CODE = "en-IN"
-SARVAM_SPEAKER = "ishita"
+SARVAM_SPEAKER = "ishita"   # a bulbul:v3 persona voice, multilingual across the languages below
+
+# Human-readable names for render()'s "respond in {language}" instruction —
+# LLMs follow a plain language name more reliably than a bare BCP-47 code.
+# Hindi/English are this deployment's two actually-supported languages;
+# saarika's auto-detect covers more of Sarvam's 11 languages than this, but
+# render()/TTS would need language-specific persona/prompt tuning to actually
+# use them well, so anything else falls back to English rather than silently
+# mis-rendering.
+LANGUAGE_NAMES = {"en-IN": "English", "hi-IN": "Hindi"}
 SARVAM_TTS_PACE = 1.0
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 SARVAM_TTS_SAMPLE_RATE = 22050
@@ -160,10 +179,13 @@ FORCED_ACTION = os.environ.get("SONIC_ACTION_HINT") or None
 MAP_NAME = os.environ.get("SONIC_MAP_NAME", "office_map")
 # Test-only escape hatch: skip real Nav2 trips entirely and treat every
 # navigate_and_wait() call as an instant arrival, so the rest of the
-# conversation (ordering, confirm, etc.) can be exercised without a working
-# ROS/Nav2 setup. Never set this in production — a genuine nav failure
-# should end the session (see n_navigate_to_table), not silently pretend
-# the robot arrived somewhere it never went.
+# conversation (wake word, listening, ordering, menu browsing, confirm,
+# etc. — everything except actually driving) can be exercised end to end
+# without a working ROS/Nav2 setup. Two ways to trigger it — the env var
+# (unchanged, for scripts/CI) or `--test-mode` on the CLI (see main()),
+# whichever's set wins. Never set this in production — a genuine nav
+# failure should end the session (see n_navigate_to_table), not silently
+# pretend the robot arrived somewhere it never went.
 SONIC_SKIP_NAV = os.environ.get("SONIC_SKIP_NAV") == "1"
 
 # order/room_service both run the full take_order flow (room_service has no
@@ -194,6 +216,8 @@ def require_api_keys(need_sarvam: bool = True) -> None:
 class OrderState:
     # trigger normalization — how this session started
     trigger_source: str = "voice"          # "ui" | "voice"
+    spoken_language: str = "en-IN"          # BCP-47 — updated from STT's detected language each turn
+                                             # (listen()); render()/TTS respond in this same language
     table_no: Optional[str] = None
     location_reached: bool = False
     post_arrival_node: str = "n_greet_and_ask_order"   # where n_navigate_to_table goes once it arrives —
@@ -636,7 +660,11 @@ def play_audio(audio: np.ndarray, samplerate: int = SAMPLE_RATE) -> None:
 # Sarvam AI: STT (saarika:v2.5) / TTS (bulbul:v3)
 # ---------------------------------------------------------------------------
 
-def sarvam_stt(audio: np.ndarray) -> str:
+def sarvam_stt(audio: np.ndarray) -> tuple[str, str]:
+    """Returns (transcript, detected_language) — language_code="unknown"
+    tells saarika to auto-detect per utterance (it handles Hindi/English
+    code-mixed speech natively, including mid-sentence switches) rather than
+    assuming one fixed language for every utterance in the session."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
@@ -648,22 +676,24 @@ def sarvam_stt(audio: np.ndarray) -> str:
     resp = requests.post(
         SARVAM_STT_URL,
         headers={"api-subscription-key": SARVAM_API_KEY},
-        data={"model": SARVAM_STT_MODEL, "language_code": SARVAM_LANGUAGE_CODE},
+        data={"model": SARVAM_STT_MODEL, "language_code": "unknown"},
         files={"file": ("utterance.wav", buf, "audio/wav")},
         timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
-    return (data.get("transcript") or data.get("text") or "").strip()
+    transcript = (data.get("transcript") or data.get("text") or "").strip()
+    detected_lang = data.get("language_code") or SARVAM_LANGUAGE_CODE
+    return transcript, detected_lang
 
 
-def sarvam_tts(text: str) -> tuple[np.ndarray, int]:
+def sarvam_tts(text: str, language_code: str = SARVAM_LANGUAGE_CODE) -> tuple[np.ndarray, int]:
     resp = requests.post(
         SARVAM_TTS_URL,
         headers={"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"},
         json={
             "inputs": [text],
-            "target_language_code": SARVAM_LANGUAGE_CODE,
+            "target_language_code": language_code,
             "model": SARVAM_TTS_MODEL,
             "speaker": SARVAM_SPEAKER,
             "pace": SARVAM_TTS_PACE,
@@ -682,7 +712,7 @@ def sarvam_tts(text: str) -> tuple[np.ndarray, int]:
     return pcm, sr
 
 
-def sarvam_tts_stream(sentences: list) -> bool:
+def sarvam_tts_stream(sentences: list, language_code: str = SARVAM_LANGUAGE_CODE) -> bool:
     try:
         import websockets.sync.client as ws_client
     except ImportError:
@@ -696,7 +726,7 @@ def sarvam_tts_stream(sentences: list) -> bool:
             ws.send(json.dumps({
                 "type": "config",
                 "data": {
-                    "language_code": SARVAM_LANGUAGE_CODE,
+                    "language_code": language_code,
                     "speaker": SARVAM_SPEAKER,
                     "model": SARVAM_TTS_MODEL,
                     "pace": SARVAM_TTS_PACE,
@@ -743,11 +773,34 @@ def split_sentences(text: str) -> list:
     return [p for p in parts if p]
 
 
+def _chunk_into_sentences(text_stream):
+    """Buffers streamed text deltas (e.g. from LLMClient.chat_stream()) and
+    yields each complete sentence as soon as its terminal punctuation AND
+    the text after it have arrived — same boundary rule split_sentences()
+    uses (_SENTENCE_SPLIT_RE), just applied incrementally so TTS can start
+    on sentence 1 while the LLM is still generating sentence 2+, instead of
+    waiting for the whole response first."""
+    buf = ""
+    for delta in text_stream:
+        buf += delta
+        parts = _SENTENCE_SPLIT_RE.split(buf)
+        for complete in parts[:-1]:
+            complete = complete.strip()
+            if complete:
+                yield complete
+        buf = parts[-1]
+    buf = buf.strip()
+    if buf:
+        yield buf
+
+
 def speak_text(text: str) -> None:
-    """Low-level: prints, logs the turn, and does TTS playback. Nodes should
-    call say()/render() rather than this directly — this exists as the shared
-    output path for both say() and the interrupt-prompt path in
-    run_graph_session()."""
+    """Low-level: prints, logs the turn, and does TTS playback for an
+    already-complete string. Used by the interrupt-prompt path in
+    run_graph_session() (listen_with_patience()) — that path needs the full
+    rendered text before it can even call interrupt(), so streaming doesn't
+    help there (see speak_stream() below, used by say() instead, for
+    fire-and-forget lines where it does)."""
     print(f"Sonic: {text}")
     if _current_state is not None:
         _current_state.conversation_history.append({"role": "robot", "text": text})
@@ -759,7 +812,9 @@ def speak_text(text: str) -> None:
     if not sentences:
         return
 
-    if sarvam_tts_stream(sentences):
+    language_code = _current_state.spoken_language if _current_state is not None else SARVAM_LANGUAGE_CODE
+
+    if sarvam_tts_stream(sentences, language_code):
         return
 
     audio_queue: "queue.Queue" = queue.Queue(maxsize=2)
@@ -768,7 +823,7 @@ def speak_text(text: str) -> None:
     def synthesize_worker():
         for sentence in sentences:
             try:
-                audio_queue.put(sarvam_tts(sentence))
+                audio_queue.put(sarvam_tts(sentence, language_code))
             except Exception as e:
                 print(f"[warn] TTS failed for a chunk: {e}")
         audio_queue.put(DONE)
@@ -786,6 +841,57 @@ def speak_text(text: str) -> None:
         except Exception as e:
             print(f"[warn] audio playback failed: {e}")
     worker.join(timeout=1.0)
+
+
+def speak_stream(sentence_iter) -> None:
+    """Streaming sibling of speak_text() — plays each sentence via TTS as
+    soon as render_stream() has it, instead of waiting for the whole
+    response to finish generating before starting TTS on any of it. Same
+    background-thread-synthesizes/main-thread-plays queue shape speak_text()
+    already uses for its own REST fallback, just fed by the streaming
+    sentence generator instead of a pre-split list — synthesis of sentence
+    N+1 can overlap with sentence N still playing. Uses plain sarvam_tts()
+    per sentence rather than sarvam_tts_stream() — a single short sentence
+    doesn't benefit from a websocket over one REST call, and this avoids
+    reopening a websocket per sentence. Logs the full accumulated text as
+    ONE conversation_history/db_log_turn entry once the stream ends, same
+    one-entry-per-turn convention speak_text() uses (not one per sentence)."""
+    language_code = _current_state.spoken_language if _current_state is not None else SARVAM_LANGUAGE_CODE
+    spoken_parts = []
+    audio_queue: "queue.Queue" = queue.Queue(maxsize=2)
+    DONE = object()
+
+    def synthesize_worker():
+        for sentence in sentence_iter:
+            spoken_parts.append(sentence)
+            print(f"Sonic: {sentence}")
+            if TEXT_MODE:
+                continue
+            try:
+                audio_queue.put(sarvam_tts(sentence, language_code))
+            except Exception as e:
+                print(f"[warn] TTS failed for a chunk: {e}")
+        audio_queue.put(DONE)
+
+    worker = threading.Thread(target=synthesize_worker, daemon=True)
+    worker.start()
+
+    if not TEXT_MODE:
+        while True:
+            item = audio_queue.get()
+            if item is DONE:
+                break
+            audio, sr = item
+            try:
+                play_audio(audio, sr)
+            except Exception as e:
+                print(f"[warn] audio playback failed: {e}")
+    worker.join(timeout=1.0)
+
+    full_text = " ".join(spoken_parts)
+    if _current_state is not None:
+        _current_state.conversation_history.append({"role": "robot", "text": full_text})
+        db_log_turn(_current_state, "robot", full_text)
 
 
 def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
@@ -810,7 +916,14 @@ def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
     if audio is None:
         return None
     try:
-        transcript = sarvam_stt(audio)
+        transcript, detected_lang = sarvam_stt(audio)
+        # Only switch to a language render()/TTS actually know how to use
+        # (see LANGUAGE_NAMES) — saarika's auto-detect covers more of
+        # Sarvam's languages than this deployment is tuned for; anything
+        # else just keeps whatever language the session was already using
+        # rather than switching to an unsupported one mid-conversation.
+        if _current_state is not None and detected_lang in LANGUAGE_NAMES:
+            _current_state.spoken_language = detected_lang
     except Exception as e:
         print(f"[warn] STT failed: {e}")
         transcript = ""
@@ -897,7 +1010,7 @@ def report_phase(phase: Optional[str], text: str = "", table: Optional[str] = No
 
 def navigate_and_wait(destination: str, timeout_s: float = NAV_TIMEOUT_S) -> bool:
     if SONIC_SKIP_NAV:
-        print(f"[nav] SONIC_SKIP_NAV=1 — treating {destination!r} as instantly reached (test mode)")
+        print(f"[nav] test mode — treating {destination!r} as instantly reached, not actually driving")
         return True
     if not voice_nav_enabled():
         print(f"[nav] voice_nav_enabled is off — skipping trip to {destination!r}")
@@ -1006,6 +1119,35 @@ class LLMClient:
             raise last_err
         raise RuntimeError(f"LLM call failed after retries: {last_err}")
 
+    def chat_stream(self, system: str, user: str, *, temperature: float = 0.6):
+        """Yields text deltas as Groq streams its completion (SSE), instead
+        of blocking for the whole response like chat() does — used only for
+        spoken-line generation (render_stream()), never for extraction
+        (extract_slots() needs the complete JSON object before it can parse
+        anything, so it stays on the blocking chat() above). No retry-on-
+        error here unlike chat() — a mid-stream failure is caught by the
+        caller (render_stream()) and falls back to chat() entirely, same
+        shape as sarvam_tts_stream() falling back to sarvam_tts()."""
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        payload = {"model": self.model, "messages": messages, "temperature": temperature, "stream": True}
+        resp = requests.post(
+            self.base_url,
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json=payload,
+            stream=True,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line or not line.startswith(b"data: "):
+                continue
+            chunk = line[len(b"data: "):]
+            if chunk == b"[DONE]":
+                return
+            delta = json.loads(chunk)["choices"][0]["delta"].get("content")
+            if delta:
+                yield delta
+
 
 llm = LLMClient()
 
@@ -1068,7 +1210,7 @@ RENDER_PURPOSE_HINTS = {
 }
 
 
-def render(purpose: str, state: OrderState, **ctx) -> str:
+def _build_render_prompt(purpose: str, state: OrderState, **ctx) -> str:
     hint = RENDER_PURPOSE_HINTS.get(purpose, purpose)
     try:
         hint = hint.format(**ctx)
@@ -1076,7 +1218,16 @@ def render(purpose: str, state: OrderState, **ctx) -> str:
         pass
     history_tail = state.conversation_history[-6:]
     history_text = "\n".join(f"{t['role']}: {t['text']}" for t in history_tail) or "(nothing yet)"
-    user_prompt = f"Recent conversation:\n{history_text}\n\nWhat to say now: {hint}"
+    lang_name = LANGUAGE_NAMES.get(state.spoken_language, "English")
+    return (
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Respond in {lang_name} — that's the language the guest is currently speaking.\n\n"
+        f"What to say now: {hint}"
+    )
+
+
+def render(purpose: str, state: OrderState, **ctx) -> str:
+    user_prompt = _build_render_prompt(purpose, state, **ctx)
     try:
         text = llm.chat(WAITER_PERSONA, user_prompt, temperature=0.6)
     except Exception as e:
@@ -1085,8 +1236,29 @@ def render(purpose: str, state: OrderState, **ctx) -> str:
     return clean_spoken_text(text) or "Sorry, one moment."
 
 
+def render_stream(purpose: str, state: OrderState, **ctx):
+    """Streaming sibling of render() — yields complete sentences as the LLM
+    generates them, instead of blocking for the whole response first. Falls
+    back to a single yield of render()'s full (blocking) result on any
+    failure, so callers never see a broken stream — same fall-back-to-
+    blocking shape sarvam_tts_stream() already uses in this file."""
+    user_prompt = _build_render_prompt(purpose, state, **ctx)
+    try:
+        any_yielded = False
+        for sentence in _chunk_into_sentences(llm.chat_stream(WAITER_PERSONA, user_prompt, temperature=0.6)):
+            cleaned = clean_spoken_text(sentence)
+            if cleaned:
+                any_yielded = True
+                yield cleaned
+        if not any_yielded:
+            yield "Sorry, one moment."
+    except Exception as e:
+        print(f"[warn] render_stream failed for purpose={purpose!r}, falling back to render(): {e}")
+        yield render(purpose, state, **ctx)
+
+
 def say(purpose: str, state: OrderState, **ctx) -> None:
-    speak_text(render(purpose, state, **ctx))
+    speak_stream(render_stream(purpose, state, **ctx))
 
 
 EXTRACTION_SCHEMA = """{
@@ -1900,15 +2072,22 @@ def main_loop() -> None:
 
 
 def main() -> None:
-    global TEXT_MODE
+    global TEXT_MODE, SONIC_SKIP_NAV
     parser = argparse.ArgumentParser(description="Sonic main_agent — unified take-order voice agent")
     parser.add_argument("--text-mode", action="store_true",
                         help="Run with typed input/printed output instead of mic/speaker/wake-word")
+    parser.add_argument("--test-mode", action="store_true",
+                        help="Skip real Nav2 trips (instant-arrival) — everything else (wake word, "
+                             "mic, STT, LLM, TTS) stays real, so the NLP flow can be exercised end to "
+                             "end without a working ROS/Nav2 setup. Same effect as SONIC_SKIP_NAV=1.")
     args = parser.parse_args()
     TEXT_MODE = args.text_mode
+    SONIC_SKIP_NAV = SONIC_SKIP_NAV or args.test_mode
 
     if TEXT_MODE:
         require_api_keys(need_sarvam=False)
+    if SONIC_SKIP_NAV:
+        print("[main] test mode — navigation will be skipped (instant arrival), everything else is real")
     print("Runtime: LangGraph StateGraph, humanized (every spoken line is an LLM call — see render()).")
     print(f"Node-execution tracing: {'ON' if TRACE_ENABLED else 'OFF'} (set SONIC_TRACE=0 to disable)")
     resolve_robot()
