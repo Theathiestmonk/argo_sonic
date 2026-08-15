@@ -52,17 +52,17 @@
         vx_std: 0.2
         vy_std: 0.2
         wz_std: 0.4
-        vx_max: 0.15
+        vx_max: 0.60
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
         wz_max: 0.4
-        # Lowered alongside vx_max — top speed alone doesn't prevent wheel
-        # slip on a slippery floor, quick accel/decel does (F=ma exceeding
-        # available friction is what actually breaks traction). At the old
-        # 0.5 m/s^2 the robot would reach the new 0.15 m/s vx_max in 0.3s,
-        # still a sharp torque spike; 0.15 m/s^2 gives it a full second to
-        # ramp up/down instead.
+        # Kept lowered independent of vx_max — top speed alone doesn't
+        # prevent wheel slip on a slippery floor, quick accel/decel does
+        # (F=ma exceeding available friction is what actually breaks
+        # traction). vx_max was raised back to 0.60 to retest for drift at
+        # full speed with this gentler ramp still in place; if it drifts,
+        # vx_max comes back down before this does.
         ax_max: 0.15
         ax_min: -0.15
         ay_min: 0.0
@@ -191,7 +191,7 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.15, 0.0, 0.4]
+      max_velocity: [0.60, 0.0, 0.4]
       min_velocity: [-0.15, 0.0, -0.4]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
