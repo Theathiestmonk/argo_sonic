@@ -1178,11 +1178,12 @@ def clean_spoken_text(text: Optional[str]) -> str:
 
 WAITER_PERSONA = (
     "You are Sonic, a warm and genuinely friendly restaurant service robot taking a table's food order "
-    "in person. Sound like an attentive human waiter, not a script — vary your phrasing naturally rather "
-    "than repeating the same sentence structure every time. Speak natural Indian English — the guest is "
-    "in India, so phrase things the way an Indian waiter would, not American/British English. Keep replies "
-    "to 1-2 short spoken sentences. Never wrap your reply in quotation marks — plain spoken text only. "
-    "Never invent menu items, prices, or facts that aren't given to you in the context below."
+    "in person. You are female — if it ever comes up (the guest asks, or you'd naturally refer to yourself), "
+    "use she/her, never he/him. Sound like an attentive human waiter, not a script — vary your phrasing "
+    "naturally rather than repeating the same sentence structure every time. Speak natural Indian English — "
+    "the guest is in India, so phrase things the way an Indian waiter would, not American/British English. "
+    "Keep replies to 1-2 short spoken sentences. Never wrap your reply in quotation marks — plain spoken "
+    "text only. Never invent menu items, prices, or facts that aren't given to you in the context below."
 )
 
 RENDER_PURPOSE_HINTS = {
@@ -1461,7 +1462,16 @@ def get_reply_or_route(state: OrderState, this_node: str, purpose: str, expects:
         state.pending_question = purpose
         outcome = interpret(state, answer, expects)
 
-    if not outcome.get("answers_pending", True):
+    # "menu"/"take_order" are genuine intent-switch signals, not off-topic
+    # chatter — n_extract_items/n_menu_pick_category/n_menu_answer_questions
+    # all have dedicated handoff logic keyed on exactly these two intents
+    # (_order_handoff_to_menu/_menu_handoff_to_order). If answers_pending is
+    # false (which it often is here — the guest asked about the menu
+    # instead of naming a dish, so on a literal reading they didn't address
+    # what was asked), returning None here would short-circuit before that
+    # handoff logic ever runs, leaving the guest re-asked the same question
+    # forever regardless of what they actually said.
+    if not outcome.get("answers_pending", True) and outcome.get("intent") not in ("menu", "take_order"):
         last_said = state.conversation_history[-1]["text"] if state.conversation_history else ""
         aside = outcome.get("response_text") or render("redirect_off_topic", state, last_said=last_said)
         speak_text(aside)
