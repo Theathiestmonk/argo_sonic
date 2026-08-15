@@ -1524,6 +1524,13 @@ def n_intent_classify(state: OrderState) -> dict:
         state.post_arrival_node = "n_menu_pick_category"
         state.pending_seed = outcome if (outcome.get("items") or outcome.get("category")) else None
         state.next_node = "n_navigate_to_table" if state.table_no else "n_ask_table"
+    elif intent == "navigation":
+        # A bare "come to table X" — no order/menu request attached yet, so
+        # once there just fall into the same greet-and-ask-order beat
+        # take_order uses; whatever they actually wanted (order, menu
+        # question, or something else) comes out naturally from there.
+        state.post_arrival_node = "n_greet_and_ask_order"
+        state.next_node = "n_navigate_to_table" if state.table_no else "n_ask_table"
     else:
         state.pending_seed = {"stub_intent": intent}
         state.next_node = "n_stub"
