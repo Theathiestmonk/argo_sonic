@@ -196,6 +196,9 @@ class OrderState:
     trigger_source: str = "voice"          # "ui" | "voice"
     table_no: Optional[str] = None
     location_reached: bool = False
+    post_arrival_node: str = "n_greet_and_ask_order"   # where n_navigate_to_table goes once it arrives —
+                                                        # data-driven so the menu intent can reuse the same
+                                                        # nav step and land at n_menu_pick_category instead
 
     # conversation bookkeeping, fed to the LLM every turn
     conversation_history: list = field(default_factory=list)   # [{"role","text"}]
@@ -207,6 +210,12 @@ class OrderState:
     active_item: Optional[dict] = None                  # {item_id,name,category,quantity,preference,preference_asked}
     pending_items: list = field(default_factory=list)   # fully-seeded dicts queued from one multi-item utterance
     edit_target_name: Optional[str] = None
+
+    # menu browsing (n_menu_pick_category / n_menu_answer_questions)
+    active_menu_category: Optional[str] = None
+    category_intro_said: bool = False   # has the category's item overview been spoken yet this visit —
+                                         # own flag rather than reusing pending_question, which
+                                         # get_reply_or_route() also writes on every ask
 
     # graph control flow
     next_node: Optional[str] = None
@@ -458,7 +467,7 @@ def load_menu_from_db() -> None:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT mi.menu_item_id, mi.item_name, mc.name, mi.price, mi.is_available
+                """SELECT mi.menu_item_id, mi.item_name, mc.name, mi.price, mi.is_available, mi.description
                    FROM menu_items mi
                    LEFT JOIN menu_categories mc ON mi.category_id = mc.category_id
                    WHERE mi.location_id = %s""",
@@ -484,7 +493,7 @@ def load_menu_from_db() -> None:
         aliases_by_item.setdefault(str(menu_item_id), []).append(alias)
 
     items = []
-    for menu_item_id, item_name, category_name, price, is_available in rows:
+    for menu_item_id, item_name, category_name, price, is_available, description in rows:
         items.append({
             "item_id": str(menu_item_id),
             "name": item_name,
@@ -492,6 +501,7 @@ def load_menu_from_db() -> None:
             "price": float(price),
             "available": is_available,
             "aliases": aliases_by_item.get(str(menu_item_id), []),
+            "description": description or "",
         })
 
     lookup = {}
@@ -512,6 +522,42 @@ def find_menu_item(spoken_name: Optional[str]) -> Optional[dict]:
         return MENU_LOOKUP[key]
     matches = difflib.get_close_matches(key, MENU_LOOKUP.keys(), n=1, cutoff=0.72)
     return MENU_LOOKUP[matches[0]] if matches else None
+
+
+def menu_categories() -> list:
+    return sorted({i["category"] for i in MENU_ITEMS if i["available"]})
+
+
+def menu_items_by_category(category: str) -> list:
+    return [i for i in MENU_ITEMS if i["available"] and i["category"] == category]
+
+
+def menu_items_summary(items: list) -> str:
+    """Pre-formatted for a render() context value — mirrors order_summary()'s
+    convention (a plain readable string, not a raw list of dicts handed to
+    .format())."""
+    if not items:
+        return "nothing available right now"
+    return "; ".join(
+        f"{i['name']} (${i['price']:.2f})" + (f" — {i['description']}" if i.get("description") else "")
+        for i in items
+    )
+
+
+def find_menu_category(spoken_category: Optional[str]) -> Optional[str]:
+    """Same fuzzy-match idea as find_menu_item(), but against the live
+    category list rather than MENU_LOOKUP — categories aren't a fixed enum
+    (see menu_categories()), so this is the only way to turn free text like
+    "drinks" or "something spicy" into a real category value."""
+    if not spoken_category:
+        return None
+    cats = menu_categories()
+    key = spoken_category.strip().lower()
+    for c in cats:
+        if c == key:
+            return c
+    matches = difflib.get_close_matches(key, cats, n=1, cutoff=0.6)
+    return matches[0] if matches else None
 
 
 def get_item_price(order_item: dict) -> float:
@@ -1011,6 +1057,11 @@ RENDER_PURPOSE_HINTS = {
     "redirect_off_topic": "They just said something unrelated to what you asked (\"{last_said}\"). Respond to it briefly and warmly — you'll repeat your actual question right after this.",
     "stub_unavailable": "They asked about {requested_intent}, which you can't help with by voice yet. Apologize briefly and let them know a staff member will help with that.",
     "idle_timeout_farewell": "They didn't respond. Give a brief, warm goodbye / see-you-later line.",
+    "menu_ask_category": "Ask which part of the menu they'd like to hear about — options are: {categories}. Mention a few naturally, like a waiter chatting through what's on offer, not a robotic recitation of the full list.",
+    "menu_ask_category_retry": "You didn't catch a menu category from that. Ask again, briefly, mentioning a couple of options — options are: {categories}.",
+    "menu_describe_category": "Tell them warmly what's available in {category} — {items} — like a waiter describing the menu, not reading out a price list. Then ask if anything sounds good, or if they'd like to hear about something else.",
+    "menu_answer_question": "They asked: \"{question}\". Answer it naturally using what you know about {category} — {items}. Then let them know they can order, hear about another category, or you're happy to keep chatting.",
+    "menu_browse_farewell": "They're done browsing the menu for now and aren't ordering yet. Give a brief, warm sign-off — let them know you're happy to come back whenever they're ready.",
 }
 
 
@@ -1048,6 +1099,7 @@ EXTRACTION_SCHEMA = """{
   "edit_target": "<dish name they want to change, or null>",
   "edit_action": "<replace, remove, change_qty, change_preference, or null>",
   "edit_value": "<the new item name / quantity / preference text, or null>",
+  "category": "<menu category they mentioned, as free text, or null>",
   "response_text": "<short warm natural reply, ONLY for genuine unrelated small talk, else empty string>"
 }"""
 
@@ -1061,6 +1113,8 @@ EXPECTS_GUIDANCE = {
     "yes_no_or_item": "This is an \"anything else?\" question. If they name a new dish, populate items[] — that counts as answering yes. Otherwise map their reply to yes_no/wants_more.",
     "cancel_or_change": "They just declined to confirm their order. Figure out if they want to cancel it outright or change something in it, and set cancel_or_change accordingly ('cancel' or 'change').",
     "edit": "They're telling you which order item to change and how (replace it / change quantity / change preference / remove it entirely). Fill edit_target/edit_action/edit_value.",
+    "menu_category": "They're telling you which menu category they want to hear about. Extract it into category as free text — it doesn't need to exactly match a real category name, just capture what they said. If they instead named a specific dish, populate items[] instead of category.",
+    "menu_next_step": "You just told them about a menu category. Figure out what they want next: order something (set intent=\"take_order\" and populate items[] if they named a dish), hear about a different category (extract it into category), or they're done for now (set yes_no=\"no\").",
 }
 
 
@@ -1155,6 +1209,7 @@ def extract_slots(transcript: str, state: OrderState, expects: str) -> dict:
         "edit_target": result.get("edit_target"),
         "edit_action": result.get("edit_action"),
         "edit_value": result.get("edit_value"),
+        "category": result.get("category") or None,
         "response_text": clean_spoken_text(result.get("response_text")),
     }
 
@@ -1261,7 +1316,12 @@ def n_intent_classify(state: OrderState) -> dict:
 
     intent = outcome.get("intent") or "normal_conv"
     if intent == "take_order":
+        state.post_arrival_node = "n_greet_and_ask_order"
         state.pending_seed = outcome if outcome.get("items") else None
+        state.next_node = "n_navigate_to_table" if state.table_no else "n_ask_table"
+    elif intent == "menu":
+        state.post_arrival_node = "n_menu_pick_category"
+        state.pending_seed = outcome if (outcome.get("items") or outcome.get("category")) else None
         state.next_node = "n_navigate_to_table" if state.table_no else "n_ask_table"
     else:
         state.pending_seed = {"stub_intent": intent}
@@ -1290,7 +1350,7 @@ def n_ask_table(state: OrderState) -> dict:
 def n_navigate_to_table(state: OrderState) -> dict:
     trace_node("n_navigate_to_table", state)
     if state.location_reached:
-        state.next_node = "n_greet_and_ask_order"
+        state.next_node = state.post_arrival_node
         return asdict(state)
     # table_ref is what actually gets searched for in the waypoints file —
     # the real waypoint name (see table_ref_for_nav), not a guessed/rebuilt
@@ -1307,7 +1367,7 @@ def n_navigate_to_table(state: OrderState) -> dict:
     state.location_reached = True
     report_phase("arrived", f"Arrived at {table_ref}", state.table_no)
     db_start_session(state)
-    state.next_node = "n_greet_and_ask_order"
+    state.next_node = state.post_arrival_node
     return asdict(state)
 
 
@@ -1329,6 +1389,99 @@ def n_greet_and_ask_order(state: OrderState) -> dict:
     outcome = interpret(state, answer, expects="items")
     state.pending_seed = outcome
     state.next_node = "n_extract_items"
+    return asdict(state)
+
+
+def _menu_handoff_to_order(state: OrderState, outcome: dict) -> None:
+    """The guest said something like "I'd like to order" while browsing the
+    menu — seed n_extract_items exactly the way n_greet_and_ask_order does
+    (a pending_seed with an "items" list, or None to fall through to a fresh
+    "what would you like" ask if no dish was named yet). table_no/
+    location_reached are already set since this only ever runs after
+    n_navigate_to_table succeeded."""
+    items = outcome.get("items") or []
+    state.pending_seed = {"items": items} if items else None
+    state.active_menu_category = None
+    state.category_intro_said = False
+    state.next_node = "n_extract_items"
+
+
+def n_menu_pick_category(state: OrderState) -> dict:
+    trace_node("n_menu_pick_category", state)
+    purpose = "menu_ask_category_retry" if state.ask_retry else "menu_ask_category"
+    outcome = get_reply_or_route(state, "n_menu_pick_category", purpose,
+                                  expects="menu_category", categories=", ".join(menu_categories()))
+    if outcome is None:
+        return asdict(state)
+
+    if outcome.get("intent") == "take_order":
+        _menu_handoff_to_order(state, outcome)
+        return asdict(state)
+
+    if outcome.get("items"):
+        item = find_menu_item(outcome["items"][0]["item_name"])
+        if item:
+            state.active_menu_category = item["category"]
+            state.ask_retry = False
+            state.category_intro_said = False
+            state.next_node = "n_menu_answer_questions"
+            return asdict(state)
+        # named dish didn't match anything on the menu — fall through to
+        # try matching a category instead, same as if none had been named
+
+    matched = find_menu_category(outcome.get("category"))
+    if not matched:
+        state.ask_retry = True
+        state.next_node = "n_menu_pick_category"
+        return asdict(state)
+
+    state.ask_retry = False
+    state.active_menu_category = matched
+    state.category_intro_said = False
+    state.next_node = "n_menu_answer_questions"
+    return asdict(state)
+
+
+def n_menu_answer_questions(state: OrderState) -> dict:
+    trace_node("n_menu_answer_questions", state)
+    items = menu_items_summary(menu_items_by_category(state.active_menu_category))
+
+    if state.category_intro_said:
+        purpose = "menu_answer_question"
+        question = state.conversation_history[-1]["text"] if state.conversation_history else ""
+        ctx = dict(category=state.active_menu_category, items=items, question=question)
+    else:
+        purpose = "menu_describe_category"
+        ctx = dict(category=state.active_menu_category, items=items)
+
+    outcome = get_reply_or_route(state, "n_menu_answer_questions", purpose,
+                                  expects="menu_next_step", **ctx)
+    if outcome is None:
+        return asdict(state)
+    state.category_intro_said = True
+
+    if outcome.get("intent") == "take_order":
+        _menu_handoff_to_order(state, outcome)
+        return asdict(state)
+
+    if outcome.get("category"):
+        matched = find_menu_category(outcome["category"])
+        if matched and matched != state.active_menu_category:
+            state.active_menu_category = matched
+            state.category_intro_said = False
+            state.next_node = "n_menu_answer_questions"
+            return asdict(state)
+
+    if outcome.get("yes_no") == "no":
+        say("menu_browse_farewell", state)
+        state.went_idle = True
+        state.next_node = "n_respond"
+        return asdict(state)
+
+    # A genuine follow-up question, not a clean category-switch or a "no" —
+    # loop back; next pass answers it (menu_answer_question's {question}
+    # context) via the branch above, then re-listens for what's next.
+    state.next_node = "n_menu_answer_questions"
     return asdict(state)
 
 
@@ -1594,6 +1747,8 @@ NODE_FUNCS = {
     "n_ask_table": n_ask_table,
     "n_navigate_to_table": n_navigate_to_table,
     "n_greet_and_ask_order": n_greet_and_ask_order,
+    "n_menu_pick_category": n_menu_pick_category,
+    "n_menu_answer_questions": n_menu_answer_questions,
     "n_extract_items": n_extract_items,
     "n_ask_qty": n_ask_qty,
     "n_ask_preference": n_ask_preference,
