@@ -118,7 +118,11 @@ LLM_API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
 
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
-SARVAM_STT_MODEL = "saarika:v2.5"
+SARVAM_STT_MODEL = "saaras:v3"  # better code-mixed/noisy-speech accuracy than
+# saarika:v2.5 (~19% vs ~22% WER on IndicVoices) and saarika is being
+# deprecated by Sarvam; mode left at its "transcribe" default (native script,
+# whatever language was actually spoken) — see listen()'s language gate for
+# why script itself isn't the concern, misdetected-language accuracy is.
 SARVAM_TTS_MODEL = "bulbul:v3"
 # Default/fallback only now — STT auto-detects per utterance (language_code=
 # "unknown", see sarvam_stt()) and each turn's actual detected language lives
@@ -130,10 +134,11 @@ SARVAM_SPEAKER = "ishita"   # a bulbul:v3 persona voice, multilingual across the
 # Human-readable names for render()'s "respond in {language}" instruction —
 # LLMs follow a plain language name more reliably than a bare BCP-47 code.
 # Hindi/English are this deployment's two actually-supported languages;
-# saarika's auto-detect covers more of Sarvam's 11 languages than this, but
-# render()/TTS would need language-specific persona/prompt tuning to actually
-# use them well, so anything else falls back to English rather than silently
-# mis-rendering.
+# saaras's auto-detect covers 22+ of Sarvam's languages, far more than this
+# deployment is tuned for — listen()'s language gate discards a transcript
+# detected as anything outside this dict rather than trusting it, and
+# render()/TTS would need language-specific persona/prompt tuning to
+# actually use the others well even if it didn't.
 LANGUAGE_NAMES = {
     "en-IN": "English",
     # This text is only ever fed to TTS, never shown to anyone written down —
@@ -694,14 +699,16 @@ def play_audio(audio: np.ndarray, samplerate: int = SAMPLE_RATE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sarvam AI: STT (saarika:v2.5) / TTS (bulbul:v3)
+# Sarvam AI: STT (saaras:v3) / TTS (bulbul:v3)
 # ---------------------------------------------------------------------------
 
 def sarvam_stt(audio: np.ndarray) -> tuple[str, str]:
     """Returns (transcript, detected_language) — language_code="unknown"
-    tells saarika to auto-detect per utterance (it handles Hindi/English
+    tells saaras to auto-detect per utterance (it handles Hindi/English
     code-mixed speech natively, including mid-sentence switches) rather than
-    assuming one fixed language for every utterance in the session."""
+    assuming one fixed language for every utterance in the session. Callers
+    should treat a detected_language outside LANGUAGE_NAMES as untrustworthy
+    (see listen()) rather than assuming the transcript itself is still good."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
@@ -954,13 +961,22 @@ def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
         return None
     try:
         transcript, detected_lang = sarvam_stt(audio)
-        # Only switch to a language render()/TTS actually know how to use
-        # (see LANGUAGE_NAMES) — saarika's auto-detect covers more of
-        # Sarvam's languages than this deployment is tuned for; anything
-        # else just keeps whatever language the session was already using
-        # rather than switching to an unsupported one mid-conversation.
-        if _current_state is not None and detected_lang in LANGUAGE_NAMES:
-            _current_state.spoken_language = detected_lang
+        if detected_lang in LANGUAGE_NAMES:
+            # Only switch to a language render()/TTS actually know how to
+            # use (see LANGUAGE_NAMES) — saaras's auto-detect covers more of
+            # Sarvam's languages than this deployment is tuned for.
+            if _current_state is not None:
+                _current_state.spoken_language = detected_lang
+        else:
+            # language_code="unknown" auto-detects across 22+ languages;
+            # this deployment only understands English/Hindi, and in live
+            # testing misdetection into an unrelated language (e.g. Marathi,
+            # on ambiguous/quiet audio) produced a confidently wrong but
+            # plausible-looking transcript that fed straight into extraction.
+            # Discarding it here routes it through listen_with_patience()'s
+            # existing "heard something, got nothing usable" path (re-listen,
+            # don't repeat the question) — safer than acting on it.
+            transcript = ""
     except Exception as e:
         print(f"[warn] STT failed: {e}")
         transcript = ""
