@@ -31,16 +31,52 @@ so the caller's check is a single string/returncode comparison:
 import argparse
 import json
 import os
+import socket
+import subprocess
 import sys
+import threading
 import time
+from pathlib import Path
 
 WAYPOINTS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "argo_mini", "waypoints"
 )
 
+# "Robot starting to move" cue — same device-detection/volume pattern as
+# safety_shield.py's own alert clip (the Jetson's USB audio card isn't the
+# ALSA default, so mpg123 needs pointing at it explicitly there).
+_ON_JETSON      = os.path.exists("/etc/nv_tegra_release") or "argo" in socket.gethostname().lower()
+SPEAKER_DEVICE  = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
+START_SOUND_FILE = str(Path(__file__).resolve().parent.parent / "sound" / "robot_start_sound.mp3")
+START_SOUND_VOLUME = 0.85   # 0.0-1.0 — matches safety_shield.py's tuned-for-this-hardware level
+
 
 def log(msg: str) -> None:
     print(f"[nav_bridge] {msg}", flush=True)
+
+
+def _play_start_sound() -> None:
+    """Fire-and-forget, on a background thread — a navigation leg should
+    never wait on audio playback to actually start moving (this repo
+    specifically tuned nav to start snappy earlier this session)."""
+    def _run():
+        if not os.path.isfile(START_SOUND_FILE):
+            log(f"start-sound clip missing: {START_SOUND_FILE}")
+            return
+        try:
+            scale = int(32768 * START_SOUND_VOLUME)
+            result = subprocess.run(
+                ["mpg123", "-q", "-a", SPEAKER_DEVICE, "-f", str(scale), START_SOUND_FILE],
+                timeout=5, capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                log(f"start-sound mpg123 failed (device={SPEAKER_DEVICE!r}, rc={result.returncode}): "
+                    f"{result.stderr.strip()[-300:]}")
+        except FileNotFoundError:
+            log("start-sound not played — mpg123 not installed")
+        except Exception as e:
+            log(f"start-sound playback error: {e}")
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def load_waypoint(map_name: str, destination: str) -> dict:
@@ -132,6 +168,7 @@ def main() -> None:
             return "REJECTED"
         log(f"goal accepted after {time.monotonic() - t1:.1f}s — navigating "
             f"(up to {args.timeout:.0f}s for a result)...")
+        _play_start_sound()
 
         t2 = time.monotonic()
         result_future = goal_handle.get_result_async()

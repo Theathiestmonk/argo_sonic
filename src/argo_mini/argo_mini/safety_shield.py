@@ -110,7 +110,7 @@ SPEAKER_DEVICE = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
 # <repo_root>/sound/sound.mp3 — resolved from this file's own location (not a
 # hardcoded absolute path) so it keeps working under a --symlink-install
 # build, same convention as waypoint_manager.py's DEFAULT_WAYPOINTS_DIR.
-SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" / "sound.mp3")
+SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" / "beep.mp3")
 
 # This is a "something's nearby" nudge, not an alarm — kept well under full
 # volume on purpose so it doesn't disturb the room (customers/staff), and
