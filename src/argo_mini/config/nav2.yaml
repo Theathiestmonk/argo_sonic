@@ -179,24 +179,18 @@
   velocity_smoother:
     ros__parameters:
       use_sim_time: false
-      # Retrying both together — the "robot stopped responding to any goal
-      # at all" regression that came with this change last time was later
-      # root-caused to something entirely unrelated (argo_sonic_nav.py's
-      # default map + a missing/incomplete office_map2.json waypoints
-      # file), not this file, so that scare no longer blocks retesting it.
-      # smoothing_frequency matched to controller_server's
-      # controller_frequency (20.0) above it, so a 30Hz consumer isn't
-      # aliasing against a 20Hz source (sometimes re-reading the same
-      # command, sometimes straddling a boundary oddly — bigger-than-
-      # expected deltas that read as jerky motion downstream).
-      # feedback=CLOSED_LOOP tracks the robot's actual measured /odom
-      # velocity instead of an assumed model — relevant to the current
-      # drift experiment too, since it reacts to real wheel slip rather
-      # than commanding blind. If nav breaks again, isolate by reverting
-      # feedback to OPEN_LOOP first (that's what didn't fully explain the
-      # regression last time) before touching smoothing_frequency.
+      # CLOSED_LOOP reverted AGAIN — broke nav the same way it did the
+      # first time this was tried ("does not move" at all), confirming
+      # this file (specifically feedback=CLOSED_LOOP) IS a real cause, not
+      # just coincidental timing with the office_map2 bug like last time.
+      # CLOSED_LOOP needs live /odom to produce any output at all, unlike
+      # OPEN_LOOP — something about that path isn't clean here. Leaving
+      # smoothing_frequency at 20.0 (matches controller_server's 20.0,
+      # avoids aliasing) since only feedback was ever the suspect; if the
+      # robot still won't move with this alone, smoothing_frequency comes
+      # back down to 30.0 next.
       smoothing_frequency: 20.0
-      feedback: "CLOSED_LOOP"
+      feedback: "OPEN_LOOP"
       max_velocity: [0.60, 0.0, 0.4]
       min_velocity: [-0.15, 0.0, -0.4]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
