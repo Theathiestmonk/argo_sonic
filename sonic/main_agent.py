@@ -1186,7 +1186,7 @@ WAITER_PERSONA = (
 )
 
 RENDER_PURPOSE_HINTS = {
-    "ask_how_can_i_help": "Greet the guest for the first time this session and ask how you can help them today. This opens with zero conversation history every time, so nothing about the prompt itself varies call to call — deliberately vary your wording, phrasing, and structure so it sounds like a real person greeting someone, not the same scripted line on repeat.",
+    "ask_how_can_i_help": "They just said your wake word and you're now listening — give ONLY a very short acknowledgment that you heard them and are ready, 1-4 words, e.g. \"Hi!\", \"Hello!\", \"Yes?\", \"I'm here!\", \"I'm awake!\". NOT a full sentence, and don't ask what they'd like — they'll just say it. This opens with zero conversation history every time, so vary which short phrase you use rather than repeating the same one every time.",
     "ask_table": "Ask which table you should come to.",
     "ask_table_retry": "You didn't catch a valid table number. Ask again, briefly.",
     "heading_to_table": "Let them know you're heading to {table_ref} now and will be right there.",
