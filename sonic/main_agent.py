@@ -120,35 +120,15 @@ SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_STT_MODEL = "saaras:v3"  # better code-mixed/noisy-speech accuracy than
 # saarika:v2.5 (~19% vs ~22% WER on IndicVoices) and saarika is being
-# deprecated by Sarvam; mode left at its "transcribe" default (native script,
-# whatever language was actually spoken) — see listen()'s language gate for
-# why script itself isn't the concern, misdetected-language accuracy is.
+# deprecated by Sarvam.
 SARVAM_TTS_MODEL = "bulbul:v3"
-# Default/fallback only now — STT auto-detects per utterance (language_code=
-# "unknown", see sarvam_stt()) and each turn's actual detected language lives
-# on state.spoken_language instead. Still used as the TTS language before the
-# first utterance ever comes in, and as a fallback if detection ever fails.
+# English only, deliberately — Hindi/Hinglish auto-detection was tried and
+# dropped: juggling per-turn language detection/switching (and Sarvam's STT
+# occasionally misdetecting the language entirely) added real complexity for
+# a narrow-scope restaurant deployment. en-IN, not en-US/generic "en" — this
+# is Indian-accented English on both the STT and TTS side.
 SARVAM_LANGUAGE_CODE = "en-IN"
-SARVAM_SPEAKER = "ishita"   # a bulbul:v3 persona voice, multilingual across the languages below
-
-# Human-readable names for render()'s "respond in {language}" instruction —
-# LLMs follow a plain language name more reliably than a bare BCP-47 code.
-# Hindi/English are this deployment's two actually-supported languages;
-# saaras's auto-detect covers 22+ of Sarvam's languages, far more than this
-# deployment is tuned for — listen()'s language gate discards a transcript
-# detected as anything outside this dict rather than trusting it, and
-# render()/TTS would need language-specific persona/prompt tuning to
-# actually use the others well even if it didn't.
-LANGUAGE_NAMES = {
-    "en-IN": "English",
-    # This text is only ever fed to TTS, never shown to anyone written down —
-    # so "script" just means "however the LLM generates it." Ask for Roman
-    # letters (the small local model's Devanagari output is unreliable) and
-    # for casual code-mixed Hinglish, the way people actually talk, not
-    # formal/pure Hindi.
-    "hi-IN": "casual spoken Hinglish (natural code-mixed Hindi-English, the way people actually talk — "
-             "not formal or 'pure' Hindi). Generate it in Roman/Latin letters, never Devanagari script",
-}
+SARVAM_SPEAKER = "ishita"   # a bulbul:v3 persona voice with a natural Indian-English accent
 SARVAM_TTS_PACE = 1.0
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 SARVAM_TTS_SAMPLE_RATE = 22050
@@ -258,8 +238,6 @@ def require_api_keys(need_sarvam: bool = True) -> None:
 class OrderState:
     # trigger normalization — how this session started
     trigger_source: str = "voice"          # "ui" | "voice"
-    spoken_language: str = "en-IN"          # BCP-47 — updated from STT's detected language each turn
-                                             # (listen()); render()/TTS respond in this same language
     table_no: Optional[str] = None
     location_reached: bool = False
     post_arrival_node: str = "n_greet_and_ask_order"   # where n_navigate_to_table goes once it arrives —
@@ -702,13 +680,11 @@ def play_audio(audio: np.ndarray, samplerate: int = SAMPLE_RATE) -> None:
 # Sarvam AI: STT (saaras:v3) / TTS (bulbul:v3)
 # ---------------------------------------------------------------------------
 
-def sarvam_stt(audio: np.ndarray) -> tuple[str, str]:
-    """Returns (transcript, detected_language) — language_code="unknown"
-    tells saaras to auto-detect per utterance (it handles Hindi/English
-    code-mixed speech natively, including mid-sentence switches) rather than
-    assuming one fixed language for every utterance in the session. Callers
-    should treat a detected_language outside LANGUAGE_NAMES as untrustworthy
-    (see listen()) rather than assuming the transcript itself is still good."""
+def sarvam_stt(audio: np.ndarray) -> str:
+    """English-only, deliberately (see SARVAM_LANGUAGE_CODE) — pinning the
+    language_code instead of using "unknown" auto-detect also sidesteps the
+    misdetection problem auto-detect had (confidently transcribing into an
+    unrelated language on ambiguous/quiet audio)."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
@@ -720,15 +696,13 @@ def sarvam_stt(audio: np.ndarray) -> tuple[str, str]:
     resp = requests.post(
         SARVAM_STT_URL,
         headers={"api-subscription-key": SARVAM_API_KEY},
-        data={"model": SARVAM_STT_MODEL, "language_code": "unknown"},
+        data={"model": SARVAM_STT_MODEL, "language_code": SARVAM_LANGUAGE_CODE},
         files={"file": ("utterance.wav", buf, "audio/wav")},
         timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
-    transcript = (data.get("transcript") or data.get("text") or "").strip()
-    detected_lang = data.get("language_code") or SARVAM_LANGUAGE_CODE
-    return transcript, detected_lang
+    return (data.get("transcript") or data.get("text") or "").strip()
 
 
 def sarvam_tts(text: str, language_code: str = SARVAM_LANGUAGE_CODE) -> tuple[np.ndarray, int]:
@@ -856,9 +830,7 @@ def speak_text(text: str) -> None:
     if not sentences:
         return
 
-    language_code = _current_state.spoken_language if _current_state is not None else SARVAM_LANGUAGE_CODE
-
-    if sarvam_tts_stream(sentences, language_code):
+    if sarvam_tts_stream(sentences):
         return
 
     audio_queue: "queue.Queue" = queue.Queue(maxsize=2)
@@ -867,7 +839,7 @@ def speak_text(text: str) -> None:
     def synthesize_worker():
         for sentence in sentences:
             try:
-                audio_queue.put(sarvam_tts(sentence, language_code))
+                audio_queue.put(sarvam_tts(sentence))
             except Exception as e:
                 print(f"[warn] TTS failed for a chunk: {e}")
         audio_queue.put(DONE)
@@ -900,7 +872,6 @@ def speak_stream(sentence_iter) -> None:
     reopening a websocket per sentence. Logs the full accumulated text as
     ONE conversation_history/db_log_turn entry once the stream ends, same
     one-entry-per-turn convention speak_text() uses (not one per sentence)."""
-    language_code = _current_state.spoken_language if _current_state is not None else SARVAM_LANGUAGE_CODE
     spoken_parts = []
     audio_queue: "queue.Queue" = queue.Queue(maxsize=2)
     DONE = object()
@@ -912,7 +883,7 @@ def speak_stream(sentence_iter) -> None:
             if TEXT_MODE:
                 continue
             try:
-                audio_queue.put(sarvam_tts(sentence, language_code))
+                audio_queue.put(sarvam_tts(sentence))
             except Exception as e:
                 print(f"[warn] TTS failed for a chunk: {e}")
         audio_queue.put(DONE)
@@ -960,23 +931,7 @@ def listen(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[str]:
     if audio is None:
         return None
     try:
-        transcript, detected_lang = sarvam_stt(audio)
-        if detected_lang in LANGUAGE_NAMES:
-            # Only switch to a language render()/TTS actually know how to
-            # use (see LANGUAGE_NAMES) — saaras's auto-detect covers more of
-            # Sarvam's languages than this deployment is tuned for.
-            if _current_state is not None:
-                _current_state.spoken_language = detected_lang
-        else:
-            # language_code="unknown" auto-detects across 22+ languages;
-            # this deployment only understands English/Hindi, and in live
-            # testing misdetection into an unrelated language (e.g. Marathi,
-            # on ambiguous/quiet audio) produced a confidently wrong but
-            # plausible-looking transcript that fed straight into extraction.
-            # Discarding it here routes it through listen_with_patience()'s
-            # existing "heard something, got nothing usable" path (re-listen,
-            # don't repeat the question) — safer than acting on it.
-            transcript = ""
+        transcript = sarvam_stt(audio)
     except Exception as e:
         print(f"[warn] STT failed: {e}")
         transcript = ""
@@ -1224,9 +1179,10 @@ def clean_spoken_text(text: Optional[str]) -> str:
 WAITER_PERSONA = (
     "You are Sonic, a warm and genuinely friendly restaurant service robot taking a table's food order "
     "in person. Sound like an attentive human waiter, not a script — vary your phrasing naturally rather "
-    "than repeating the same sentence structure every time. Keep replies to 1-2 short spoken sentences. "
-    "Never wrap your reply in quotation marks — plain spoken text only. Never invent menu items, prices, "
-    "or facts that aren't given to you in the context below."
+    "than repeating the same sentence structure every time. Speak natural Indian English — the guest is "
+    "in India, so phrase things the way an Indian waiter would, not American/British English. Keep replies "
+    "to 1-2 short spoken sentences. Never wrap your reply in quotation marks — plain spoken text only. "
+    "Never invent menu items, prices, or facts that aren't given to you in the context below."
 )
 
 RENDER_PURPOSE_HINTS = {
@@ -1276,10 +1232,8 @@ def _build_render_prompt(purpose: str, state: OrderState, **ctx) -> str:
         pass
     history_tail = state.conversation_history[-6:]
     history_text = "\n".join(f"{t['role']}: {t['text']}" for t in history_tail) or "(nothing yet)"
-    lang_name = LANGUAGE_NAMES.get(state.spoken_language, "English")
     return (
         f"Recent conversation:\n{history_text}\n\n"
-        f"Respond in {lang_name} — that's the language the guest is currently speaking.\n\n"
         f"What to say now: {hint}"
     )
 
@@ -1383,8 +1337,7 @@ per dish in "items" — never merge them into a single name, never drop any.
 ("nah", "nope", "not really") as yes_no="no", without requiring the literal words.
 - response_text is ONLY for genuine unrelated small talk (a brief, warm, natural reply) — leave it an \
 empty string otherwise. Never wrap it in quotation marks.
-- Numbers may be spoken/written as words in any language or script (Hindi digits like "दो"/"पाँच", \
-Hinglish "do"/"paanch", English "two"/"five", etc.) — always convert them to actual integers for quantity, \
+- Numbers may be spoken as words ("two", "five") — always convert them to actual integers for quantity, \
 and to a digit-only string for table_no. Never leave a number as a word in either field.
 - intent must be exactly one of the values listed in the schema above, or null — never any other string, \
 and never the current stage's name (e.g. don't set intent="yes_no" just because that's the current stage).
