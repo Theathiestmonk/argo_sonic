@@ -127,13 +127,17 @@ SILENCE_GIVEUP_TOTAL_S = 120.0  # cumulative silence (across reprompts) before g
 TRAILING_SILENCE_MS = 600
 # int16 RMS energy a frame must exceed to count as "speech started" in
 # record_utterance() — lower picks up quieter voices but also more room
-# noise. Was 500 (required speaking with real effort/volume); 150 is more
-# sensitive to a normal-volume or soft voice. Safe to tune lower than before
-# a false trigger no longer interrupts the conversation (see listen()/
-# listen_with_patience() — a noise-triggered empty transcript is retried
-# quietly, not spoken over) — override per-deployment via SONIC_RMS_THRESHOLD
-# if your mic/room still needs a different value.
-SPEECH_RMS_THRESHOLD = int(os.environ.get("SONIC_RMS_THRESHOLD", "150"))
+# noise. Was dropped to 150 at one point for sensitivity, but that's below
+# this robot's actual measured ambient noise floor (~280-500 RMS, live-
+# probed with a bare sd.InputStream on real hardware) — record_utterance()
+# uses this SAME threshold for both "has speech started" and "has speech
+# ended" (RMS must drop below it for TRAILING_SILENCE_MS straight), so at
+# 150 ambient noise alone never reads as silence and a listen attempt can
+# hang indefinitely waiting for a quiet moment that never arrives. 550
+# clears the highest ambient blip observed (~502) with margin, while still
+# sitting comfortably below real speech peaks (900+ in the same probe) —
+# override per-deployment via SONIC_RMS_THRESHOLD if your mic/room differs.
+SPEECH_RMS_THRESHOLD = int(os.environ.get("SONIC_RMS_THRESHOLD", "550"))
 
 TEXT_MODE = False
 
@@ -980,11 +984,11 @@ WAITER_PERSONA = (
 )
 
 RENDER_PURPOSE_HINTS = {
-    "ask_how_can_i_help": "Greet the guest for the first time this session and ask how you can help them today.",
+    "ask_how_can_i_help": "Greet the guest for the first time this session and ask how you can help them today. This opens with zero conversation history every time, so nothing about the prompt itself varies call to call — deliberately vary your wording, phrasing, and structure so it sounds like a real person greeting someone, not the same scripted line on repeat.",
     "ask_table": "Ask which table you should come to.",
     "ask_table_retry": "You didn't catch a valid table number. Ask again, briefly.",
     "heading_to_table": "Let them know you're heading to {table_ref} now and will be right there.",
-    "arrived_greet_and_ask_order": "You've just arrived at the table. Greet them warmly and ask what they'd like to order.",
+    "arrived_greet_and_ask_order": "You've just arrived at the table. Greet them warmly and ask what they'd like to order. This opens with zero conversation history every time, so nothing about the prompt itself varies call to call — deliberately vary your wording, phrasing, and structure so it sounds like a real person greeting a table, not the same scripted line on repeat.",
     "ask_what_would_you_like": "Ask what they'd like to order.",
     "item_not_found": "You couldn't find \"{item_name}\" on the menu. Apologize briefly and ask them to say the dish name again.",
     "reprompt_unclear_item": "You still couldn't understand which dish they want after a few tries. Apologize and let them know you'll come back to it in a moment.",
