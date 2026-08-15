@@ -57,12 +57,12 @@
         vy_max: 0.0
         vy_min: 0.0
         wz_max: 0.4
-        # Kept lowered independent of vx_max — top speed alone doesn't
-        # prevent wheel slip on a slippery floor, quick accel/decel does
-        # (F=ma exceeding available friction is what actually breaks
-        # traction). vx_max was raised back to 0.60 to retest for drift at
-        # full speed with this gentler ramp still in place; if it drifts,
-        # vx_max comes back down before this does.
+        # Lowered alongside vx_max — top speed alone doesn't prevent wheel
+        # slip on a slippery floor, quick accel/decel does (F=ma exceeding
+        # available friction is what actually breaks traction). At the old
+        # 0.5 m/s^2 the robot would reach the new 0.15 m/s vx_max in 0.3s,
+        # still a sharp torque spike; 0.15 m/s^2 gives it a full second to
+        # ramp up/down instead.
         ax_max: 0.15
         ax_min: -0.15
         ay_min: 0.0
@@ -179,18 +179,18 @@
   velocity_smoother:
     ros__parameters:
       use_sim_time: false
-      # CLOSED_LOOP reverted AGAIN — broke nav the same way it did the
-      # first time this was tried ("does not move" at all), confirming
-      # this file (specifically feedback=CLOSED_LOOP) IS a real cause, not
-      # just coincidental timing with the office_map2 bug like last time.
-      # CLOSED_LOOP needs live /odom to produce any output at all, unlike
-      # OPEN_LOOP — something about that path isn't clean here. Leaving
-      # smoothing_frequency at 20.0 (matches controller_server's 20.0,
-      # avoids aliasing) since only feedback was ever the suspect; if the
-      # robot still won't move with this alone, smoothing_frequency comes
-      # back down to 30.0 next.
-      smoothing_frequency: 20.0
+      # smoothing_frequency/feedback confirmed back to 30.0/OPEN_LOOP —
+      # CLOSED_LOOP broke nav ("does not move" at all) a second time, with
+      # the earlier office_map2/waypoints bug no longer in play, so this
+      # combo is the real cause, not coincidental timing. Not retrying
+      # again without a live /odom-reaching-the-smoother investigation
+      # first.
+      smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
+      # max_velocity's linear cap was left at the old 0.15 after the
+      # feedback revert above, silently overriding the MPPI controller's
+      # vx_max=0.60 (above) back down to 0.15 regardless — brought back in
+      # sync so the ongoing 0.60 drift retest is actually testing 0.60.
       max_velocity: [0.60, 0.0, 0.4]
       min_velocity: [-0.15, 0.0, -0.4]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
