@@ -4,7 +4,11 @@
 
 planner_server:
   ros__parameters:
-    # Path to the trained model .pt file (set per deployment site)
+    # Fallback default only — argo_sonic_nav.py overrides this per-map at
+    # launch time (-p model_path:=..., same pattern as SLAM Toolbox's
+    # map_file_name override just above it in that script), computed from
+    # whichever map is actually selected. This value only takes effect if
+    # ntfields_planner_node is ever run directly, bypassing that script.
     model_path: /home/argo/ntfields_models/office_map.pt
 
     # Inference device: 'cuda' for Jetson Orin GPU, 'cpu' as fallback

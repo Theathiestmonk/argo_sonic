@@ -732,11 +732,21 @@ def main():
     time.sleep(2); step_done("Pose Initializer")
 
     # ── 7. NTFields Planner ───────────────────────────────────────────────────
+    # model_path must be overridden per-map, same as SLAM Toolbox's
+    # map_file_name above — ntfields.yaml's own model_path is just a
+    # single fixed default (whatever map was last trained/edited by hand),
+    # and was silently loading THAT model no matter which map was actually
+    # selected. A model trained for a different room's geometry drives
+    # navigation off a completely wrong learned field, which is a much
+    # bigger source of bad paths/aborted goals than anything downstream in
+    # nav2.yaml — confirmed as the real root cause of the ongoing nav
+    # issues on any map other than whichever one model_path happened to
+    # point at.
+    ntfields_model = str(ntfields_models_dir(home) / f"{Path(map_base).name}.pt")
     launch("NTFields Planner",
            (f"ros2 run argo_mini ntfields_planner_node --ros-args "
-            f"--params-file {ntfields_cfg}"), env)
+            f"--params-file {ntfields_cfg} -p model_path:={ntfields_model}"), env)
     time.sleep(6)   # Python node + torch import needs extra startup time
-    ntfields_model = str(ntfields_models_dir(home) / f"{Path(map_base).name}.pt")
     ntfields_ok = lc_ntfields("/planner_server", env, model_path=ntfields_model)
     step_done("NTFields Planner")
 
