@@ -67,6 +67,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [expandedBills, setExpandedBills] = useState(() => new Set())
   const [showTeleopPad, setShowTeleopPad] = useState(false)
   const [showActivityPanel, setShowActivityPanel] = useState(false)
+  const [showTranscript, setShowTranscript] = useState(false)
+  const [transcript, setTranscript] = useState({ session_id: null, started_at: null, turns: [] })
+  const transcriptBottomRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
     toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
@@ -259,6 +262,28 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     const id = setInterval(load, 3000)
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
+
+  // Voice transcript (GET /voice/transcript) — only polled while the panel
+  // is actually open, unlike voiceStatus above which other UI state depends
+  // on regardless of visibility.
+  useEffect(() => {
+    if (!showTranscript) return
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/voice/transcript`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setTranscript(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl, showTranscript])
+
+  // Auto-scroll to the latest turn whenever the transcript updates.
+  useEffect(() => {
+    transcriptBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [transcript])
 
   // Status of the current/last plain single-destination trip (POST
   // /nav/goto — e.g. "Go to kitchen"), same poll pattern as voiceStatus.
@@ -940,6 +965,74 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         </div>
       )}
+
+      {/* Floating voice transcript — sits directly above the Teleop Pad's
+          own floating icon, same corner/collapse pattern. Shows the live
+          STT/TTS turns between Sonic and the guest, read from Postgres via
+          GET /voice/transcript (main_agent.py's db_log_turn() already
+          writes every turn there — this only displays it). */}
+      <div style={{ position: 'fixed', bottom: 84, right: 24, zIndex: 100 }}>
+        {!showTranscript && (
+        <button
+          onClick={() => setShowTranscript(!showTranscript)}
+          title="Toggle conversation transcript"
+          style={{
+            padding: '12px 14px', borderRadius: 12, fontSize: 16,
+            background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)',
+            color: 'var(--gold-bright)', cursor: 'pointer', fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.2s',
+          }}
+        >
+          {/* Speech-bubble icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+          </svg>
+        </button>
+        )}
+        {showTranscript && (
+          <div className="glass-card" style={{ padding: 20, marginTop: 12, width: 300 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div className="label-xs">Conversation</div>
+              <button
+                onClick={() => setShowTranscript(false)}
+                title="Minimize transcript"
+                style={{
+                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
+                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+            </div>
+            <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {transcript.turns.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--muted)', textAlign: 'center', padding: '12px 0' }}>
+                  No conversation yet
+                </div>
+              ) : transcript.turns.map((t, i) => {
+                const isRobot = t.role === 'robot'
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: isRobot ? 'flex-start' : 'flex-end' }}>
+                    <div style={{
+                      maxWidth: '85%', padding: '7px 10px', borderRadius: 10, fontSize: 12.5, lineHeight: 1.4,
+                      background: isRobot ? 'rgba(226,179,92,0.12)' : 'rgba(59,240,155,0.12)',
+                      border: `1px solid ${isRobot ? 'rgba(226,179,92,0.3)' : 'rgba(59,240,155,0.3)'}`,
+                      color: isRobot ? 'var(--gold-bright)' : 'var(--ok)',
+                    }}>
+                      {t.text}
+                    </div>
+                  </div>
+                )
+              })}
+              <div ref={transcriptBottomRef} />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Floating Teleop Pad — bottom right corner */}
       <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 100 }}>

@@ -127,6 +127,14 @@ Endpoints (CORS-open so the browser can call them directly):
                            Table 3") come from main_agent.py's own report_phase()
                            via VOICE_PROGRESS_PATH — null once stale (see
                            VOICE_PROGRESS_MAX_AGE_S) or if nothing's in progress.
+    GET  /voice/transcript →  {"session_id": str|null, "started_at": str|null,
+                           "turns": [{"role": "user"|"robot", "text": str,
+                           "created_at": str}]} — the most recent
+                           sonic_dialogue_session for this robot and its turns
+                           in order, straight from Postgres (main_agent.py's
+                           db_log_turn() already writes every turn there — this
+                           just reads it back). Empty turns, not an error, if
+                           there's no session yet.
     POST /voice/start  →  body {"action": "order"|"deliver"|"bill"|"room_service",
                            "map": str, "table": str}. Spawns sonic/main_agent.py
                            as a subprocess scoped to that table — this is what a
@@ -631,6 +639,64 @@ def _menu_location_id():
     except Exception as e:
         print(f'[launcher] location lookup failed: {e}')
         return None
+
+
+_robot_id_cache = None
+
+
+def _dialogue_robot_id():
+    """Resolves robots.robot_id (the PK sonic_dialogue_sessions.robot_id
+    references) from ROBOT_UID — same lookup shape as _menu_location_id()
+    above, just a different column off the same robots row."""
+    global _robot_id_cache
+    if _robot_id_cache is not None:
+        return _robot_id_cache
+    conn = _db()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT robot_id FROM robots WHERE robot_uid = %s', (ROBOT_UID,))
+            row = cur.fetchone()
+        if row:
+            _robot_id_cache = str(row[0])
+        return _robot_id_cache
+    except Exception as e:
+        print(f'[launcher] robot_id lookup failed: {e}')
+        return None
+
+
+def _get_voice_transcript():
+    """Most recent sonic_dialogue_session for this robot, with its turns —
+    {"session_id", "started_at", "turns": [{"role","text","created_at"}]}.
+    Empty turns (not an error) if there's no session yet, same degrade-to-
+    empty convention _get_menu_response() above uses when _db()/robot_id
+    lookup comes back empty."""
+    robot_id = _dialogue_robot_id()
+    conn = _db()
+    if conn is None or robot_id is None:
+        return {'session_id': None, 'started_at': None, 'turns': []}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT session_id, started_at FROM sonic_dialogue_sessions
+                   WHERE robot_id = %s ORDER BY started_at DESC LIMIT 1""",
+                (robot_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {'session_id': None, 'started_at': None, 'turns': []}
+            session_id, started_at = row
+            cur.execute(
+                """SELECT role, text, created_at FROM sonic_dialogue_turns
+                   WHERE session_id = %s ORDER BY created_at ASC""",
+                (session_id,),
+            )
+            turns = [{'role': r, 'text': t, 'created_at': c.isoformat()} for r, t, c in cur.fetchall()]
+        return {'session_id': str(session_id), 'started_at': started_at.isoformat(), 'turns': turns}
+    except Exception as e:
+        print(f'[launcher] voice transcript query failed: {e}')
+        return {'session_id': None, 'started_at': None, 'turns': []}
 
 
 def _resolve_menu_item_id(client_id):
@@ -1364,6 +1430,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table,
                         'wake_loop_running': wake_running, 'wake_loop_pending': wake_pending,
                         'phase': phase, 'phase_text': phase_text})
+
+        elif self.path == '/voice/transcript':
+            self._json(_get_voice_transcript())
 
         elif self.path == '/voice/nav_enabled':
             self._json({'enabled': _get_voice_nav_enabled()})
