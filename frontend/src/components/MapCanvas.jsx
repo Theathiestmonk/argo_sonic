@@ -24,6 +24,7 @@ export default function MapCanvas({
   const canvasRef  = useRef(null)
   const offRef     = useRef(null)   // { img: ImageBitmap, md: mapData }
   const [drag, setDrag] = useState(null)   // { startWX, startWY, curWX, curWY } while dragging a pose estimate
+  const [zoom, setZoom] = useState(1)   // multiplier on top of the fit-to-container base scale
 
   // Rebuild the offscreen bitmap whenever the map data changes.
   useEffect(() => {
@@ -100,12 +101,16 @@ export default function MapCanvas({
     }
 
     const { bmp, md } = offRef.current
-    const scale  = Math.min(W / md.width, H / md.height)
+    const scale  = Math.min(W / md.width, H / md.height) * zoom
     const drawW  = md.width  * scale
     const drawH  = md.height * scale
     const offX   = (W - drawW) / 2
     const offY   = (H - drawH) / 2
 
+    // Zoomed in, the map exceeds the canvas — clip to what's drawn rather
+    // than letting it spill over the rounded corners/buttons.
+    ctx.save()
+    ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip()
     ctx.drawImage(bmp, offX, offY, drawW, drawH)
 
     const toC = (wx, wy) => worldToCanvas(wx, wy, md, offX, offY, scale)
@@ -135,10 +140,11 @@ export default function MapCanvas({
     // for this. Drawn before the robot/goal markers so they sit on top.
     if (plannedPath.length > 1) {
       ctx.save()
-      ctx.setLineDash([6, 5])
+      ctx.setLineDash([8, 6])
       ctx.strokeStyle = '#e2b35c'
-      ctx.lineWidth = 2.5
+      ctx.lineWidth = 5
       ctx.lineJoin = 'round'
+      ctx.lineCap = 'round'
       ctx.beginPath()
       plannedPath.forEach((p, i) => {
         const [px, py] = toC(p.x, p.y)
@@ -148,17 +154,20 @@ export default function MapCanvas({
       ctx.restore()
     }
 
-    // Robot (maroon arrow)
+    // Robot ("Chassis" marker — small top-down robot body: rounded capsule,
+    // two wheel marks near the rear, a headlight dot near the front/nose.
+    // Forward is -Y before rotation, same convention the old arrow used.
     if (robotPose) {
       const [px, py] = toC(robotPose.x, robotPose.y)
       ctx.save()
       ctx.translate(px, py)
       ctx.rotate(-robotPose.theta)
-      ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(128,0,0,0.22)'; ctx.fill()
-      ctx.strokeStyle = '#800000'; ctx.lineWidth = 2; ctx.stroke()
-      ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(-6, 5); ctx.lineTo(6, 5); ctx.closePath()
-      ctx.fillStyle = '#800000'; ctx.fill()
+      ctx.fillStyle = '#800000'
+      ctx.beginPath(); ctx.arc(-8, 6, 3, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.arc(8, 6, 3, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.roundRect(-8, -12, 16, 22, 6); ctx.fill()
+      ctx.beginPath(); ctx.arc(0, -8, 2, 0, Math.PI * 2)
+      ctx.fillStyle = '#dedede'; ctx.fill()
       ctx.restore()
     }
 
@@ -188,18 +197,21 @@ export default function MapCanvas({
       ctx.fillStyle = '#3bf09b'; ctx.fill()
     }
 
+    // Bottom-left, not bottom-right — the zoom buttons now own that corner.
     if (clickable) {
       ctx.fillStyle = 'rgba(255,255,255,0.04)'
       ctx.font = '12px Inter,sans-serif'
-      ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
-      ctx.fillText('Click map to place label', W - 12, H - 10)
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
+      ctx.fillText('Click map to place label', 12, H - 10)
     }
     if (poseEstimateMode) {
       ctx.fillStyle = 'rgba(59,240,155,0.6)'
       ctx.font = '12px Inter,sans-serif'
-      ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
-      ctx.fillText('Click where Argo is, drag toward where it’s facing', W - 12, H - 10)
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
+      ctx.fillText('Click where Argo is, drag toward where it’s facing', 12, H - 10)
     }
+
+    ctx.restore()
   })
 
   // Shared canvas-pixel → world-meters conversion — used by the plain
@@ -209,7 +221,7 @@ export default function MapCanvas({
     const rect   = canvas.getBoundingClientRect()
     const { md } = offRef.current
     const W = canvas.width, H = canvas.height
-    const scale = Math.min(W / md.width, H / md.height)
+    const scale = Math.min(W / md.width, H / md.height) * zoom
     const offX  = (W - md.width  * scale) / 2
     const offY  = (H - md.height * scale) / 2
 
@@ -221,7 +233,7 @@ export default function MapCanvas({
     const col = cx / scale
     const row = md.height - 1 - cy / scale
     return { wx: md.origin.x + col * md.resolution, wy: md.origin.y + row * md.resolution }
-  }, [])
+  }, [zoom])
 
   const handleClick = useCallback(e => {
     if (poseEstimateMode || !clickable || !onMapClick || !offRef.current) return
@@ -252,23 +264,48 @@ export default function MapCanvas({
     setDrag(null)
   }, [poseEstimateMode, drag, onPoseEstimate, robotPose])
 
+  const ZOOM_MIN = 0.5, ZOOM_MAX = 4, ZOOM_STEP = 1.25
+  const zoomIn  = useCallback(() => setZoom(z => Math.min(z * ZOOM_STEP, ZOOM_MAX)), [])
+  const zoomOut = useCallback(() => setZoom(z => Math.max(z / ZOOM_STEP, ZOOM_MIN)), [])
+  const zoomBtnStyle = {
+    width: 30, height: 30, borderRadius: 8,
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
+    color: '#fdfbfa', fontSize: 17, fontWeight: 700, lineHeight: 1,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', userSelect: 'none', backdropFilter: 'blur(8px)',
+  }
+
   return (
-    <canvas
-      ref={canvasRef}
-      width={760}
-      height={520}
-      onClick={handleClick}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => poseEstimateMode && setDrag(null)}
-      style={{
-        width: '100%', height: '100%',
-        borderRadius: 16,
-        cursor: (clickable || poseEstimateMode) ? 'crosshair' : 'default',
-        background: '#08060e',
-        display: 'block',
-      }}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <canvas
+        ref={canvasRef}
+        width={760}
+        height={520}
+        onClick={handleClick}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => poseEstimateMode && setDrag(null)}
+        style={{
+          width: '100%', height: '100%',
+          borderRadius: 16,
+          cursor: (clickable || poseEstimateMode) ? 'crosshair' : 'default',
+          // Matches the map's own UNK (unexplored-area) gray above, rather
+          // than a near-black that fought for contrast against it — the
+          // letterboxed area around a non-square map, and anywhere the map
+          // hasn't fit the canvas exactly, now reads as "no map here" the
+          // same way unexplored cells inside the map already do, leaving
+          // the actual (light) map surface as the only thing that pops.
+          background: `rgb(${UNK.join(',')})`,
+          display: 'block',
+        }}
+      />
+      <div style={{ position: 'absolute', bottom: 10, right: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <button onClick={zoomIn} disabled={zoom >= ZOOM_MAX} title="Zoom in"
+          style={{ ...zoomBtnStyle, opacity: zoom >= ZOOM_MAX ? 0.4 : 1, cursor: zoom >= ZOOM_MAX ? 'not-allowed' : 'pointer' }}>+</button>
+        <button onClick={zoomOut} disabled={zoom <= ZOOM_MIN} title="Zoom out"
+          style={{ ...zoomBtnStyle, opacity: zoom <= ZOOM_MIN ? 0.4 : 1, cursor: zoom <= ZOOM_MIN ? 'not-allowed' : 'pointer' }}>−</button>
+      </div>
+    </div>
   )
 }
