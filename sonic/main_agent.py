@@ -260,6 +260,8 @@ class OrderState:
     category_intro_said: bool = False   # has the category's item overview been spoken yet this visit —
                                          # own flag rather than reusing pending_question, which
                                          # get_reply_or_route() also writes on every ask
+    menu_browse_off_topic_count: int = 0   # consecutive off-topic responses in n_menu_answer_questions —
+                                            # if this exceeds a threshold, exit menu gracefully to avoid loops
 
     # graph control flow
     next_node: Optional[str] = None
@@ -1677,6 +1679,7 @@ def _order_handoff_to_menu(state: OrderState, outcome: dict) -> None:
 
 def n_menu_pick_category(state: OrderState) -> dict:
     trace_node("n_menu_pick_category", state)
+    state.menu_browse_off_topic_count = 0  # reset counter when (re)entering menu
     purpose = "menu_ask_category_retry" if state.ask_retry else "menu_ask_category"
     outcome = get_reply_or_route(state, "n_menu_pick_category", purpose,
                                   expects="menu_category", categories=", ".join(menu_categories()))
@@ -1726,7 +1729,18 @@ def n_menu_answer_questions(state: OrderState) -> dict:
     outcome = get_reply_or_route(state, "n_menu_answer_questions", purpose,
                                   expects="menu_next_step", **ctx)
     if outcome is None:
+        # Off-topic redirect already spoken. If too many off-topic responses in
+        # a row, exit menu gracefully instead of looping forever.
+        state.menu_browse_off_topic_count += 1
+        if state.menu_browse_off_topic_count >= 3:
+            say("menu_browse_farewell", state)
+            state.went_idle = True
+            state.next_node = "n_respond"
+            state.menu_browse_off_topic_count = 0
+            return asdict(state)
         return asdict(state)
+
+    state.menu_browse_off_topic_count = 0
     state.category_intro_said = True
 
     if outcome.get("intent") == "take_order":
