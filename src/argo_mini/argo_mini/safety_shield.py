@@ -8,7 +8,9 @@ Pipeline:
 Three independent sensor sources with graduated forward-speed response:
 
   Lidar (LaserScan)  – /scan_corrected
-    > LIDAR_SLOW_DIST (1.00 m) : full speed
+    > LIDAR_SLOW_DIST (0.70 m) : full speed — lowered from 1.00 m; that
+      margin throttled speed well below vx_max any time something was
+      within a full metre of the forward path, common indoors
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
     < LIDAR_STOP_DIST (0.35 m) : hard stop — lowered from 0.60 m; that
       margin sat inside the final approach to a table/kitchen waypoint
@@ -16,7 +18,7 @@ Three independent sensor sources with graduated forward-speed response:
       and leaving NavigateToPose to abort centimeters from the goal
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
-    > DEPTH_SLOW_DIST (0.80 m) : full speed
+    > DEPTH_SLOW_DIST (0.55 m) : full speed — lowered from 0.80 m, same reasoning
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
     < DEPTH_STOP_DIST (0.25 m) : hard stop — lowered from 0.40 m, same reasoning
 
@@ -51,7 +53,12 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan, PointCloud2, Range
 
 # ── Lidar ─────────────────────────────────────────────────────────────────────
-LIDAR_SLOW_DIST  = 1.00    # m   – begin speed reduction
+# Lowered from 1.00 — at 1.00m, anything within a full metre of the
+# robot's forward path (very common in a compact indoor space) throttled
+# speed down well below vx_max, capping overall speed independent of
+# whatever the nav stack's own limits allowed. Still a real graduated
+# zone before the hard stop below, just narrower.
+LIDAR_SLOW_DIST  = 0.70    # m   – begin speed reduction
 # Lowered from 0.60 — a service-point waypoint (table/kitchen) is
 # deliberately close to furniture, so the old margin sat *inside* the
 # final approach distance: Nav2 kept commanding forward motion for the
@@ -66,7 +73,7 @@ LIDAR_MIN_PTS    = 3       # minimum scan points to register an obstacle
 LIDAR_STALE_SECS = 1.0     # s   – treat as stale if no scan arrives
 
 # ── Depth camera ──────────────────────────────────────────────────────────────
-DEPTH_SLOW_DIST  = 0.80    # m   – begin speed reduction
+DEPTH_SLOW_DIST  = 0.55    # m   – begin speed reduction — lowered from 0.80, same reasoning as LIDAR_SLOW_DIST above
 DEPTH_STOP_DIST  = 0.25    # m   – hard stop — lowered from 0.40, same reasoning as LIDAR_STOP_DIST above
 DEPTH_SLOW_PTS   = 5       # minimum pts to activate slow zone
 DEPTH_MIN_PTS    = 15      # minimum pts for hard stop (noise filter)
