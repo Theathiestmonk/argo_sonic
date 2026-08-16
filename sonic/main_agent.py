@@ -585,7 +585,7 @@ def menu_items_summary(items: list) -> str:
     if not items:
         return "nothing available right now"
     return "; ".join(
-        f"{i['name']} (${i['price']:.2f})" + (f" — {i['description']}" if i.get("description") else "")
+        f"{i['name']} (₹{i['price']:.2f})" + (f" — {i['description']}" if i.get("description") else "")
         for i in items
     )
 
