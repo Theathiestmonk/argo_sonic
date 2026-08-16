@@ -22,6 +22,7 @@ EXTRACTION_SCHEMA = """{
   "wants_more": <true/false/null — only for a yes/no answer to \\"anything else?\\">,
   "confirmed": <true/false/null — only for a yes/no answer confirming the final order readback>,
   "menu_done": <true/false/null — only for a yes/no answer to \\"anything else from the menu, or done browsing?\\">,
+  "remove_item": <true/false/null — only when declining ALL suggested alternatives for an unmatched item>,
   "item_changes": [
     {"name": "<dish name>", "qty": <integer or null>, "modifications": {"<option>": "<value>"}}
   ],
@@ -55,6 +56,11 @@ EXPECTS_GUIDANCE = {
                        "intent=take_order and put the dish in item_changes. If they want to hear about a "
                        "different category, extract it into current_menu_category. Otherwise map their "
                        "yes/no reply (done browsing vs. not) to menu_done.",
+    "item_not_found": "The dish they named earlier ({item_name}) isn't on our menu — you just offered them "
+                       "alternatives ({suggestions}). Extract whichever specific dish they now pick into "
+                       "item_changes (name only, unless they also restate qty/modifications). If they "
+                       "decline everything (\"never mind\", \"forget it\", \"none of those\"), set "
+                       "remove_item=true instead and leave item_changes empty.",
 }
 
 
@@ -128,6 +134,7 @@ def extract(
         "wants_more": data.get("wants_more") if isinstance(data.get("wants_more"), bool) else None,
         "confirmed": data.get("confirmed") if isinstance(data.get("confirmed"), bool) else None,
         "menu_done": data.get("menu_done") if isinstance(data.get("menu_done"), bool) else None,
+        "remove_item": data.get("remove_item") if isinstance(data.get("remove_item"), bool) else None,
         "item_changes": _clean_item_changes(data.get("item_changes")),
         "response_text": (data.get("response_text") or "").strip(),
     }

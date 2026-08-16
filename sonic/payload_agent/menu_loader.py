@@ -99,6 +99,33 @@ def get_price(item_name: Optional[str]) -> Optional[float]:
     return item["price"] if item else None
 
 
+def suggest_items(raw_name: Optional[str], limit: int = 5) -> List[str]:
+    """Relevant menu items to offer when raw_name didn't match anything —
+    e.g. "coffee" matches no exact item on a menu where every coffee is
+    qualified ("Cappuccino (Hot)", "Americano (Hot)", ...), but it DOES
+    match the "coffee" category, so suggest everything in it. Falls back to
+    a looser name-similarity pass (cutoff 0.5 vs find_item()'s strict 0.72)
+    for anything that's a near-miss rather than a category match — 0.5
+    catches typos like "capucino"/"expresso" while excluding unrelated
+    words that would otherwise pick up spurious partial-character overlap
+    (e.g. "burger" weakly resembling "Cold Brew" at a looser cutoff). Can
+    legitimately return an empty list if nothing is genuinely relevant —
+    callers should handle that gracefully, not assume it's always non-empty."""
+    if not raw_name:
+        return []
+    category = find_category(raw_name)
+    if category:
+        return [i["name"] for i in get_items_by_category(category)][:limit]
+    key = raw_name.strip().lower()
+    matches = difflib.get_close_matches(key, MENU_LOOKUP.keys(), n=limit, cutoff=0.5)
+    seen = []
+    for m in matches:
+        name = MENU_LOOKUP[m]["name"]
+        if name not in seen:
+            seen.append(name)
+    return seen[:limit]
+
+
 def canonical_name(item_name: Optional[str]) -> Optional[str]:
     """The menu's own spelling of a dish, given whatever the guest/LLM
     called it (fuzzy-matched) — use this to normalize order_items[n].name

@@ -49,14 +49,26 @@ DISPATCH_ACTION_TO_INTENT = {
 # Context each question/announcement needs beyond what render_*() already
 # pulls from the payload itself (order summary, table, etc. are read
 # straight off ctx kwargs by the {placeholder} in prompt_generator's hints).
+def _item_not_found_context(p: Payload) -> dict:
+    target = p._first_incomplete_item()
+    item_name = target.name if target else "that"
+    suggestions = menu_loader.suggest_items(item_name)
+    return {
+        "item_name": item_name,
+        "suggestions": ", ".join(suggestions) if suggestions else "nothing quite similar — happy to run "
+                                                                    "through the menu instead if that helps",
+    }
+
+
 QUESTION_CONTEXT = {
-    "item_qty": lambda p: {"item_name": (p._last_item().name if p._last_item() else "that")},
+    "item_qty": lambda p: {"item_name": (p._first_incomplete_item().name if p._first_incomplete_item() else "that")},
     "anything_else": lambda p: {"order_summary": p.order_summary()},
     "confirm_order": lambda p: {
         "order_summary": p.order_summary(),
         "total": f"{menu_loader.CURRENCY_SYMBOL}{sum((menu_loader.get_price(i.name) or 0) * (i.qty or 0) for i in p.order_items.values()):.2f}",
     },
     "menu_category": lambda p: {"categories": ", ".join(menu_loader.get_categories())},
+    "item_not_found": _item_not_found_context,
 }
 
 
@@ -151,6 +163,17 @@ def run_session() -> None:
             return
 
         raw = extract(llm, transcript, payload, expects)
+
+        if expects == "item_not_found" and raw.get("remove_item"):
+            # Guest declined every suggested alternative — drop the
+            # unresolved item entirely rather than leave it stuck blocking
+            # is_complete_for_intent() forever.
+            target = payload._first_incomplete_item()
+            if target is not None:
+                del payload.order_items[target.serial_no]
+            payload.conversation_history.append({"role": "user", "text": transcript})
+            continue
+
         item_named = any(c.get("name") for c in raw["item_changes"])
         changes = resolve_item_changes(payload, raw["item_changes"], canonicalize=menu_loader.canonical_name)
         payload = merge(payload, {**raw, "order_items": changes})

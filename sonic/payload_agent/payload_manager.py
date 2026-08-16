@@ -53,8 +53,20 @@ def resolve_item_changes(
       2. no name given (e.g. a bare "three" answering "how many?") -> the
          most recently added INCOMPLETE item (the one get_next_question()
          is currently asking about), not just a nameless slot — an item can
-         already have a name and still be incomplete (qty missing)
-      3. named item with no match and no incomplete item pending -> new slot
+         already have a name and still be incomplete (qty, or an unmatched
+         name still awaiting clarification)
+      3. named item with no exact match -> an existing CORRECTABLE slot
+         (nameless, or named but not menu_matched — e.g. answering the
+         "we don't have plain coffee, did you mean...?" clarification
+         corrects the same slot rather than adding a new one), else new slot
+
+    Each resolved entry also carries "menu_matched": True/False whenever a
+    name is set, from whether canonicalize() found a real menu item —
+    merge() propagates this onto OrderItem.menu_matched, which
+    is_complete() requires. Without this, an item like "coffee" that
+    doesn't match any specific menu SKU would silently reach confirmation
+    and get dropped from the order at execute time instead of being
+    caught and clarified.
     """
     canon = canonicalize or (lambda n: n)
     resolved: Dict[int, Dict[str, Any]] = {}
@@ -73,12 +85,12 @@ def resolve_item_changes(
                     target_sn = sn
                     break
             if target_sn is None:
-                open_slots = sorted(
+                correctable = sorted(
                     sn for sn, item in payload.order_items.items()
-                    if not item.name and sn not in resolved
+                    if (not item.name or not item.menu_matched) and sn not in resolved
                 )
-                if open_slots:
-                    target_sn = open_slots[0]
+                if correctable:
+                    target_sn = correctable[0]
         else:
             incomplete = sorted(
                 sn for sn, item in payload.order_items.items()
@@ -94,6 +106,7 @@ def resolve_item_changes(
         entry = resolved.setdefault(target_sn, {})
         if name:
             entry["name"] = matched_name or name
+            entry["menu_matched"] = matched_name is not None
         if change.get("qty") is not None:
             entry["qty"] = change["qty"]
         if change.get("modifications"):
@@ -153,6 +166,7 @@ def merge(old: Payload, extracted: Dict[str, Any]) -> Payload:
             existing = base.order_items[sn]
             if item_data.get("name"):
                 existing.name = item_data["name"]
+                existing.menu_matched = item_data.get("menu_matched", False)
             if item_data.get("qty") is not None:
                 existing.qty = item_data["qty"]
             if item_data.get("modifications"):
@@ -163,6 +177,7 @@ def merge(old: Payload, extracted: Dict[str, Any]) -> Payload:
                 name=item_data.get("name"),
                 qty=item_data.get("qty"),
                 modifications=dict(item_data.get("modifications") or {}),
+                menu_matched=item_data.get("menu_matched", False),
             )
 
     if base.intent == Intent.NONE and any(item.name for item in base.order_items.values()):

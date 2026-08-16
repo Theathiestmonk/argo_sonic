@@ -29,14 +29,18 @@ class TestOrderItem(unittest.TestCase):
     def test_incomplete_with_zero_qty(self):
         self.assertFalse(OrderItem(serial_no=1, name="Coffee", qty=0).is_complete())
 
+    def test_incomplete_when_not_menu_matched(self):
+        self.assertFalse(OrderItem(serial_no=1, name="Coffee", qty=2, menu_matched=False).is_complete())
+
     def test_complete(self):
-        self.assertTrue(OrderItem(serial_no=1, name="Coffee", qty=2).is_complete())
+        self.assertTrue(OrderItem(serial_no=1, name="Coffee", qty=2, menu_matched=True).is_complete())
 
     def test_complete_regardless_of_modifications(self):
         # Empty dict = no mods needed; a filled dict shouldn't matter either.
-        self.assertTrue(OrderItem(serial_no=1, name="Coffee", qty=1).is_complete())
+        self.assertTrue(OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True).is_complete())
         self.assertTrue(
-            OrderItem(serial_no=1, name="Coffee", qty=1, modifications={"size": "large"}).is_complete()
+            OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True,
+                      modifications={"size": "large"}).is_complete()
         )
 
 
@@ -90,7 +94,7 @@ class TestIsCompleteForIntent(unittest.TestCase):
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)},
             wants_more=False,
             confirmed=True,
         )
@@ -141,12 +145,21 @@ class TestGetNextQuestion(unittest.TestCase):
         p = Payload(intent=Intent.TAKE_ORDER, order_table=3, robot_location=3)
         self.assertEqual(p.get_next_question(), "item_name")
 
+    def test_take_order_asks_item_not_found_when_unmatched(self):
+        p = Payload(
+            intent=Intent.TAKE_ORDER,
+            order_table=3,
+            robot_location=3,
+            order_items={1: OrderItem(serial_no=1, name="Coffee", menu_matched=False)},
+        )
+        self.assertEqual(p.get_next_question(), "item_not_found")
+
     def test_take_order_asks_qty(self):
         p = Payload(
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee")},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", menu_matched=True)},
         )
         self.assertEqual(p.get_next_question(), "item_qty")
 
@@ -155,7 +168,7 @@ class TestGetNextQuestion(unittest.TestCase):
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)},
         )
         self.assertEqual(p.get_next_question(), "anything_else")
 
@@ -164,7 +177,7 @@ class TestGetNextQuestion(unittest.TestCase):
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)},
             wants_more=False,
         )
         self.assertEqual(p.get_next_question(), "confirm_order")
@@ -179,7 +192,7 @@ class TestGetNextQuestion(unittest.TestCase):
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)},
             wants_more=False,
             confirmed=False,
         )
@@ -191,7 +204,7 @@ class TestGetNextQuestion(unittest.TestCase):
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)},
             wants_more=False,
             confirmed=True,
         )
@@ -286,7 +299,7 @@ class TestMerge(unittest.TestCase):
         old.current_menu_category = "Coffee"
         extracted = {
             "intent": Intent.TAKE_ORDER,
-            "order_items": {1: {"name": "Cappuccino (Hot)", "qty": 1}},
+            "order_items": {1: {"name": "Cappuccino (Hot)", "qty": 1, "menu_matched": True}},
         }
         merged = merge(old, extracted)
         self.assertEqual(merged.intent, Intent.TAKE_ORDER)
@@ -327,12 +340,21 @@ class TestResolveItemChanges(unittest.TestCase):
     def test_fills_open_slot(self):
         p = Payload(order_items={1: OrderItem(serial_no=1)})
         resolved = resolve_item_changes(p, [{"name": "Coffee", "qty": 2}])
-        self.assertEqual(resolved, {1: {"name": "Coffee", "qty": 2}})
+        self.assertEqual(resolved, {1: {"name": "Coffee", "qty": 2, "menu_matched": True}})
 
     def test_no_open_slot_creates_new(self):
-        p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)})
+        p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)})
         resolved = resolve_item_changes(p, [{"name": "Cookie", "qty": 1}])
-        self.assertEqual(resolved, {2: {"name": "Cookie", "qty": 1}})
+        self.assertEqual(resolved, {2: {"name": "Cookie", "qty": 1, "menu_matched": True}})
+
+    def test_unmatched_existing_item_is_correctable_not_a_new_slot(self):
+        """The item_not_found clarification loop: guest corrects an
+        unmatched item ('coffee' -> 'cappuccino') — must update the SAME
+        slot, not add a second one alongside the still-unmatched original."""
+        p = Payload(order_items={1: OrderItem(serial_no=1, name="coffee", qty=2, menu_matched=False)})
+        canon = {"cappuccino": "Cappuccino (Hot)"}.get
+        resolved = resolve_item_changes(p, [{"name": "cappuccino"}], canonicalize=canon)
+        self.assertEqual(resolved, {1: {"name": "Cappuccino (Hot)", "menu_matched": True}})
 
     def test_matches_existing_named_item_not_just_the_last_one(self):
         """The demo cancellation case: cookie (serial 2) was added most
@@ -340,24 +362,27 @@ class TestResolveItemChanges(unittest.TestCase):
         (Coffee), not create/overwrite serial 2."""
         p = Payload(
             order_items={
-                1: OrderItem(serial_no=1, name="Coffee", qty=2),
-                2: OrderItem(serial_no=2, name="Chocolate Chip Cookie", qty=1),
+                1: OrderItem(serial_no=1, name="Coffee", qty=2, menu_matched=True),
+                2: OrderItem(serial_no=2, name="Chocolate Chip Cookie", qty=1, menu_matched=True),
             }
         )
         resolved = resolve_item_changes(p, [{"name": "Coffee", "qty": 1}])
-        self.assertEqual(resolved, {1: {"name": "Coffee", "qty": 1}})
+        self.assertEqual(resolved, {1: {"name": "Coffee", "qty": 1, "menu_matched": True}})
 
     def test_case_insensitive_name_match(self):
-        p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee", qty=2)})
+        p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee", qty=2, menu_matched=True)})
         resolved = resolve_item_changes(p, [{"name": "coffee", "qty": 1}])
-        self.assertEqual(resolved, {1: {"name": "coffee", "qty": 1}})
+        self.assertEqual(resolved, {1: {"name": "coffee", "qty": 1, "menu_matched": True}})
 
     def test_multiple_new_items_one_utterance(self):
         p = Payload()
         resolved = resolve_item_changes(
             p, [{"name": "Pizza", "qty": 2}, {"name": "Coke", "qty": 1}]
         )
-        self.assertEqual(resolved, {1: {"name": "Pizza", "qty": 2}, 2: {"name": "Coke", "qty": 1}})
+        self.assertEqual(resolved, {
+            1: {"name": "Pizza", "qty": 2, "menu_matched": True},
+            2: {"name": "Coke", "qty": 1, "menu_matched": True},
+        })
 
     def test_qty_only_change_no_name(self):
         p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee")})
@@ -365,21 +390,21 @@ class TestResolveItemChanges(unittest.TestCase):
         self.assertEqual(resolved, {1: {"qty": 3}})
 
     def test_modifications_merge(self):
-        p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)})
+        p = Payload(order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)})
         resolved = resolve_item_changes(p, [{"name": "Coffee", "modifications": {"size": "large"}}])
-        self.assertEqual(resolved, {1: {"name": "Coffee", "modifications": {"size": "large"}}})
+        self.assertEqual(resolved, {1: {"name": "Coffee", "modifications": {"size": "large"}, "menu_matched": True}})
 
     def test_canonicalize_normalizes_menu_name(self):
         p = Payload()
         canon = {"cappucino": "Cappuccino (Hot)"}.get
         resolved = resolve_item_changes(p, [{"name": "cappucino", "qty": 1}], canonicalize=canon)
-        self.assertEqual(resolved, {1: {"name": "Cappuccino (Hot)", "qty": 1}})
+        self.assertEqual(resolved, {1: {"name": "Cappuccino (Hot)", "qty": 1, "menu_matched": True}})
 
     def test_canonicalize_falls_back_to_raw_name_if_no_match(self):
         p = Payload()
         canon = lambda n: None  # no menu match
         resolved = resolve_item_changes(p, [{"name": "Burger"}], canonicalize=canon)
-        self.assertEqual(resolved, {1: {"name": "Burger"}})
+        self.assertEqual(resolved, {1: {"name": "Burger", "menu_matched": False}})
 
     def test_full_merge_integration(self):
         """resolve_item_changes() output feeds directly into merge()."""
@@ -404,7 +429,7 @@ class TestAdvance(unittest.TestCase):
             intent=Intent.TAKE_ORDER,
             order_table=3,
             robot_location=3,
-            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1)},
+            order_items={1: OrderItem(serial_no=1, name="Coffee", qty=1, menu_matched=True)},
             wants_more=True,
         )
         advanced = advance(p)
@@ -434,8 +459,8 @@ class TestAdvance(unittest.TestCase):
             order_table=2,
             robot_location=2,
             order_items={
-                1: OrderItem(serial_no=1, name="Coffee", qty=2),
-                2: OrderItem(serial_no=2, name="Chocolate Chip Cookie", qty=1),
+                1: OrderItem(serial_no=1, name="Coffee", qty=2, menu_matched=True),
+                2: OrderItem(serial_no=2, name="Chocolate Chip Cookie", qty=1, menu_matched=True),
             },
             wants_more=True,
         )
@@ -453,8 +478,8 @@ class TestAdvance(unittest.TestCase):
             order_table=2,
             robot_location=2,
             order_items={
-                1: OrderItem(serial_no=1, name="Cookie", qty=1),
-                2: OrderItem(serial_no=2, name="Coffee", qty=None),
+                1: OrderItem(serial_no=1, name="Cookie", qty=1, menu_matched=True),
+                2: OrderItem(serial_no=2, name="Coffee", qty=None, menu_matched=True),
             },
             wants_more=True,
         )
@@ -550,13 +575,76 @@ class TestMenuBrowsingLoop(unittest.TestCase):
             p,
             {
                 "intent": Intent.TAKE_ORDER,
-                "order_items": {1: {"name": "Cappuccino (Hot)", "qty": 1}},
+                "order_items": {1: {"name": "Cappuccino (Hot)", "qty": 1, "menu_matched": True}},
             },
         )
         self.assertEqual(merged.intent, Intent.TAKE_ORDER)
         self.assertIsNone(merged.current_menu_category)  # reset — menu-specific
         self.assertTrue(merged.order_items[1].is_complete())
         self.assertEqual(merged.order_table, 2)  # carried forward
+
+
+class TestItemNotFoundFlow(unittest.TestCase):
+    """The 'don't confirm an order with items not on the menu' requirement:
+    an unmatched item must block progress past item_not_found until the
+    guest picks something real, never silently reach confirm_order."""
+
+    def test_unmatched_item_blocks_anything_else_and_confirm(self):
+        p = Payload(
+            intent=Intent.TAKE_ORDER,
+            order_table=3,
+            robot_location=3,
+            order_items={1: OrderItem(serial_no=1, name="coffee", qty=2, menu_matched=False)},
+        )
+        self.assertEqual(p.get_next_question(), "item_not_found")
+        self.assertFalse(p.is_complete_for_intent())
+
+    def test_earlier_unmatched_item_not_masked_by_later_complete_item(self):
+        """Multi-item utterance 'a coffee and one cookie': cookie (added
+        second) is complete, but coffee (added first, generic/unmatched)
+        must still block progress — this is exactly what
+        _first_incomplete_item() over _last_item() fixes."""
+        p = Payload(
+            intent=Intent.TAKE_ORDER,
+            order_table=3,
+            robot_location=3,
+            order_items={
+                1: OrderItem(serial_no=1, name="coffee", qty=1, menu_matched=False),
+                2: OrderItem(serial_no=2, name="Chocolate Chip Cookie", qty=1, menu_matched=True),
+            },
+        )
+        self.assertEqual(p.get_next_question(), "item_not_found")
+        self.assertFalse(p.is_complete_for_intent())
+
+    def test_correction_resolves_and_unblocks(self):
+        p = Payload(
+            intent=Intent.TAKE_ORDER,
+            order_table=3,
+            robot_location=3,
+            order_items={1: OrderItem(serial_no=1, name="coffee", qty=2, menu_matched=False)},
+        )
+        canon = {"cappuccino": "Cappuccino (Hot)"}.get
+        changes = resolve_item_changes(p, [{"name": "cappuccino"}], canonicalize=canon)
+        p = merge(p, {"order_items": changes})
+        self.assertTrue(p.order_items[1].menu_matched)
+        self.assertEqual(p.order_items[1].name, "Cappuccino (Hot)")
+        self.assertEqual(p.order_items[1].qty, 2)  # untouched by the correction
+        self.assertEqual(p.get_next_question(), "anything_else")
+
+    def test_correction_still_unmatched_keeps_asking(self):
+        """Guest picks another item that ALSO isn't on the menu — stays
+        blocked at item_not_found, doesn't fall through to confirm."""
+        p = Payload(
+            intent=Intent.TAKE_ORDER,
+            order_table=3,
+            robot_location=3,
+            order_items={1: OrderItem(serial_no=1, name="coffee", qty=2, menu_matched=False)},
+        )
+        canon = lambda n: None  # still no menu match
+        changes = resolve_item_changes(p, [{"name": "burger"}], canonicalize=canon)
+        p = merge(p, {"order_items": changes})
+        self.assertFalse(p.order_items[1].menu_matched)
+        self.assertEqual(p.get_next_question(), "item_not_found")
 
 
 class TestFullOrderScenario(unittest.TestCase):
@@ -573,14 +661,15 @@ class TestFullOrderScenario(unittest.TestCase):
         self.assertEqual(payload.get_next_question(), "item_name")
 
         # 3. "Can I have two coffees please?"
-        payload = merge(payload, {"order_items": {1: {"name": "Coffee", "qty": 2}}})
+        payload = merge(payload, {"order_items": {1: {"name": "Coffee", "qty": 2, "menu_matched": True}}})
         payload = advance(payload)
         self.assertEqual(payload.get_next_question(), "anything_else")
 
         # 4. "Yes, one cookie" -> wants_more True + new item in same turn
         payload = merge(
             payload,
-            {"wants_more": True, "order_items": {2: {"name": "Chocolate Chip Cookie", "qty": 1}}},
+            {"wants_more": True, "order_items": {
+                2: {"name": "Chocolate Chip Cookie", "qty": 1, "menu_matched": True}}},
         )
         payload = advance(payload)
         # advance() would open slot 3 since wants_more was True and slot 2

@@ -13,10 +13,11 @@ python-dotenv
 sounddevice>=0.4.6
 openwakeword
 psycopg2-binary>=2.9
-langgraph>=0.2
+langgraph>=0.2    # main_agent.py (the LangGraph agent) only — payload_agent/ doesn't use it
 typing_extensions
 websockets>=12.0   # Sarvam streaming TTS (sarvam_tts_stream) — optional at runtime,
                     # speak() falls back to the REST API if this isn't installed
+# pydantic (below, shared with settings-dashboard/backend) — payload_agent/'s Payload schema
 
 # ── settings-dashboard/backend/ (Jetson WiFi/Bluetooth/System settings API) ──
 fastapi>=0.110,<1.0

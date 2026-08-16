@@ -32,6 +32,8 @@ QUESTION_HINTS = {
     "menu_category": "Ask which menu category they'd like to hear about. Available: {categories}.",
     "menu_next_step": "Ask if they'd like to order something, hear about a different category, or if "
                        "they're done browsing the menu.",
+    "item_not_found": "Apologize briefly that {item_name} isn't on the menu, then offer these as "
+                       "alternatives: {suggestions}. Ask which they'd like, or if they'd rather skip it.",
 }
 
 ANNOUNCEMENT_HINTS = {

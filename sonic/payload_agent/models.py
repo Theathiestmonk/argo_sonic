@@ -56,9 +56,10 @@ class OrderItem(BaseModel):
     name: Optional[str] = None
     qty: Optional[int] = None
     modifications: Dict[str, str] = Field(default_factory=dict)
+    menu_matched: bool = False  # True once `name` has been confirmed against a real menu item
 
     def is_complete(self) -> bool:
-        return bool(self.name) and self.qty is not None and self.qty > 0
+        return bool(self.name) and self.qty is not None and self.qty > 0 and self.menu_matched
 
 
 class Payload(BaseModel):
@@ -83,6 +84,20 @@ class Payload(BaseModel):
         if not self.order_items:
             return None
         return self.order_items[max(self.order_items)]
+
+    def _first_incomplete_item(self) -> Optional[OrderItem]:
+        """The item get_next_question() should currently be working on —
+        the earliest by serial_no that isn't done yet, not just the most
+        recently added one. Matters for a multi-item utterance like "a
+        coffee and one cookie": if the cookie (added second) ends up
+        complete while the coffee (added first) is still unmatched against
+        the menu, _last_item() would point at the already-done cookie and
+        silently skip past the coffee's unresolved problem."""
+        for sn in sorted(self.order_items):
+            item = self.order_items[sn]
+            if not item.is_complete():
+                return item
+        return None
 
     def is_complete_for_intent(self) -> bool:
         if self.intent == Intent.NONE:
@@ -129,11 +144,16 @@ class Payload(BaseModel):
             return "navigate"
 
         if self.intent == Intent.TAKE_ORDER:
-            last = self._last_item()
-            if last is None or not last.name:
+            if not self.order_items:
                 return "item_name"
-            if last.qty is None:
-                return "item_qty"
+            target = self._first_incomplete_item()
+            if target is not None:
+                if not target.name:
+                    return "item_name"
+                if not target.menu_matched:
+                    return "item_not_found"
+                if target.qty is None:
+                    return "item_qty"
             if self.wants_more is None:
                 return "anything_else"
             if self.wants_more:
