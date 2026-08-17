@@ -59,17 +59,17 @@
         wz_max: 0.4
         # Reverted to 0.15 — the robot ran smoothest at this linear
         # speed/accel; 0.50 (tried 2026-08-15) was faster but rougher.
-        # Angular values (wz_max/az_max) are untouched — their own separate
-        # tuning history, not part of this revert.
         ax_max: 0.15
         ax_min: -0.15
         ay_min: 0.0
         ay_max: 0.0
-        # Angular accel also lowered, less aggressively — in-place rotation
-        # on a differential-drive base can skid too (one wheel reversing
-        # under the other), but turning responsiveness still matters for a
-        # service robot working close to tables/people.
-        az_max: 0.6
+        # Wheel-level (slip-relevant) tangential accel from rotating is
+        # az_max * (WHEEL_BASE/2) = az_max * 0.205 (WHEEL_BASE=0.41,
+        # serial_bridge.py). Matching linear's 0.15 m/s² no-slip threshold
+        # at the wheel gives az_max <= ~0.73 rad/s² headroom — 0.3 sits
+        # comfortably under that with real margin, while staying responsive
+        # enough for a service robot working close to tables/people.
+        az_max: 0.3
         iteration_count: 1
         temperature: 0.3
         gamma: 0.015
@@ -195,8 +195,8 @@
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
       # clamped there anyway.
-      max_accel: [0.15, 0.0, 0.6]
-      max_decel: [-0.15, 0.0, -0.6]
+      max_accel: [0.15, 0.0, 0.3]
+      max_decel: [-0.15, 0.0, -0.3]
       odom_topic: /odom
       velocity_timeout: 1.0
 
