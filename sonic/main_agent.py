@@ -135,7 +135,7 @@ SARVAM_TTS_SAMPLE_RATE = 22050
 
 WAKE_WORD_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Hi_Sonic.onnx")
 WAKE_WORD_NAME = "Hi_Sonic"
-WAKE_WORD_THRESHOLD = 0.5
+WAKE_WORD_THRESHOLD = 0.35  # lower = more sensitive to a quieter/farther "Hi Sonic", more false-positive risk from background noise/speech
 
 # The one ROS-aware subprocess this file shells out to — unmodified, shared
 # with sonic_agent.py. Table coordinates stay JSON-file-only (office_map.json
@@ -164,18 +164,23 @@ SILENCE_ONSET_TIMEOUT_S = 30.0  # how long a single listen attempt waits for spe
 SILENCE_GIVEUP_TOTAL_S = float("inf")
 TRAILING_SILENCE_MS = 600
 # int16 RMS energy a frame must exceed to count as "speech started" in
-# record_utterance() — lower picks up quieter voices but also more room
-# noise. Was dropped to 150 at one point for sensitivity, but that's below
-# this robot's actual measured ambient noise floor (~280-500 RMS, live-
-# probed with a bare sd.InputStream on real hardware) — record_utterance()
-# uses this SAME threshold for both "has speech started" and "has speech
-# ended" (RMS must drop below it for TRAILING_SILENCE_MS straight), so at
-# 150 ambient noise alone never reads as silence and a listen attempt can
-# hang indefinitely waiting for a quiet moment that never arrives. 550
-# clears the highest ambient blip observed (~502) with margin, while still
-# sitting comfortably below real speech peaks (900+ in the same probe) —
-# override per-deployment via SONIC_RMS_THRESHOLD if your mic/room differs.
-SPEECH_RMS_THRESHOLD = int(os.environ.get("SONIC_RMS_THRESHOLD", "550"))
+# record_utterance() — lower picks up quieter voices (e.g. a guest farther
+# from the mic) but also more room noise. Was dropped to 150 at one point
+# for sensitivity, but that's below this robot's actual measured ambient
+# noise floor (~280-500 RMS, live-probed with a bare sd.InputStream on real
+# hardware) — record_utterance() uses this SAME threshold for both "has
+# speech started" and "has speech ended" (RMS must drop below it for
+# TRAILING_SILENCE_MS straight), so at 150 ambient noise alone never reads
+# as silence and a listen attempt can hang indefinitely waiting for a quiet
+# moment that never arrives. Lowered from 550 to 500 for more range on
+# quieter/farther speech — only ~2 units of margin above the highest
+# ambient blip (~502) from that original probe, which may not hold if
+# today's ambient conditions differ (more foot traffic, new noise sources,
+# etc.) — re-run that live sd.InputStream RMS probe on the actual deployed
+# hardware if listen attempts start hanging or mishearing quiet room noise
+# as speech, and raise this back up if so. Override per-deployment via
+# SONIC_RMS_THRESHOLD if your mic/room differs.
+SPEECH_RMS_THRESHOLD = int(os.environ.get("SONIC_RMS_THRESHOLD", "500"))
 
 TEXT_MODE = False
 
