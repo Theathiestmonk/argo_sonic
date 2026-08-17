@@ -25,6 +25,23 @@ export default function MapCanvas({
   const offRef     = useRef(null)   // { img: ImageBitmap, md: mapData }
   const [drag, setDrag] = useState(null)   // { startWX, startWY, curWX, curWY } while dragging a pose estimate
   const [zoom, setZoom] = useState(1)   // multiplier on top of the fit-to-container base scale
+  const [maximized, setMaximized] = useState(false)
+
+  // Only one <canvas> is ever mounted (below) — maximizing swaps its actual
+  // pixel resolution up, not just its CSS display size, so the popup is
+  // genuinely sharper rather than a blown-up, blurrier version of the same
+  // 760x520 bitmap. Same aspect ratio throughout so the fit-to-container
+  // math above doesn't need to know which mode it's in.
+  const canvasW = maximized ? 1520 : 760
+  const canvasH = maximized ? 1040 : 520
+
+  // Esc closes the popup, same as clicking the backdrop or the minimize button.
+  useEffect(() => {
+    if (!maximized) return
+    const onKey = e => { if (e.key === 'Escape') setMaximized(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [maximized])
 
   // Rebuild the offscreen bitmap whenever the map data changes.
   useEffect(() => {
@@ -154,20 +171,27 @@ export default function MapCanvas({
       ctx.restore()
     }
 
-    // Robot ("Chassis" marker — small top-down robot body: rounded capsule,
-    // two wheel marks near the rear, a headlight dot near the front/nose.
-    // Forward is -Y before rotation, same convention the old arrow used.
+    // Robot marker — a directional arrow (concave "chevron" tail, same
+    // silhouette as RViz/Nav2's default pose arrow) so heading reads at a
+    // glance instead of needing a separate indicator dot. Forward is -Y
+    // before rotation, same convention the old chassis marker used.
     if (robotPose) {
       const [px, py] = toC(robotPose.x, robotPose.y)
       ctx.save()
       ctx.translate(px, py)
       ctx.rotate(-robotPose.theta)
       ctx.fillStyle = '#800000'
-      ctx.beginPath(); ctx.arc(-8, 6, 3, 0, Math.PI * 2); ctx.fill()
-      ctx.beginPath(); ctx.arc(8, 6, 3, 0, Math.PI * 2); ctx.fill()
-      ctx.beginPath(); ctx.roundRect(-8, -12, 16, 22, 6); ctx.fill()
-      ctx.beginPath(); ctx.arc(0, -8, 2, 0, Math.PI * 2)
-      ctx.fillStyle = '#dedede'; ctx.fill()
+      ctx.strokeStyle = '#dedede'
+      ctx.lineWidth = 1.5
+      ctx.lineJoin = 'round'
+      ctx.beginPath()
+      ctx.moveTo(0, -15)    // tip — points in the direction of travel
+      ctx.lineTo(9, 11)     // back-right
+      ctx.lineTo(0, 5)      // concave notch at the back, makes it read as an arrow not a triangle
+      ctx.lineTo(-9, 11)    // back-left
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
       ctx.restore()
     }
 
@@ -275,37 +299,89 @@ export default function MapCanvas({
     cursor: 'pointer', userSelect: 'none', backdropFilter: 'blur(8px)',
   }
 
+  const canvasEl = (
+    <canvas
+      ref={canvasRef}
+      width={canvasW}
+      height={canvasH}
+      onClick={handleClick}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={() => poseEstimateMode && setDrag(null)}
+      style={{
+        width: '100%', height: '100%',
+        borderRadius: 16,
+        cursor: (clickable || poseEstimateMode) ? 'crosshair' : 'default',
+        // Matches the map's own UNK (unexplored-area) gray above, rather
+        // than a near-black that fought for contrast against it — the
+        // letterboxed area around a non-square map, and anywhere the map
+        // hasn't fit the canvas exactly, now reads as "no map here" the
+        // same way unexplored cells inside the map already do, leaving
+        // the actual (light) map surface as the only thing that pops.
+        background: `rgb(${UNK.join(',')})`,
+        display: 'block',
+      }}
+    />
+  )
+
+  const zoomButtons = (
+    <div style={{ position: 'absolute', bottom: 10, right: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <button onClick={zoomIn} disabled={zoom >= ZOOM_MAX} title="Zoom in"
+        style={{ ...zoomBtnStyle, opacity: zoom >= ZOOM_MAX ? 0.4 : 1, cursor: zoom >= ZOOM_MAX ? 'not-allowed' : 'pointer' }}>+</button>
+      <button onClick={zoomOut} disabled={zoom <= ZOOM_MIN} title="Zoom out"
+        style={{ ...zoomBtnStyle, opacity: zoom <= ZOOM_MIN ? 0.4 : 1, cursor: zoom <= ZOOM_MIN ? 'not-allowed' : 'pointer' }}>−</button>
+    </div>
+  )
+
+  const maximizeBtn = (
+    <button
+      onClick={() => setMaximized(m => !m)}
+      title={maximized ? 'Minimize map' : 'Maximize map'}
+      style={{ ...zoomBtnStyle, position: 'absolute', top: 10, right: 10, fontSize: 15 }}
+    >
+      {maximized ? '⤡' : '⤢'}
+    </button>
+  )
+
+  if (maximized) {
+    return (
+      <>
+        {/* Inline slot stays empty (no second live canvas) while the
+            popup owns the only mounted <canvas> — same ref, same draw
+            effect, just a bigger backing resolution. */}
+        <div style={{ position: 'relative', width: '100%', height: '100%' }} />
+        <div
+          onClick={() => setMaximized(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(4,3,6,0.6)', backdropFilter: 'blur(3px)',
+          }}
+        />
+        <div
+          style={{
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+            width: '90vw', height: '85vh', zIndex: 201,
+            borderRadius: 20, padding: 12, boxSizing: 'border-box',
+            background: 'rgba(20,18,24,0.92)', border: '1px solid rgba(255,255,255,0.12)',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+          }}
+        >
+          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            {canvasEl}
+            {zoomButtons}
+            {maximizeBtn}
+          </div>
+        </div>
+      </>
+    )
+  }
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <canvas
-        ref={canvasRef}
-        width={760}
-        height={520}
-        onClick={handleClick}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={() => poseEstimateMode && setDrag(null)}
-        style={{
-          width: '100%', height: '100%',
-          borderRadius: 16,
-          cursor: (clickable || poseEstimateMode) ? 'crosshair' : 'default',
-          // Matches the map's own UNK (unexplored-area) gray above, rather
-          // than a near-black that fought for contrast against it — the
-          // letterboxed area around a non-square map, and anywhere the map
-          // hasn't fit the canvas exactly, now reads as "no map here" the
-          // same way unexplored cells inside the map already do, leaving
-          // the actual (light) map surface as the only thing that pops.
-          background: `rgb(${UNK.join(',')})`,
-          display: 'block',
-        }}
-      />
-      <div style={{ position: 'absolute', bottom: 10, right: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <button onClick={zoomIn} disabled={zoom >= ZOOM_MAX} title="Zoom in"
-          style={{ ...zoomBtnStyle, opacity: zoom >= ZOOM_MAX ? 0.4 : 1, cursor: zoom >= ZOOM_MAX ? 'not-allowed' : 'pointer' }}>+</button>
-        <button onClick={zoomOut} disabled={zoom <= ZOOM_MIN} title="Zoom out"
-          style={{ ...zoomBtnStyle, opacity: zoom <= ZOOM_MIN ? 0.4 : 1, cursor: zoom <= ZOOM_MIN ? 'not-allowed' : 'pointer' }}>−</button>
-      </div>
+      {canvasEl}
+      {zoomButtons}
+      {maximizeBtn}
     </div>
   )
 }
