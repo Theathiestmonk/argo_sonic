@@ -974,7 +974,7 @@ def _read_voice_progress():
         return None, None
 
 
-def _run_nav_bridge(destination, map_name, timeout_s=90.0):
+def _run_nav_bridge(destination, map_name, timeout_s=300.0):
     """Same sourced-ROS-env one-shot trip as main_agent.py's
     navigate_and_wait() — used directly by the /nav/goto background worker
     below, gated by the same staff kill-switch."""

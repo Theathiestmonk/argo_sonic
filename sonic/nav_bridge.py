@@ -104,7 +104,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Send one blocking NavigateToPose goal and report the result.")
     parser.add_argument("--map", required=True, help="Waypoints file name (without .json), e.g. office_map")
     parser.add_argument("--destination", required=True, help='Waypoint name, e.g. "Table 3" or "Kitchen"')
-    parser.add_argument("--timeout", type=float, default=90.0, help="Seconds to wait for the result (default 90)")
+    parser.add_argument("--timeout", type=float, default=300.0, help="Seconds to wait for the result (default 300)")
     args = parser.parse_args()
 
     wp = load_waypoint(args.map, args.destination)

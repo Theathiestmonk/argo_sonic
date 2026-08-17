@@ -142,7 +142,7 @@ WAKE_WORD_THRESHOLD = 0.5
 # via nav_bridge.py) by deliberate choice; not migrated to Postgres.
 NAV_BRIDGE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nav_bridge.py")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NAV_TIMEOUT_S = 90.0
+NAV_TIMEOUT_S = 300.0  # 5 min — was 90s, too tight for a slow/obstructed leg before giving up and returning to kitchen
 
 # Cross-process status feed for the dashboard — backend/launcher.py's
 # /voice/status reads this the same way it already reads NAV_PROGRESS_PATH
