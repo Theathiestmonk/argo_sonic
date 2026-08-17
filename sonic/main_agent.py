@@ -155,7 +155,13 @@ FRAME_MS = 30
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000
 
 SILENCE_ONSET_TIMEOUT_S = 30.0  # how long a single listen attempt waits for speech to start
-SILENCE_GIVEUP_TOTAL_S = 120.0  # cumulative silence (across reprompts) before giving up on a question
+# Never auto-give-up on a question — staff cancel a table manually (the
+# dashboard's "Stop" button -> POST /voice/stop, see backend/launcher.py)
+# instead of the robot silently abandoning an order and leaving on its own.
+# listen_with_patience() re-speaks the prompt every SILENCE_ONSET_TIMEOUT_S
+# while waiting, so the guest still hears it's listening rather than the
+# robot going fully silent.
+SILENCE_GIVEUP_TOTAL_S = float("inf")
 TRAILING_SILENCE_MS = 600
 # int16 RMS energy a frame must exceed to count as "speech started" in
 # record_utterance() — lower picks up quieter voices but also more room
