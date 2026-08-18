@@ -3,6 +3,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Range
+from std_msgs.msg import Float32MultiArray
 from tf2_ros import TransformBroadcaster
 import serial
 import math
@@ -57,6 +58,10 @@ class SerialBridge(Node):
             raise
 
         self.odom_pub       = self.create_publisher(Odometry, '/odom', 10)
+        # Per-wheel measured speed (m/s) — /odom's twist.linear.x/angular.z
+        # only carries the combined chassis velocity, not each wheel
+        # individually; dashboard telemetry wants both sides separately.
+        self.wheel_speed_pub = self.create_publisher(Float32MultiArray, '/wheel_speeds', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_sub        = self.create_subscription(
             Twist, '/cmd_vel', self.cmd_cb, 10)
@@ -256,6 +261,8 @@ class SerialBridge(Node):
 
         v  = d_center / dt if dt > 0 else 0.0
         w  = d_theta  / dt if dt > 0 else 0.0
+        v_left  = dl / dt if dt > 0 else 0.0
+        v_right = dr / dt if dt > 0 else 0.0
         qz = math.sin(self.theta / 2.0)
         qw = math.cos(self.theta / 2.0)
 
@@ -278,6 +285,10 @@ class SerialBridge(Node):
         odom.twist.covariance[0]     = 0.05
         odom.twist.covariance[35]    = 0.1
         self.odom_pub.publish(odom)
+
+        wheel_msg = Float32MultiArray()
+        wheel_msg.data = [v_left, v_right]
+        self.wheel_speed_pub.publish(wheel_msg)
 
 
 def main():

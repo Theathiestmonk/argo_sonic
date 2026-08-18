@@ -50,6 +50,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan, PointCloud2, Range
+from std_msgs.msg import Float32
 
 # ── Lidar ─────────────────────────────────────────────────────────────────────
 # Lowered from 1.00 — at 1.00m, anything within a full metre of the
@@ -242,6 +243,15 @@ class SafetyShield(Node):
                                  callback_group=self._gate_group)
         self._pub = self.create_publisher(Twist, OUTPUT_TOPIC, 10)
 
+        # Informational-only distance publishers — dashboard telemetry, not
+        # read by anything safety-critical (the actual stop/slow decisions
+        # above already happen off the internal _lidar_fwd_dist/_depth_fwd_dist
+        # state regardless of whether anything is listening on these topics).
+        # Ultrasonic isn't re-published here since serial_bridge.py already
+        # publishes each sensor's raw Range directly on /us/front_left etc.
+        self._lidar_dist_pub = self.create_publisher(Float32, '/safety_shield/lidar_distance', 10)
+        self._depth_dist_pub = self.create_publisher(Float32, '/safety_shield/depth_distance', 10)
+
         self.get_logger().info(
             f"[SafetyShield] ready – graduated response\n"
             f"  lidar : slow < {LIDAR_SLOW_DIST:.2f} m | "
@@ -303,6 +313,8 @@ class SafetyShield(Node):
             self._lidar_fwd_dist = fwd_dist
             self._lidar_blocked  = hard_blocked
             self._lidar_slowing  = slowing
+
+        self._lidar_dist_pub.publish(Float32(data=fwd_dist))
 
         if hard_blocked and not prev_blocked:
             self.get_logger().warn(
@@ -371,6 +383,8 @@ class SafetyShield(Node):
             self._depth_fwd_dist = fwd_dist
             self._depth_blocked  = hard_blocked
             self._depth_slowing  = slowing
+
+        self._depth_dist_pub.publish(Float32(data=fwd_dist))
 
         if hard_blocked and not prev_blocked:
             self.get_logger().warn(

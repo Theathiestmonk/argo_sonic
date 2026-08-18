@@ -3,6 +3,7 @@ import { ros } from '../ros'
 import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
+import TelemetryCard from './TelemetryCard'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
@@ -47,7 +48,7 @@ const TABLE_ACTIONS = [
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [curPos, setCurPos]         = useState('Home')
@@ -988,6 +989,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         )}
       </div>
+
+      <TelemetryCard driveTelemetry={driveTelemetry} sensorDistances={sensorDistances} />
 
     </div>
   )

@@ -44,6 +44,11 @@ export default function App() {
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
   const [plannedPath, setPlannedPath] = useState([])
+  // Bottom-center telemetry card (DashboardHome) — speed/wheels from
+  // serial_bridge.py, obstacle distances from safety_shield.py. Grouped
+  // into two objects rather than ~8 separate useState hooks.
+  const [driveTelemetry, setDriveTelemetry] = useState({ speed: null, angularVel: null, wheelLeft: null, wheelRight: null })
+  const [sensorDistances, setSensorDistances] = useState({ lidar: null, depth: null, usFrontLeft: null, usFrontRight: null, usBackLeft: null, usBackRight: null })
   // Same map-frame localized pose as robotPose above (slam_toolbox's
   // /pose) but kept in a ref too, not just state — arrival-checking polls
   // this on an interval and doesn't need a re-render on every tick the way
@@ -109,6 +114,52 @@ export default function App() {
       })
       subRefs.current.pose = t
     }
+    if (!subRefs.current.odom) {
+      // Raw dead-reckoning is fine here (unlike /pose above) — only the
+      // instantaneous twist is used, never accumulated position, so drift
+      // doesn't matter.
+      const t = ros.topic('/odom', 'nav_msgs/msg/Odometry', { throttle_rate: 200 })
+      t?.subscribe(msg => {
+        setDriveTelemetry(d => ({ ...d, speed: msg.twist.twist.linear.x, angularVel: msg.twist.twist.angular.z }))
+      })
+      subRefs.current.odom = t
+    }
+    if (!subRefs.current.wheelSpeeds) {
+      // serial_bridge.py's per-wheel measured speed — /odom's twist only
+      // has the combined chassis velocity, not each side individually.
+      const t = ros.topic('/wheel_speeds', 'std_msgs/msg/Float32MultiArray', { throttle_rate: 200 })
+      t?.subscribe(msg => {
+        const [left, right] = msg.data ?? []
+        setDriveTelemetry(d => ({ ...d, wheelLeft: left, wheelRight: right }))
+      })
+      subRefs.current.wheelSpeeds = t
+    }
+    if (!subRefs.current.safetyLidar) {
+      const t = ros.topic('/safety_shield/lidar_distance', 'std_msgs/msg/Float32', { throttle_rate: 200 })
+      t?.subscribe(msg => setSensorDistances(d => ({ ...d, lidar: msg.data })))
+      subRefs.current.safetyLidar = t
+    }
+    if (!subRefs.current.safetyDepth) {
+      const t = ros.topic('/safety_shield/depth_distance', 'std_msgs/msg/Float32', { throttle_rate: 200 })
+      t?.subscribe(msg => setSensorDistances(d => ({ ...d, depth: msg.data })))
+      subRefs.current.safetyDepth = t
+    }
+    // Ultrasonic — serial_bridge.py publishes each corner directly (not
+    // routed through the safety shield), so these subscribe straight to it.
+    const US_TOPICS = [
+      ['/us/front_left',  'usFrontLeft'],
+      ['/us/front_right', 'usFrontRight'],
+      ['/us/back_left',   'usBackLeft'],
+      ['/us/back_right',  'usBackRight'],
+    ]
+    US_TOPICS.forEach(([topic, key]) => {
+      const refKey = `us_${key}`
+      if (!subRefs.current[refKey]) {
+        const t = ros.topic(topic, 'sensor_msgs/msg/Range', { throttle_rate: 200 })
+        t?.subscribe(msg => setSensorDistances(d => ({ ...d, [key]: msg.range })))
+        subRefs.current[refKey] = t
+      }
+    })
   }, [])
 
   const connect = useCallback(() => {
@@ -497,6 +548,8 @@ export default function App() {
             mapData={mapData}
             robotPose={robotPose}
             plannedPath={plannedPath}
+            driveTelemetry={driveTelemetry}
+            sensorDistances={sensorDistances}
             onOpenSettings={() => setShowSettings(true)}
             onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
             onNavInitializing={setNavInitializing}
