@@ -9,7 +9,7 @@ planner_server:
     # map_file_name override just above it in that script), computed from
     # whichever map is actually selected. This value only takes effect if
     # ntfields_planner_node is ever run directly, bypassing that script.
-    model_path: /home/argo/ntfields_models/office_map.pt
+    model_path: /home/argo/ntfields_models/Atsn_cafe_map.pt
 
     # Inference device: 'cuda' for Jetson Orin GPU, 'cpu' as fallback
     device: cuda
