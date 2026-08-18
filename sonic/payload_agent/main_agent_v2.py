@@ -194,6 +194,7 @@ def main() -> None:
 
     if not args.text_mode:
         sonic_v1.require_api_keys()
+        sonic_v1.select_usb_audio_device()
     if sonic_v1.SONIC_SKIP_NAV:
         print("[main] test mode — navigation will be skipped (instant arrival), everything else is real")
 

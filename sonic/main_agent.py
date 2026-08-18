@@ -69,6 +69,7 @@ import os
 import queue
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -149,6 +150,12 @@ NAV_TIMEOUT_S = 300.0  # 5 min — was 90s, too tight for a slow/obstructed leg 
 # for the nav stack's own startup status. Written best-effort (see
 # report_phase()); a failed write must never break the conversation.
 VOICE_PROGRESS_PATH = "/tmp/argo_voice_progress"
+
+# Same Jetson/USB-audio-adapter detection as voice_agent.py, safety_shield.py,
+# and nav_bridge.py — that USB PnP sound card isn't the ALSA/PortAudio default
+# on a fresh boot, so without picking it explicitly here it has to be selected
+# manually (e.g. via alsamixer) before main_agent.py's mic/speaker calls work.
+_ON_JETSON = os.path.exists("/etc/nv_tegra_release") or "argo" in socket.gethostname().lower()
 
 SAMPLE_RATE = 16000
 FRAME_MS = 30
@@ -641,6 +648,41 @@ def find_order_line(state: OrderState, name: Optional[str]) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 # Audio I/O
 # ---------------------------------------------------------------------------
+
+def select_usb_audio_device() -> None:
+    """Auto-select the USB PnP sound adapter as sounddevice's default
+    input/output device on the Jetson — none of this file's sd.InputStream/
+    sd.OutputStream/sd.play() calls pass an explicit device=, so without
+    this the adapter has to be picked manually (e.g. via alsamixer) each
+    time before the mic/speaker actually work. Same "USB PnP"/"Device" name
+    match voice_agent.py already uses for this same hardware via PyAudio.
+    No-op off the Jetson, and never fatal — any failure just falls back to
+    whatever sounddevice's own default already resolves to."""
+    if not _ON_JETSON:
+        return
+    try:
+        devices = sd.query_devices()
+        in_idx = out_idx = None
+        for i, dev in enumerate(devices):
+            name = dev.get("name", "")
+            if "USB PnP" not in name and "Device" not in name:
+                continue
+            if in_idx is None and dev.get("max_input_channels", 0) > 0:
+                in_idx = i
+            if out_idx is None and dev.get("max_output_channels", 0) > 0:
+                out_idx = i
+
+        if in_idx is None and out_idx is None:
+            print("[warn] USB PnP audio device not found — falling back to sounddevice's system default")
+            return
+
+        sd.default.device = (in_idx, out_idx)
+        in_name = devices[in_idx]["name"] if in_idx is not None else "(system default)"
+        out_name = devices[out_idx]["name"] if out_idx is not None else "(system default)"
+        print(f"[main] Audio device auto-selected — input: {in_name!r}, output: {out_name!r}")
+    except Exception as e:
+        print(f"[warn] USB audio device auto-select failed, using sounddevice's default: {e}")
+
 
 def record_utterance(timeout_s: float = SILENCE_ONSET_TIMEOUT_S) -> Optional[np.ndarray]:
     q: queue.Queue = queue.Queue()
@@ -2162,6 +2204,8 @@ def main() -> None:
 
     if TEXT_MODE:
         require_api_keys(need_sarvam=False)
+    else:
+        select_usb_audio_device()
     if SONIC_SKIP_NAV:
         print("[main] test mode — navigation will be skipped (instant arrival), everything else is real")
     print("Runtime: LangGraph StateGraph, humanized (every spoken line is an LLM call — see render()).")
