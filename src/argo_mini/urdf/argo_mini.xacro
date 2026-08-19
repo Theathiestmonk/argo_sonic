@@ -297,7 +297,7 @@
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
     <child  link="lidar_link"/>
-    <origin xyz="${lidar_x} 0 ${lidar_max_top_above_lower_chassis - lidar_height/2.0}" rpy="0 0 0"/>
+    <origin xyz="${lidar_x} 0 ${lidar_max_top_above_lower_chassis - lidar_height/2.0}" rpy="0 0 ${pi}"/>
   </joint>
 
 
