@@ -781,7 +781,13 @@ def sarvam_tts(text: str, language_code: str = SARVAM_LANGUAGE_CODE) -> tuple[np
     raw = base64.b64decode(audios[0])
     with wave.open(io.BytesIO(raw), "rb") as wf:
         sr = wf.getframerate()
+        n_channels = wf.getnchannels()
         pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+    if n_channels > 1:
+        # Sarvam TTS occasionally returns stereo; play_audio()/sd.play() treat
+        # a 1D array as a single mono channel, so leaving this interleaved
+        # would play L/R samples back-to-back as garbled, double-speed mono.
+        pcm = pcm.reshape(-1, n_channels).mean(axis=1).astype(np.int16)
     return pcm, sr
 
 
