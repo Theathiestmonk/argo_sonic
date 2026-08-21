@@ -1062,13 +1062,47 @@ _map: str | None = None   # only set when _mode == 'navigate'
 _lock = threading.Lock()
 
 def _stop_locked():
-    """Kill the current process group, if any. Caller must hold _lock."""
+    """Kill the current process group, if any, and block until it's
+    genuinely gone before returning. Caller must hold _lock.
+
+    Previously this sent SIGTERM and cleared _proc/_mode/_map immediately,
+    without waiting — but the nav2/SLAM launch tree can take several real
+    seconds to tear down its lifecycle nodes. A /start called right after
+    that /stop returned could then race a still-dying previous stack:
+    duplicate ROS node names, held topics/ports — and the new run would
+    hang somewhere before its first report() call ever wrote to
+    NAV_PROGRESS_PATH, which is exactly what left the UI showing no nav
+    state at all after a stop+restart. The server (http.server.HTTPServer)
+    is single-threaded, so blocking here does briefly stall other endpoints
+    (/status polls etc.) for up to ~15s worst case — an acceptable tradeoff
+    since stopping the stack is already a rare, explicitly-confirmed action
+    (see stopNav()'s window.confirm in DashboardHome.jsx), not a hot path.
+    """
     global _proc, _mode, _map
     if _proc and _proc.poll() is None:
+        pid = _proc.pid
         try:
-            os.killpg(os.getpgid(_proc.pid), signal.SIGTERM)
+            pgid = os.getpgid(pid)
         except ProcessLookupError:
-            pass
+            pgid = None
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                pgid = None
+        if pgid is not None:
+            try:
+                _proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print(f'[launcher] pid={pid} still alive 10s after SIGTERM — sending SIGKILL')
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    _proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print(f'[launcher] pid={pid} did not die even after SIGKILL — giving up waiting')
     _proc, _mode, _map = None, None, None
     # The wake-word loop is intentionally left running here — it's always
     # live once the launcher itself is up (see the bootstrap at the bottom
@@ -1474,8 +1508,12 @@ class Handler(BaseHTTPRequestHandler):
                 # owner can even chmod it after the fact. Force it open
                 # every time so a later by-hand debugging run never hits
                 # that silently.
+                # 'w', not 'a' — otherwise a stale "READY|..." line from the
+                # previous run stays in the file until this run's own first
+                # report() call overwrites it, and GET /nav_progress can
+                # read that leftover status as if it were current.
                 try:
-                    with open(NAV_PROGRESS_PATH, 'a'):
+                    with open(NAV_PROGRESS_PATH, 'w'):
                         pass
                     os.chmod(NAV_PROGRESS_PATH, 0o666)
                 except OSError:
