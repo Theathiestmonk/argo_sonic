@@ -119,25 +119,7 @@ def _telem_reader(proc):
                 telem['rpm_l'] = float(m.group(1))
                 telem['rpm_r'] = float(m.group(2))
 
-# backend/launcher.py discards this script's stdout/stderr into a plain log
-# file (see GET /nav_log) — fine for a human tailing it, but the live TUI
-# above is full-screen ANSI redraws, not a clean step trail. Write the
-# current step here too, same "status|epoch|message" format
-# sh/start_argo_nav_ui.sh's report()/report_error()/report_ready() use, so
-# the Dashboard's live progress button keeps working no matter which nav
-# script is actually running.
 PROGRESS_FILE = "/tmp/argo_nav_progress"
-# Once True, routine "run"-kind progress notes stop overwriting the file —
-# only report_progress("ERROR", ...) or a fresh explicit call can move past
-# it. Without this, ANY real failure (a lifecycle node never reaching
-# "active", not just BT Navigator specifically) would be silently erased
-# the moment the next step's ordinary "Starting X..." message came in,
-# since this script never aborts on a failed activation — it just logs a
-# warning/fail and keeps going. Set on both "READY" (so later benign steps
-# like the camera/safety shield don't erase it — this exact bug already
-# happened once on sh/start_argo_nav_ui.sh) and "ERROR" (so a genuine
-# failure sticks and is actually visible instead of getting overwritten by
-# the very next routine step).
 _progress_locked = False
 
 def report_progress(status, message):
@@ -248,26 +230,12 @@ def build_env(home):
         "source /opt/ros/humble/setup.bash && "
         f"source {ws}/install/setup.bash && env"
     )
-    # sh/start-rosbridge.sh forces Cyclone DDS (Fast-DDS, ROS2 Humble's
-    # default, proved less reliable under discovery/service-call load on
-    # this hardware — see that script's own comment for the story). This
-    # script never set it at all, so every node it launches was running on
-    # a DIFFERENT RMW than rosbridge — two different RMW implementations
-    # can't discover each other's nodes at all, not just unreliably, which
-    # would explain both the UI never seeing the robot as ready AND a
-    # separate ROS2 action client (waypoint_manager.py) timing out too.
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
     env = {}
     for line in r.stdout.splitlines():
         k, _, v = line.partition("=")
         if k:
             env[k] = v
-    # A failed `source` (e.g. {ws}/install/setup.bash doesn't exist because
-    # this checkout was never colcon-built) makes the whole `&&` chain
-    # short-circuit before reaching `env`, so r.stdout is empty and this
-    # dict ends up missing PATH entirely — which used to surface many steps
-    # later as a bare "FileNotFoundError: 'ros2'" traceback from an
-    # unrelated-looking line, instead of pointing at the actual cause here.
     if "PATH" not in env:
         log(f"Failed to source ROS2 workspace at {ws}/install/setup.bash "
             f"(missing or not built — run 'colcon build' there?)", "fail")
@@ -282,7 +250,7 @@ def build_env(home):
     return env
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Launchers
+#  Launchers & Diagnostics
 # ──────────────────────────────────────────────────────────────────────────────
 def launch(name, cmd, env):
     global step_name
@@ -310,20 +278,9 @@ def launch_with_telem(name, cmd, env):
     return p
 
 def runcmd(cmd, env, timeout=10):
-    """subprocess.run with a hard timeout. The outer polling loops
-    (wait_lifecycle_state, wait_topic, wait_action) all have their own
-    deadlines, but the individual command that actually SENDS a lifecycle
-    transition (e.g. `ros2 lifecycle set /controller_server configure`)
-    previously had none — if that single call hung (e.g. a DDS
-    discovery/service-call issue, the same class of problem found with
-    rosapi/rosbridge earlier), the whole script blocked on that one line
-    forever, with nothing able to recover from it. A timed-out call is
-    treated as a plain failure (nonzero returncode, empty output) so every
-    existing caller's `r.returncode == 0` / `target in r.stdout` checks
-    keep working unchanged."""
     try:
         return subprocess.run(cmd, shell=True, env=env, capture_output=True,
-                               text=True, timeout=timeout)
+                              text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="timed out")
 
@@ -339,6 +296,66 @@ def wait_topic(topic, env, timeout=30):
     log(f"Timeout – topic not found: {topic}", "warn")
     return False
 
+def wait_topic_data(topic, env, timeout=20):
+    """Wait until actual messages are actively publishing on a topic."""
+    log(f"Waiting for data stream on  {topic}", "info")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = runcmd(f"timeout 3 ros2 topic echo {topic} --once 2>/dev/null", env, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            log(f"Data stream active  {topic}", "ok")
+            return True
+        time.sleep(1)
+    log(f"Timeout – no data arriving on: {topic}", "warn")
+    return False
+
+def wait_tf(parent, child, env, timeout=20):
+    """Poll until TF parent->child is available."""
+    log(f"Waiting for TF  {parent} -> {child}", "info")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = runcmd(
+            f"timeout 2 ros2 run tf2_ros tf2_echo {parent} {child} 2>/dev/null | head -8",
+            env, timeout=4
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if "Translation:" in out or "At time" in out:
+            log(f"TF ready  {parent} -> {child}", "ok")
+            return True
+        time.sleep(1)
+    log(f"Timeout – TF {parent} -> {child} not available", "warn")
+    return False
+
+def wait_nav_prerequisites(env, timeout_odom=25, timeout_scan=20, timeout_map=30, timeout_tf=20):
+    """Block until odometry, scan streams, map, and TFs are strictly active."""
+    log("Checking navigation prerequisites (odom / scan / map / TF)...", "sys")
+    ok = True
+    
+    # 1. Check for /odom topic existence and data flow
+    if not wait_topic("/odom", env, timeout=timeout_odom):
+        ok = False
+    elif not wait_topic_data("/odom", env, timeout=10):
+        log("Topic /odom exists but not publishing data", "warn")
+        ok = False
+
+    # 2. Check for scan data
+    if not wait_topic("/scan", env, timeout=timeout_scan):
+        log("Primary /scan not found – continuing (scan_relay may use another name)", "warn")
+        
+    # 3. Check for map
+    if not wait_topic("/map", env, timeout=timeout_map):
+        ok = False
+        
+    # 4. Check critical transform tree: odom -> base_link
+    if not wait_tf("odom", "base_link", env, timeout=timeout_tf):
+        ok = False
+
+    if ok:
+        log("Navigation prerequisites ready", "ok")
+    else:
+        log("Some prerequisites missing – lifecycle nodes may still fail on first try", "warn")
+    return ok
+
 def wait_action(action, env, timeout=30):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -349,36 +366,19 @@ def wait_action(action, env, timeout=30):
     log(f"Timeout – action not found: {action}", "warn")
     return False
 
-def wait_lifecycle_active(node, env, timeout=30):
-    """Poll until the lifecycle node reports 'active' state."""
+def wait_lifecycle_state(node, state, env, timeout=30):
+    """Poll ros2 lifecycle get until node reports the expected state."""
+    _state_num = {'unconfigured': '[1]', 'inactive': '[2]', 'active': '[3]'}
+    target = _state_num.get(state, state)
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = runcmd(f"ros2 lifecycle get {node} 2>/dev/null", env)
-        if 'active' in r.stdout.lower():
+        if target in r.stdout:
             return True
         time.sleep(1)
-    log(f"Timeout – {node} never reached active state", "warn")
     return False
 
 def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
-    """Returns True only if the node actually confirmed 'active' — callers
-    that unconditionally proceed (e.g. reporting READY) after calling this
-    without checking the return value were treating a real activation
-    failure as a plain warning and claiming ready regardless.
-
-    Retries the full configure→activate cycle, same pattern lc_ntfields()
-    already uses for /planner_server. A cold Jetson start (cold page cache,
-    CPU governor not yet ramped) routinely makes the first configure call
-    lose the race against the node's own startup — it lands while the node
-    is still coming up, so the transition silently no-ops and the node is
-    stuck 'unconfigured' for both the configure AND activate timeouts. That's
-    exactly the "controller_server/velocity_smoother/bt_navigator failed on
-    the first run, worked on the second" symptom — the second run only
-    "worked" because everything was already warm by then. deactivate+cleanup
-    between attempts are harmless no-ops if the node never even reached
-    'inactive' — what actually matters is giving `configure` a second try a
-    couple seconds later, after the race has had time to resolve.
-    """
     for attempt in range(1, attempts + 1):
         tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
         log(f"Lifecycle configure  {node}{tag}", "sys")
@@ -402,34 +402,7 @@ def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
     log(f"FAILED to activate {node} after {attempts} attempts – check node logs", "fail")
     return False
 
-def wait_lifecycle_state(node, state, env, timeout=30):
-    """Poll ros2 lifecycle get until node reports the expected state."""
-    # Use state numbers to avoid substring matches ('active' in 'inactive')
-    _state_num = {'unconfigured': '[1]', 'inactive': '[2]', 'active': '[3]'}
-    target = _state_num.get(state, state)
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = runcmd(f"ros2 lifecycle get {node} 2>/dev/null", env)
-        if target in r.stdout:
-            return True
-        time.sleep(1)
-    return False
-
 def lc_ntfields(node, env, model_path=None, attempts=2):
-    """
-    Lifecycle sequence for NTFields planner.
-    configure loads the model (~7s, longer under GPU/thermal load) which can
-    exceed the CLI default timeout, so we poll the actual node state rather
-    than trusting the CLI return value. Returns True only if
-    /compute_path_to_pose actually registered — a single failed pass used to
-    just log a warning and let the rest of the stack come up anyway, so
-    "All Systems Nominal" could show with a completely non-functional
-    planner. Retries the full configure→activate cycle (with a
-    deactivate+cleanup reset between attempts) instead of giving up after
-    one pass, and fails fast with a clear reported error if the model file
-    for this map was never trained in the first place — no point spending
-    ~50s waiting on a lifecycle sequence that's guaranteed to fail.
-    """
     if model_path is not None and not Path(model_path).exists():
         msg = f"NTFields model not found: {model_path} – train it first"
         log(msg, "fail")
@@ -441,10 +414,8 @@ def lc_ntfields(node, env, model_path=None, attempts=2):
         log(f"Lifecycle configure  {node}  (loading NTFields model...){tag}", "sys")
         runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
 
-        # Wait until node reports 'inactive' (configure done), up to 30s
         if not wait_lifecycle_state(node, 'inactive', env, timeout=30):
             log(f"Configure timed out for {node} – model may still be loading", "warn")
-            # Give it extra time before trying activate anyway
             time.sleep(5)
 
         log(f"Lifecycle activate   {node}", "sys")
@@ -485,15 +456,6 @@ def cleanup(sig=None, frame=None):
         except Exception:
             pass
     time.sleep(1)
-    # Was "pkill -9 -f ros2" here — matches ANY process with ros2 anywhere
-    # in its command line, system-wide. On this same robot that collaterally
-    # killed the independent argo-rosbridge systemd service (it also runs
-    # via "ros2 launch") every time a nav stack stopped — confirmed and
-    # fixed once already in sh/start_argo_nav_ui.sh. Each child here got its
-    # own session via preexec_fn=os.setsid, so there's no single shared
-    # process group to sweep the way that script's trap does; instead,
-    # SIGKILL specifically the children this script itself started, by
-    # their own pgid, as the "still alive after SIGTERM" fallback.
     for _name, p in pids.items():
         try:
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
@@ -503,26 +465,13 @@ def cleanup(sig=None, frame=None):
     sys.exit(0)
 
 def ntfields_models_dir(home: str) -> Path:
-    """Where trained NTFields .pt models live. Path.home() alone is fragile
-    here — it reflects whichever user/UID actually runs this process, which
-    doesn't always match wherever the models were actually trained/copied to
-    (confirmed on argo-desktop: the systemd service ran as root, so
-    Path.home() was /root, while the real models sit under
-    /home/argo/ntfields_models, owned by argo — a "model not found" failure
-    that had nothing to do with the model actually being missing). Setting
-    NTFIELDS_MODELS_DIR overrides this outright, independent of which user
-    ends up running the process."""
     override = os.environ.get("NTFIELDS_MODELS_DIR")
     return Path(override) if override else Path(home) / "ntfields_models"
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Map selector  (runs before TUI – normal terminal, print/input work fine)
+#  Map selector
 # ──────────────────────────────────────────────────────────────────────────────
 def select_map(home: str, default: str) -> str:
-    """
-    Print a numbered list of available maps and return the chosen map_base path.
-    Called only when --map is not supplied on the command line.
-    """
     maps_dir   = Path(REPO_ROOT) / "src/argo_mini/maps"
     models_dir = ntfields_models_dir(home)
 
@@ -561,11 +510,6 @@ def select_map(home: str, default: str) -> str:
     print(f"{BORDER}+{'-'*(W-2)}+{RS}")
     print(f"  {DIM}Select [1-{len(entries)}]  default={default_idx+1} ({entries[default_idx][0]}) — auto-select in 5s: {RS}", end="", flush=True)
 
-    # input() has no native timeout — select.select() on stdin waits for
-    # input with a deadline instead of blocking forever, so a run left
-    # unattended at this prompt falls through to the default map after 5s
-    # instead of hanging indefinitely. (Validated separately on
-    # argo_sonic_nav1.py before porting here.)
     try:
         ready, _, _ = select.select([sys.stdin], [], [], 5.0)
         if ready:
@@ -609,9 +553,7 @@ def main():
     parser = argparse.ArgumentParser(description="Argo Sonic NTFields Navigation Launcher")
     parser.add_argument("--no-cam", action="store_true", help="Skip depth camera")
     parser.add_argument("--no-rviz", action="store_true", help="Headless (run via the web UI) — no DISPLAY on the robot")
-    parser.add_argument("--map",
-                        default=None,
-                        help="Map base path or name (no extension). Omit to get a selector.")
+    parser.add_argument("--map", default=None, help="Map base path or name (no extension). Omit to get a selector.")
     args = parser.parse_args()
 
     home    = str(Path.home())
@@ -620,18 +562,12 @@ def main():
 
     if args.map:
         raw = args.map.replace("~", home)
-        # bare name (no path separator) → resolve into maps directory
         if os.sep not in raw:
             raw = str(Path(REPO_ROOT) / "src/argo_mini/maps" / raw)
         map_base = str(Path(raw).with_suffix(""))
     elif sys.stdin.isatty():
         map_base = select_map(home, default="office_map2")
     else:
-        # No --map and no terminal to prompt on (e.g. launched headlessly by
-        # backend/launcher.py) — select_map()'s input() would hang forever
-        # waiting for stdin that will never arrive, identical to the "no TTY"
-        # issue DEPLOYMENT.md already documents for sonic/'s voice session
-        # subprocess. Fail fast with a clear reason instead.
         print(f"{RED}--map is required when not running in an interactive terminal{RS}")
         sys.exit(1)
 
@@ -642,7 +578,6 @@ def main():
     sys.stdout.flush()
     threading.Thread(target=ui_loop, daemon=True).start()
 
-    # Kill stale processes
     log("Clearing previous ROS processes...", "sys")
     for proc in [
         "slam_toolbox", "serial_bridge", "rplidar_composition", "rviz2",
@@ -654,19 +589,10 @@ def main():
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
 
-    # Build ROS env
     log("Sourcing ROS2 + argo_sonic workspace...", "sys")
     env = build_env(home)
     log("Environment ready", "ok")
 
-    # ros2 lifecycle set/get (used throughout below by lc_node) goes through
-    # a shared background daemon for discovery caching. A stale daemon
-    # makes EVERY lifecycle transition fail uniformly — not just one node —
-    # which is exactly the "controller_server, velocity_smoother,
-    # behavior_server, AND bt_navigator all failed" symptom this fixes.
-    # Already confirmed as the root cause once on sh/start_argo_nav_ui.sh;
-    # this script never had the same reset, so it was exposed to the same
-    # bug the whole time.
     log("Resetting ros2 daemon...", "sys")
     subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True)
     subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True)
@@ -717,10 +643,9 @@ def main():
     launch("SLAM Toolbox",
            (f"ros2 run slam_toolbox localization_slam_toolbox_node --ros-args "
             f"--params-file {slam_cfg} -p map_file_name:={map_base}"), env)
-    # Wait for SLAM to publish /map before Nav2 nodes configure (needs TF)
-    if not wait_topic("/map", env, timeout=30):
+    if not wait_topic("/map", env, timeout=40):
         log("SLAM map not published – check map file path", "warn")
-    time.sleep(3); step_done("SLAM Toolbox")
+    time.sleep(4); step_done("SLAM Toolbox")
 
     # ── 6.5. Pose Initializer (Auto-set kitchen pose) ────────────────────────
     log("Initializing robot pose at kitchen...", "sys")
@@ -731,22 +656,15 @@ def main():
         log("Pose initialization failed – check office_map2.json", "warn")
     time.sleep(2); step_done("Pose Initializer")
 
+    # Verify sensor flow & TFs before configuring downstream Nav2 servers
+    wait_nav_prerequisites(env)
+
     # ── 7. NTFields Planner ───────────────────────────────────────────────────
-    # model_path must be overridden per-map, same as SLAM Toolbox's
-    # map_file_name above — ntfields.yaml's own model_path is just a
-    # single fixed default (whatever map was last trained/edited by hand),
-    # and was silently loading THAT model no matter which map was actually
-    # selected. A model trained for a different room's geometry drives
-    # navigation off a completely wrong learned field, which is a much
-    # bigger source of bad paths/aborted goals than anything downstream in
-    # nav2.yaml — confirmed as the real root cause of the ongoing nav
-    # issues on any map other than whichever one model_path happened to
-    # point at.
     ntfields_model = str(ntfields_models_dir(home) / f"{Path(map_base).name}.pt")
     launch("NTFields Planner",
            (f"ros2 run argo_mini ntfields_planner_node --ros-args "
             f"--params-file {ntfields_cfg} -p model_path:={ntfields_model}"), env)
-    time.sleep(6)   # Python node + torch import needs extra startup time
+    time.sleep(6)
     ntfields_ok = lc_ntfields("/planner_server", env, model_path=ntfields_model)
     step_done("NTFields Planner")
 
@@ -754,22 +672,25 @@ def main():
     launch("Controller Server",
            (f"ros2 run nav2_controller controller_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
-    time.sleep(3); lc_node("/controller_server", env); step_done("Controller Server")
+    time.sleep(4)
+    lc_node("/controller_server", env, configure_timeout=40, activate_timeout=30)
+    step_done("Controller Server")
 
     # ── 9. Velocity Smoother ──────────────────────────────────────────────────
     launch("Velocity Smoother",
            (f"ros2 run nav2_velocity_smoother velocity_smoother --ros-args "
             f"--params-file {nav_cfg} "
             f"-r cmd_vel:=/cmd_vel_raw -r cmd_vel_smoothed:=/cmd_vel_smoothed"), env)
-    time.sleep(3); lc_node("/velocity_smoother", env); step_done("Velocity Smoother")
+    time.sleep(3)
+    lc_node("/velocity_smoother", env, configure_timeout=35, activate_timeout=25)
+    step_done("Velocity Smoother")
 
     # ── 10. Behavior Server ───────────────────────────────────────────────────
-    # Launched after controller_server so local costmap TF and /map are available
     launch("Behavior Server",
            (f"ros2 run nav2_behaviors behavior_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
     time.sleep(3)
-    lc_node("/behavior_server", env)
+    lc_node("/behavior_server", env, configure_timeout=35, activate_timeout=25)
     step_done("Behavior Server")
 
     # ── Wait for all action servers ───────────────────────────────────────────
@@ -782,26 +703,14 @@ def main():
     launch("BT Navigator",
            f"ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file {nav_cfg}", env)
     time.sleep(5)
-    bt_active = lc_node("/bt_navigator", env)
+    bt_active = lc_node("/bt_navigator", env, configure_timeout=40, activate_timeout=30)
     step_done("BT Navigator")
-    # Gate READY on BOTH bt_navigator and the NTFields planner — bt_navigator
-    # activating fine says nothing about whether /planner_server can
-    # actually compute a path. ntfields_ok already reported its own ERROR
-    # (and locked progress) the moment it failed, several steps back; check
-    # it first here so that stays the reported reason instead of getting
-    # overwritten by a "bt_navigator failed" message for a problem that
-    # was really the planner's.
+
     if not ntfields_ok:
         report_progress("ERROR", "NTFields planner failed to activate - path planning unavailable")
     elif bt_active:
         report_progress("READY", "Nav2 fully activated - ready for goals")
     else:
-        # This used to report READY unconditionally right here, regardless
-        # of whether bt_navigator's lifecycle activation actually
-        # succeeded — meaning a genuine activation failure looked
-        # identical to success everywhere except this one easy-to-miss
-        # "fail"-kind log line, and the UI would show "ready" while
-        # /navigate_to_pose was never actually up.
         report_progress("ERROR", "bt_navigator failed to activate - /navigate_to_pose is not available")
 
     # ── 12. Depth Camera ──────────────────────────────────────────────────────
