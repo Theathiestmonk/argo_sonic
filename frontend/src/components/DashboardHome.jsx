@@ -81,10 +81,47 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
   // the robot; picking a map here only decides which waypoints.json to read.
-  const [navState, setNavState] = useState('unknown') // 'unknown'|'starting'|'running'|'stopped'
-  const [navMap, setNavMap]     = useState(null)
+  //
+  // navState/navMap seed from the last value cached in localStorage rather
+  // than a hardcoded 'unknown' — purely so a hard refresh shows the
+  // last-known state immediately instead of a blank/spinner flash while
+  // the first /status poll is in flight. This is NEVER the source of
+  // truth: checkNav() below fires on mount regardless and overwrites
+  // whatever was seeded here with the real backend answer within one
+  // round trip, and every subsequent poll keeps the cache in sync. If the
+  // robot's real state changed while this tab was closed (crashed,
+  // stopped from another device), the cache is stale for at most that one
+  // round trip, then self-corrects.
+  const NAV_STATE_CACHE_KEY = 'argo_nav_state_cache'
+  const readNavStateCache = () => {
+    try {
+      const raw = localStorage.getItem(NAV_STATE_CACHE_KEY)
+      if (!raw) return { navState: 'unknown', navMap: null }
+      const parsed = JSON.parse(raw)
+      return {
+        navState: ['unknown', 'starting', 'running', 'stopped'].includes(parsed.navState) ? parsed.navState : 'unknown',
+        navMap: typeof parsed.navMap === 'string' ? parsed.navMap : null,
+      }
+    } catch {
+      return { navState: 'unknown', navMap: null }
+    }
+  }
+  const [navState, setNavState] = useState(() => readNavStateCache().navState) // 'unknown'|'starting'|'running'|'stopped'
+  const [navMap, setNavMap]     = useState(() => readNavStateCache().navMap)
   const navPollRef = useRef(null)
   const navFailRef = useRef(0)
+
+  // Keep the cache in sync with every state change, live-poll-driven or
+  // user-triggered alike — write-through, not a separate save step.
+  useEffect(() => {
+    if (navState === 'unknown') return   // don't clobber a real cached value with the pre-first-fetch default
+    try {
+      localStorage.setItem(NAV_STATE_CACHE_KEY, JSON.stringify({ navState, navMap }))
+    } catch {
+      // localStorage unavailable (private browsing, quota) — cache is
+      // purely a UX nicety, never load-bearing, so just skip it silently.
+    }
+  }, [navState, navMap])
 
   // navState === 'running' only means the launcher's wrapper *process* is
   // alive — start_argo_nav_ui.sh itself takes 90+ real seconds (camera wait,
@@ -130,11 +167,24 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // Update parent about nav readiness state
   useEffect(() => {
     onNavReady?.(navReady)
-    // Keep initializing=true until nav is fully ready OR it stops
+    // Keep initializing=true until nav is fully ready OR it's confirmed
+    // stopped. The third branch below matters just as much as the first
+    // two: App.jsx's navInitializing defaults to false and is otherwise
+    // only ever set true by the Start button's own onClick — so on a hard
+    // refresh (or first mount) while the stack is already running in the
+    // background, nothing told it that. The button fell through to its
+    // "not initializing, not ready" case and showed "Start Argo" — as if
+    // nothing were running — for however long it took navReady to resolve
+    // (a /status poll, then a separate /rosapi/action_servers poll).
+    // Treating 'unknown'/'starting'/'running'-but-not-yet-ready as
+    // "initializing" closes that gap: the button shows the real
+    // in-progress state instead of inviting a redundant Start click.
     if (navState === 'stopped') {
       onNavInitializing?.(false)
     } else if (navReady) {
       onNavInitializing?.(false)
+    } else {
+      onNavInitializing?.(true)
     }
   }, [navReady, onNavReady, navState, onNavInitializing])
 
