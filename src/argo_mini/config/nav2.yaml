@@ -195,8 +195,8 @@
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
       # clamped there anyway.
-      max_accel: [0.15, 0.0, 0.6]
-      max_decel: [-0.15, 0.0, -0.6]
+      max_accel: [0.15, 0.0, 0.3]
+      max_decel: [-0.15, 0.0, -0.3]
       odom_topic: /odom
       velocity_timeout: 1.0
 

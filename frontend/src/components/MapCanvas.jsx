@@ -1,10 +1,11 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 
-// True neutral greyscale (classic occupancy-grid look), tuned dark to sit
-// naturally inside the app's dark theme instead of a stark white rectangle.
-const UNK  = [50,  50,  50]
-const FREE = [222, 222, 222]
-const OCC  = [16,  16,  16]
+// Warm black/gold occupancy-grid palette (matches the app's dashboard
+// tokens — see dashboard/src/globals.css --bg/--gold) instead of a neutral
+// greyscale, tuned dark to sit naturally inside the app's dark theme.
+const UNK  = [26,  24,  21]
+const FREE = [232, 222, 199]
+const OCC  = [12,  10,  8]
 
 // Converts world (wx,wy) to canvas pixel given map info and canvas layout.
 function worldToCanvas(wx, wy, md, offX, offY, scale) {
