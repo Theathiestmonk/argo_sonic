@@ -288,7 +288,7 @@ def wait_topic(topic, env, timeout=30):
     log(f"Waiting for topic  {topic}", "info")
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = runcmd(f"ros2 topic list 2>/dev/null | grep -qx '{topic}'", env)
+        r = runcmd(f"ros2 topic list --no-daemon 2>/dev/null | grep -qx '{topic}'", env)
         if r.returncode == 0:
             log(f"Topic ready  {topic}", "ok")
             return True
@@ -301,7 +301,7 @@ def wait_topic_data(topic, env, timeout=20):
     log(f"Waiting for data stream on  {topic}", "info")
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = runcmd(f"timeout 3 ros2 topic echo {topic} --once 2>/dev/null", env, timeout=5)
+        r = runcmd(f"timeout 3 ros2 topic echo {topic} --once --no-daemon 2>/dev/null", env, timeout=5)
         if r.returncode == 0 and r.stdout.strip():
             log(f"Data stream active  {topic}", "ok")
             return True
@@ -372,7 +372,7 @@ def wait_lifecycle_state(node, state, env, timeout=30):
     target = _state_num.get(state, state)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = runcmd(f"ros2 lifecycle get {node} 2>/dev/null", env)
+        r = runcmd(f"ros2 lifecycle get {node} --no-daemon 2>/dev/null", env)
         if target in r.stdout:
             return True
         time.sleep(1)
@@ -382,12 +382,12 @@ def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
     for attempt in range(1, attempts + 1):
         tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
         log(f"Lifecycle configure  {node}{tag}", "sys")
-        runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
+        runcmd(f"ros2 lifecycle set {node} configure --no-daemon 2>&1", env)
         if not wait_lifecycle_state(node, 'inactive', env, timeout=configure_timeout):
             log(f"Configure timeout for {node} – proceeding anyway", "warn")
 
         log(f"Lifecycle activate   {node}", "sys")
-        runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
+        runcmd(f"ros2 lifecycle set {node} activate --no-daemon 2>&1", env)
         if wait_lifecycle_state(node, 'active', env, timeout=activate_timeout):
             log(f"Active  {node}", "ok")
             return True
@@ -395,8 +395,8 @@ def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
         log(f"{node} did not activate (attempt {attempt}/{attempts})", "warn")
         if attempt < attempts:
             log(f"Resetting {node} before retry...", "warn")
-            runcmd(f"ros2 lifecycle set {node} deactivate 2>&1", env)
-            runcmd(f"ros2 lifecycle set {node} cleanup 2>&1", env)
+            runcmd(f"ros2 lifecycle set {node} deactivate --no-daemon 2>&1", env)
+            runcmd(f"ros2 lifecycle set {node} cleanup --no-daemon 2>&1", env)
             time.sleep(2)
 
     log(f"FAILED to activate {node} after {attempts} attempts – check node logs", "fail")
@@ -412,14 +412,14 @@ def lc_ntfields(node, env, model_path=None, attempts=2):
     for attempt in range(1, attempts + 1):
         tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
         log(f"Lifecycle configure  {node}  (loading NTFields model...){tag}", "sys")
-        runcmd(f"ros2 lifecycle set {node} configure 2>&1", env)
+        runcmd(f"ros2 lifecycle set {node} configure --no-daemon 2>&1", env)
 
         if not wait_lifecycle_state(node, 'inactive', env, timeout=30):
             log(f"Configure timed out for {node} – model may still be loading", "warn")
             time.sleep(5)
 
         log(f"Lifecycle activate   {node}", "sys")
-        runcmd(f"ros2 lifecycle set {node} activate 2>&1", env)
+        runcmd(f"ros2 lifecycle set {node} activate --no-daemon 2>&1", env)
 
         if wait_action("/compute_path_to_pose", env, timeout=15):
             log(f"Active  {node}  – /compute_path_to_pose ready", "ok")
@@ -428,8 +428,8 @@ def lc_ntfields(node, env, model_path=None, attempts=2):
         log(f"NTFields planner did not register action server (attempt {attempt}/{attempts})", "warn")
         if attempt < attempts:
             log(f"Resetting {node} before retry...", "warn")
-            runcmd(f"ros2 lifecycle set {node} deactivate 2>&1", env)
-            runcmd(f"ros2 lifecycle set {node} cleanup 2>&1", env)
+            runcmd(f"ros2 lifecycle set {node} deactivate --no-daemon 2>&1", env)
+            runcmd(f"ros2 lifecycle set {node} cleanup --no-daemon 2>&1", env)
             time.sleep(2)
 
     msg = f"NTFields planner ({node}) failed to activate after {attempts} attempts – check model path"
@@ -589,13 +589,60 @@ def main():
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
 
+    # serial_bridge holds /dev/ttyUSB1 exclusively (pyserial) and is the only
+    # publisher of /wheel_odom. If one survives the pkill above (started
+    # manually, by another user, or just not yet reaped) the instance
+    # launched later in this script fails to open the port and no odom data
+    # ever appears — force-kill it here, verified, instead of assuming it
+    # worked.
+    for attempt in range(6):
+        still_up = subprocess.run(["pgrep", "-f", "serial_bridge"], capture_output=True, text=True, timeout=5)
+        if not still_up.stdout.strip():
+            break
+        subprocess.run(["pkill", "-9", "-f", "serial_bridge"], capture_output=True, timeout=5)
+        time.sleep(0.5)
+
+    # Force-free the port itself too, unconditionally — covers a holder
+    # that doesn't show "serial_bridge" anywhere in its own command line,
+    # which the name-based pkill above can't touch.
+    try:
+        subprocess.run(["fuser", "-k", "-9", "/dev/ttyUSB1"], capture_output=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    time.sleep(1)
+
+    still_up = subprocess.run(["pgrep", "-f", "serial_bridge"], capture_output=True, text=True, timeout=5)
+    if still_up.stdout.strip():
+        log("A serial_bridge process survived the kill (likely started "
+            "manually by another user, or holding /dev/ttyUSB1) — odom "
+            "will probably fail below. Check `pgrep -af serial_bridge` / "
+            "`fuser /dev/ttyUSB1` manually.", "warn")
+
     log("Sourcing ROS2 + argo_sonic workspace...", "sys")
     env = build_env(home)
     log("Environment ready", "ok")
 
+    # `ros2 lifecycle`/`topic` calls below all pass --no-daemon (added
+    # above) so they never depend on this daemon. But `ros2 action list` —
+    # what wait_action() uses to confirm /compute_path_to_pose,
+    # /follow_path, /backup actually registered — has NO --no-daemon
+    # option at all; it always goes through the daemon, spawning one if
+    # none exists. Dropping this reset outright (previous fix) left that
+    # one call still depending on whatever daemon happened to already be
+    # running, stale or not — which is exactly why every lifecycle
+    # transition above started succeeding again but every action-server
+    # wait kept timing out regardless of the node actually being up.
+    # Bounded with a timeout on each call so a wedged daemon socket can't
+    # re-create the original "stuck before step 1" hang.
     log("Resetting ros2 daemon...", "sys")
-    subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True)
-    subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True)
+    try:
+        subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True, timeout=8)
+    except subprocess.TimeoutExpired:
+        log("ros2 daemon stop timed out – proceeding anyway", "warn")
+    try:
+        subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True, timeout=8)
+    except subprocess.TimeoutExpired:
+        log("ros2 daemon start timed out – action-server checks may be unreliable", "warn")
     time.sleep(2)
 
     ws           = REPO_ROOT
