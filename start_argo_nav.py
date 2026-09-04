@@ -224,7 +224,7 @@ def ui_loop():
 def build_env(home):
     cmd = (
         "source /opt/ros/humble/setup.bash && "
-        f"source {home}/argo_mini_ws/install/setup.bash && env"
+        f"source {home}/my_project/argo_sonic/install/setup.bash && env"
     )
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
     env = {}
@@ -275,7 +275,7 @@ def wait_topic(topic, env, timeout=30):
     log(f"Waiting for topic  {topic}", "info")
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = runcmd(f"ros2 topic list 2>/dev/null | grep -qx '{topic}'", env)
+        r = runcmd(f"ros2 topic list --no-daemon 2>/dev/null | grep -qx '{topic}'", env)
         if r.returncode == 0:
             log(f"Topic ready  {topic}", "ok")
             return True
@@ -295,10 +295,10 @@ def wait_action(action, env, timeout=30):
 
 def lc_node(node, env):
     log(f"Lifecycle configure  {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} configure 2>&1 | tail -1", env)
+    runcmd(f"ros2 lifecycle set {node} configure --no-daemon 2>&1 | tail -1", env)
     time.sleep(2)
     log(f"Lifecycle activate   {node}", "sys")
-    runcmd(f"ros2 lifecycle set {node} activate 2>&1 | tail -1", env)
+    runcmd(f"ros2 lifecycle set {node} activate --no-daemon 2>&1 | tail -1", env)
     time.sleep(2)
     log(f"Active  {node}", "ok")
 
@@ -354,7 +354,7 @@ def main():
     for proc in [
         "slam_toolbox", "serial_bridge", "rplidar_composition", "rviz2",
         "planner_server", "controller_server", "bt_navigator", "velocity_smoother",
-        "scan_relay", "robot_state_publisher", "depth_safety_shield",
+        "scan_relay", "robot_state_publisher", "depth_safety_shield", "ekf_node",
         "ascamera_node", "behavior_server",
     ]:
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
@@ -364,6 +364,25 @@ def main():
     log("Sourcing ROS2 + workspace environment...", "sys")
     env = build_env(home)
     log("Environment ready", "ok")
+
+    # `ros2 lifecycle`/`topic` calls above/below pass --no-daemon so they never
+    # depend on this daemon. But `ros2 action list` (wait_action, used to
+    # confirm /compute_path_to_pose, /follow_path, /backup) has NO --no-daemon
+    # option at all — it always goes through the daemon, spawning one if none
+    # exists. A stale one left over from a previous run makes every action-list
+    # query come back empty regardless of the node actually being up. Bounded
+    # with a timeout on each call so a wedged daemon socket can't hang the
+    # script here instead.
+    log("Resetting ros2 daemon...", "sys")
+    try:
+        subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True, timeout=8)
+    except subprocess.TimeoutExpired:
+        log("ros2 daemon stop timed out - proceeding anyway", "warn")
+    try:
+        subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True, timeout=8)
+    except subprocess.TimeoutExpired:
+        log("ros2 daemon start timed out - action-server checks may be unreliable", "warn")
+    time.sleep(2)
 
     ws       = f"{home}/argo_sonic"
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"

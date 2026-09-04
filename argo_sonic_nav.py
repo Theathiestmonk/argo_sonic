@@ -75,15 +75,14 @@ stop_ui    = threading.Event()
 telem      = {"lin": 0.0, "ang": 0.0, "rpm_l": 0.0, "rpm_r": 0.0}
 telem_lock = threading.Lock()
 
-TOTAL_STEPS = 16
+TOTAL_STEPS = 15
 
 STEP_NAMES = [
     "Robot State Publisher", "Camera TF Bridge",    "Serial Bridge",
-    "EKF (robot_localization)", "RPLidar A1",       "Scan Relay",
-    "SLAM Toolbox",           "Pose Initializer",   "NTFields Planner",
-    "Controller Server",     "Velocity Smoother",   "Behavior Server",
-    "BT Navigator",           "Depth Camera",       "PC Restamper",
-    "Safety Shield",
+    "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
+    "Pose Initializer",      "NTFields Planner",    "Controller Server",
+    "Velocity Smoother",     "Behavior Server",     "BT Navigator",
+    "Depth Camera",          "PC Restamper",        "Safety Shield",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -657,7 +656,6 @@ def main():
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
     slam_cfg     = f"{ws}/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
     ntfields_cfg = f"{ws}/install/argo_mini/share/argo_mini/config/ntfields.yaml"
-    ekf_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/ekf.yaml"
     sdk_ros      = f"{home}/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2"
 
     subprocess.run(
@@ -683,22 +681,6 @@ def main():
            ("ros2 run argo_mini serial_bridge --ros-args "
             "-p port:=/dev/ttyUSB1 -p baud:=115200 -p left_tick_scale:=0.66"), env)
     time.sleep(3); step_done("Serial Bridge")
-
-    # ── 3.5. EKF (robot_localization) ─────────────────────────────────────────
-    # Fuses serial_bridge's /wheel_odom + /imu/data into /odom and broadcasts
-    # the odom->base_footprint TF (base_footprint->base_link is the URDF's
-    # own static joint — see argo_mini.urdf) that SLAM Toolbox needs to
-    # localize and publish /pose next, and that wait_nav_prerequisites()
-    # below checks for. Nothing else in this pipeline provides that TF —
-    # without this step, slam_toolbox can never scan-match, /pose never
-    # publishes, and the robot marker on the dashboard's map never appears
-    # even though the rest of the stack looks fine.
-    launch("EKF (robot_localization)",
-           (f"ros2 run robot_localization ekf_node --ros-args "
-            f"--params-file {ekf_cfg} -r odometry/filtered:=/odom"), env)
-    if not wait_topic("/odom", env, timeout=15):
-        log("EKF not publishing /odom – check /wheel_odom and /imu/data are flowing", "warn")
-    time.sleep(2); step_done("EKF (robot_localization)")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
     launch("RPLidar A1",
