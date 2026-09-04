@@ -641,16 +641,22 @@ def main():
     # wait kept timing out regardless of the node actually being up.
     # Bounded with a timeout on each call so a wedged daemon socket can't
     # re-create the original "stuck before step 1" hang.
-    log("Resetting ros2 daemon...", "sys")
-    try:
-        subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True, timeout=8)
-    except subprocess.TimeoutExpired:
-        log("ros2 daemon stop timed out – proceeding anyway", "warn")
-    try:
-        subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True, timeout=8)
-    except subprocess.TimeoutExpired:
-        log("ros2 daemon start timed out – action-server checks may be unreliable", "warn")
-    time.sleep(2)
+    # TEMPORARILY DISABLED for a live diagnostic test — trying to confirm/rule
+    # out whether this daemon respawn's background CPU load is what's making
+    # rplidar_composition's serial handshake miss its window and time out
+    # with SL_RESULT_OPERATION_TIMEOUT a few seconds later, since SLAM's own
+    # launch scripts do none of this and never see that failure. Re-enable by
+    # uncommenting once that's confirmed or ruled out either way.
+    # log("Resetting ros2 daemon...", "sys")
+    # try:
+    #     subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True, timeout=8)
+    # except subprocess.TimeoutExpired:
+    #     log("ros2 daemon stop timed out – proceeding anyway", "warn")
+    # try:
+    #     subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True, timeout=8)
+    # except subprocess.TimeoutExpired:
+    #     log("ros2 daemon start timed out – action-server checks may be unreliable", "warn")
+    # time.sleep(2)
 
     ws           = REPO_ROOT
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
