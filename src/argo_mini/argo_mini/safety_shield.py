@@ -8,13 +8,11 @@ Pipeline:
 Three independent sensor sources with graduated forward-speed response:
 
   Lidar (LaserScan)  – /scan_corrected
-    > LIDAR_SLOW_DIST (0.70 m) : full speed — lowered from 1.00 m; that
-      margin throttled speed well below vx_max any time something was
-      within a full metre of the forward path, common indoors
+    > LIDAR_SLOW_DIST (1.30 m) : full speed
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
-    < LIDAR_STOP_DIST (0.40 m) : hard stop — raised back up for more
-      stopping margin, taking priority over the final-approach-abort
-      tradeoff that came with lowering it (see git history)
+    < LIDAR_STOP_DIST (1.00 m) : hard stop — raised to a full metre for
+      more stopping margin (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST comments
+      below for the earlier 1.00/0.70/0.40 history this builds on)
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
     > DEPTH_SLOW_DIST (0.55 m) : full speed — lowered from 0.80 m, same reasoning
@@ -53,17 +51,16 @@ from sensor_msgs.msg import LaserScan, PointCloud2, Range
 from std_msgs.msg import Float32
 
 # ── Lidar ─────────────────────────────────────────────────────────────────────
-# Lowered from 1.00 — at 1.00m, anything within a full metre of the
-# robot's forward path (very common in a compact indoor space) throttled
-# speed down well below vx_max, capping overall speed independent of
-# whatever the nav stack's own limits allowed. Still a real graduated
-# zone before the hard stop below, just narrower.
-LIDAR_SLOW_DIST  = 0.70    # m   – begin speed reduction
-# Raised back to 0.40 — explicitly asked for more margin here, taking
-# priority over the earlier "final approach was landing inside this
-# margin" concern (see git history) — that goal-abort tradeoff is
-# accepted in exchange for stopping farther from an obstacle.
-LIDAR_STOP_DIST  = 0.40    # m   – hard stop
+# Raised to 1.30/1.00 — explicitly asked for a 1m hard-stop distance for
+# more stopping margin, up from the earlier 0.70/0.40. Slow-start raised
+# along with it (not just the stop distance) to keep the ~0.3m graduated
+# deceleration corridor intact — leaving slow-start below the new stop
+# distance would collapse the ramp into an abrupt full-speed-to-dead-stop
+# cutoff right at the stop line, with no gradual slowdown beforehand. See
+# git history for the earlier 1.00/0.70 → 0.70/0.40 back-and-forth this
+# builds on.
+LIDAR_SLOW_DIST  = 1.30    # m   – begin speed reduction
+LIDAR_STOP_DIST  = 1.00    # m   – hard stop
 LIDAR_WIDTH_HALF = 0.35    # m   – half-width of danger corridor
 LIDAR_MIN_PTS    = 3       # minimum scan points to register an obstacle
 LIDAR_STALE_SECS = 1.0     # s   – treat as stale if no scan arrives
