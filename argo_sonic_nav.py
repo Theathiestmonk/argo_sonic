@@ -75,14 +75,15 @@ stop_ui    = threading.Event()
 telem      = {"lin": 0.0, "ang": 0.0, "rpm_l": 0.0, "rpm_r": 0.0}
 telem_lock = threading.Lock()
 
-TOTAL_STEPS = 14
+TOTAL_STEPS = 16
 
 STEP_NAMES = [
     "Robot State Publisher", "Camera TF Bridge",    "Serial Bridge",
-    "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
-    "Pose Initializer",      "NTFields Planner",    "Controller Server",
-    "Velocity Smoother",     "Behavior Server",     "BT Navigator",
-    "Depth Camera",          "PC Restamper",        "Safety Shield",
+    "EKF (robot_localization)", "RPLidar A1",       "Scan Relay",
+    "SLAM Toolbox",           "Pose Initializer",   "NTFields Planner",
+    "Controller Server",     "Velocity Smoother",   "Behavior Server",
+    "BT Navigator",           "Depth Camera",       "PC Restamper",
+    "Safety Shield",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -326,8 +327,15 @@ def wait_tf(parent, child, env, timeout=20):
     log(f"Timeout – TF {parent} -> {child} not available", "warn")
     return False
 
-def wait_nav_prerequisites(env, timeout_odom=25, timeout_scan=20, timeout_map=30, timeout_tf=20):
-    """Block until odometry, scan streams, map, and TFs are strictly active."""
+def wait_nav_prerequisites(env, timeout_odom=25, timeout_scan=20, timeout_map=30, timeout_tf=45):
+    """Block until odometry, scan streams, map, and TFs are strictly active.
+
+    timeout_tf=45 (not 20): on-robot testing showed odom->base_footprint and
+    base_footprint->base_link both resolve fine, just not inside 20s — the
+    Jetson is already under heavy load at boot (NTFields alone can take 30s+
+    to configure), so the TF tree just hasn't settled yet at the 20s mark,
+    not because anything is structurally broken.
+    """
     log("Checking navigation prerequisites (odom / scan / map / TF)...", "sys")
     ok = True
     
@@ -583,7 +591,7 @@ def main():
         "slam_toolbox", "serial_bridge", "rplidar_composition", "rviz2",
         "ntfields_planner_node", "planner_server", "controller_server",
         "bt_navigator", "velocity_smoother", "scan_relay",
-        "robot_state_publisher", "depth_safety_shield",
+        "robot_state_publisher", "depth_safety_shield", "ekf_node",
         "ascamera_node", "pointcloud_restamper", "behavior_server", "safety_shield",
     ]:
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
@@ -649,6 +657,7 @@ def main():
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
     slam_cfg     = f"{ws}/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
     ntfields_cfg = f"{ws}/install/argo_mini/share/argo_mini/config/ntfields.yaml"
+    ekf_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/ekf.yaml"
     sdk_ros      = f"{home}/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2"
 
     subprocess.run(
@@ -674,6 +683,22 @@ def main():
            ("ros2 run argo_mini serial_bridge --ros-args "
             "-p port:=/dev/ttyUSB1 -p baud:=115200 -p left_tick_scale:=0.66"), env)
     time.sleep(3); step_done("Serial Bridge")
+
+    # ── 3.5. EKF (robot_localization) ─────────────────────────────────────────
+    # Fuses serial_bridge's /wheel_odom + /imu/data into /odom and broadcasts
+    # the odom->base_footprint TF (base_footprint->base_link is the URDF's
+    # own static joint — see argo_mini.urdf) that SLAM Toolbox needs to
+    # localize and publish /pose next, and that wait_nav_prerequisites()
+    # below checks for. Nothing else in this pipeline provides that TF —
+    # without this step, slam_toolbox can never scan-match, /pose never
+    # publishes, and the robot marker on the dashboard's map never appears
+    # even though the rest of the stack looks fine.
+    launch("EKF (robot_localization)",
+           (f"ros2 run robot_localization ekf_node --ros-args "
+            f"--params-file {ekf_cfg} -r odometry/filtered:=/odom"), env)
+    if not wait_topic("/odom", env, timeout=15):
+        log("EKF not publishing /odom – check /wheel_odom and /imu/data are flowing", "warn")
+    time.sleep(2); step_done("EKF (robot_localization)")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
     launch("RPLidar A1",
