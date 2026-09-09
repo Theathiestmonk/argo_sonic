@@ -13,8 +13,8 @@
       # override them at launch time via get_package_share_directory, since
       # a plain YAML params file can't read $ENV_VARS the way a launch file
       # can. Edit the launch files' bt_xml_path if the BT file ever moves.
-      default_nav_to_pose_bt_xml: "/home/argo/my_project/argo_sonic/src/argo_mini/config/bt/navigate_to_pose.xml"
-      default_nav_through_poses_bt_xml: "/home/argo/my_project/argo_sonic/src/argo_mini/config/bt/navigate_to_pose.xml"
+      default_nav_to_pose_bt_xml: "config/bt/navigate_to_pose.xml"
+      default_nav_through_poses_bt_xml: "config/bt/navigate_to_pose.xml"
       plugin_lib_names:
         - nav2_compute_path_to_pose_action_bt_node
         - nav2_follow_path_action_bt_node
