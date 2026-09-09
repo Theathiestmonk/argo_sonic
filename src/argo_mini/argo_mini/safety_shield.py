@@ -19,8 +19,8 @@ Three independent sensor sources with graduated forward-speed response:
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
     < DEPTH_STOP_DIST (0.25 m) : hard stop — lowered from 0.40 m, same reasoning
 
-  Ultrasonic (Range x 4)  – binary, no slow zone needed at 40 cm
-    FL/FR < US_FRONT_DIST (0.40 m) : hard stop forward
+  Ultrasonic (Range x 4)  – binary, no slow zone needed
+    FL/FR < US_FRONT_DIST (0.15 m) : hard stop forward
     BL/BR < US_REAR_DIST  (0.40 m) : hard stop reverse
 
 Gate:
@@ -76,7 +76,11 @@ DEPTH_HEIGHT_MAX =  0.05   # opt Y – upper bound (ignore ceiling)
 DEPTH_STALE_SECS = 1.0     # s
 
 # ── Ultrasonic ────────────────────────────────────────────────────────────────
-US_FRONT_DIST    = 0.40    # m   – hard stop forward
+# FRONT lowered 0.40 -> 0.15 — the front sensors' mounting angle likely picks
+# up the floor a short distance ahead as a false "obstacle," and at 0.40m
+# that was triggering hard stops with nothing actually in front of the robot.
+# REAR left at 0.40 — no evidence of the same issue back there.
+US_FRONT_DIST    = 0.15    # m   – hard stop forward
 US_REAR_DIST     = 0.40    # m   – hard stop reverse
 US_STALE_SECS    = 1.0     # s
 

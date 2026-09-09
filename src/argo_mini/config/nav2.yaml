@@ -54,7 +54,11 @@
       goal_checker:
         plugin: "nav2_controller::SimpleGoalChecker"
         xy_goal_tolerance: 0.20
-        yaw_goal_tolerance: 0.13
+        # Raised from 0.13 - GoalAngleCritic (rotate-to-face-goal-heading)
+        # is now removed below, so the robot no longer tries to match the
+        # goal's requested final orientation. This just needs to be loose
+        # enough to never block completion on whatever heading it arrives at.
+        yaw_goal_tolerance: 1.57
         stateful: true
       FollowPath:
         plugin: "nav2_mppi_controller::MPPIController"
@@ -63,12 +67,21 @@
         batch_size: 1000
         vx_std: 0.2
         vy_std: 0.2
-        wz_std: 0.4
+        # Kept matched 1:1 with wz_max above (was 0.4/0.4) - left at the old
+        # ratio when wz_max was lowered, this would sample rotation candidates
+        # from a spread wider than the entire valid range, clamping most of
+        # them to the new max and biasing MPPI toward full-speed turns
+        # whenever it needed to turn at all instead of graduating smoothly.
+        wz_std: 0.15
         vx_max: 0.15
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
-        wz_max: 0.4
+        # Lowered from 0.4 - fast turns were causing wheel slip that fed
+        # bad encoder ticks into odometry (see serial_bridge.py's implausible-
+        # tick-delta handling). Kept in sync with velocity_smoother's angular
+        # max_velocity and behavior_server's max_rotational_vel below.
+        wz_max: 0.15
         # Reverted to 0.15 — the robot ran smoothest at this linear
         # speed/accel; 0.50 (tried 2026-08-15) was faster but rougher.
         ax_max: 0.15
@@ -99,7 +112,10 @@
           plugin: "nav2_mppi_controller::DefaultOptimalTrajectoryValidator"
           collision_lookahead_time: 2.0
           consider_footprint: false
-        critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+        # GoalAngleCritic removed - "rotate at goal" behavior; the robot no
+        # longer needs to face the goal's requested final orientation, only
+        # reach its position (see yaw_goal_tolerance above).
+        critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
         ConstraintCritic:
           enabled: true
           cost_power: 1
@@ -109,11 +125,6 @@
           cost_power: 1
           cost_weight: 8.0
           threshold_to_consider: 1.4
-        GoalAngleCritic:
-          enabled: true
-          cost_power: 1
-          cost_weight: 3.0
-          threshold_to_consider: 0.5
         PreferForwardCritic:
           enabled: true
           cost_power: 1
@@ -122,10 +133,11 @@
           # trajectories, letting near-goal rotation-only paths score as
           # cheap as they liked. Symptom on-robot: repeated small
           # back-and-forth wiggling before settling at the goal, right where
-          # GoalAngleCritic/PathAngleCritic/PathAlignCritic/PathFollowCritic
-          # (all still at cost_weight 5.0) compete hardest for the final
-          # heading — with PreferForward weak, MPPI had no strong pull back
-          # toward smooth forward-biased trajectories to break the tie.
+          # PathAngleCritic/PathAlignCritic/PathFollowCritic (all still at
+          # cost_weight 5.0) compete hardest for the final heading — with
+          # PreferForward weak, MPPI had no strong pull back toward smooth
+          # forward-biased trajectories to break the tie. (GoalAngleCritic
+          # itself has since been removed — see yaw_goal_tolerance above.)
           cost_weight: 5.0
           threshold_to_consider: 0.5
         CostCritic:
@@ -213,8 +225,8 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.15, 0.0, 0.4]
-      min_velocity: [-0.15, 0.0, -0.4]
+      max_velocity: [0.15, 0.0, 0.15]
+      min_velocity: [-0.15, 0.0, -0.15]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
@@ -241,6 +253,12 @@
       wait:
         plugin: "nav2_behaviors/Wait"
       simulate_ahead_time: 2.0
-      max_rotational_vel: 0.4
-      min_rotational_vel: 0.15
+      # Matched to FollowPath's wz_max above - lowered from 0.4 for the same
+      # wheel-slip/odometry reason, so Spin recovery doesn't turn faster than
+      # normal path-following is now allowed to.
+      max_rotational_vel: 0.15
+      # Lowered along with max_rotational_vel above - left at the old 0.15
+      # this would equal the new max exactly, leaving Spin zero ramp range
+      # (jumps straight to full speed with no gradual start).
+      min_rotational_vel: 0.05
       rotational_acc_lim: 1.5

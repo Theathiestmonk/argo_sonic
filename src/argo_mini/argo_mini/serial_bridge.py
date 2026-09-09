@@ -21,7 +21,6 @@ IMU_ALPHA = 0.95
 
 # Velocity limits
 VMAX   = 0.15    # m/s ? cap wheel speed to match nav2 vx_max
-V_DEAD = 0.02    # m/s ? below this send 0 RPM (stops motor)
 
 
 class SerialBridge(Node):
@@ -132,9 +131,18 @@ class SerialBridge(Node):
         return current + math.copysign(self._RPM_RAMP, diff)
 
     def _v_to_rpm(self, v: float) -> float:
-        """Convert wheel velocity (m/s) to RPM. Returns 0.0 below V_DEAD."""
-        if abs(v) < V_DEAD:
-            return 0.0
+        """Convert wheel velocity (m/s) to RPM.
+
+        Deliberately no per-wheel deadband here: cmd_cb already zeros both
+        wheels together when the whole robot should stop (abs(lin) < 0.01
+        and abs(ang) < 0.01). A deadband applied per-wheel instead cuts
+        whichever wheel's differential-drive speed (lin ? ang*WHEEL_BASE/2)
+        happens to pass near zero during an ordinary turn, hard-stopping
+        that wheel while the other keeps driving — turning a smooth curve
+        into a lurch/pivot around the stalled wheel. Confirmed on-robot:
+        this produced a visible straight/turn/straight/turn "polygon" path
+        even though the commanded /cmd_vel curve itself was smooth.
+        """
         return v * 60.0 / (2.0 * math.pi * WHEEL_RADIUS)
 
     def cmd_cb(self, msg: Twist):
@@ -215,7 +223,14 @@ class SerialBridge(Node):
             return
         now = self.get_clock().now().to_msg()
         for i in range(4):
-            cm = int(parts[i + 1])
+            # Firmware slots 0/1 (front) are wired to the physically opposite
+            # sensor - the wire labelled "front_left" on the board is actually
+            # mounted on the robot's right, and vice versa. Swap here rather
+            # than at the harness so every downstream topic (/us/front_left,
+            # /us/front_right) reports the side it's actually named after.
+            # Back pair (slots 2/3) confirmed correctly wired - untouched.
+            src = {0: 1, 1: 0}.get(i, i)
+            cm = int(parts[src + 1])
             msg = Range()
             msg.header.stamp = now
             msg.header.frame_id = self._us_frame_ids[i]
