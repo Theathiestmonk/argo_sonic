@@ -110,7 +110,7 @@ def generate_launch_description():
             name='serial_bridge',
             output='screen',
             parameters=[{
-                'port':            '/dev/ttyUSB1',
+                'port':            '/dev/esp32',
                 'baud':            115200,
                 'left_tick_scale': 2.1714,
             }],
@@ -126,7 +126,7 @@ def generate_launch_description():
             name='rplidar',
             output='screen',
             parameters=[{
-                'serial_port':      '/dev/ttyUSB0',
+                'serial_port':      '/dev/lidar',
                 'serial_baudrate':  115200,
                 'frame_id':         'lidar_link',
                 'inverted':         False,

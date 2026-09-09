@@ -28,8 +28,8 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 SLAM_CONFIG="$SCRIPT_DIR/install/argo_mini/share/argo_mini/config/slam_mapping.yaml"
 
 # ── USB permissions ────────────────────────────────────────────────────────
-chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
-  sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true
+chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || \
+  sudo chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || true
 
 # ── kill previous run ──────────────────────────────────────────────────────
 echo "[slam] Killing previous processes..."
@@ -50,7 +50,7 @@ sleep 2
 # fixed_dac=106: constant DAC → constant tick rate → cleaner odom
 echo "[slam] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
-  -p port:=/dev/ttyUSB0 \
+  -p port:=/dev/esp32 \
   -p baud:=115200 \
   -p left_tick_scale:=0.66 \
   -p fixed_dac:=112 &
@@ -60,7 +60,7 @@ sleep 3
 # ── 3. RPLidar A1 ─────────────────────────────────────────────────────────
 echo "[slam] Starting rplidar..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
-  -p serial_port:=/dev/ttyUSB1 \
+  -p serial_port:=/dev/lidar \
   -p serial_baudrate:=115200 \
   -p frame_id:=lidar_link \
   -p angle_compensate:=true \

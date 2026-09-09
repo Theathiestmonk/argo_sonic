@@ -48,8 +48,8 @@ SLAM_CONFIG=$SHARE/config/slam_mapping.yaml
 FRONTIER_NODE="$SCRIPT_DIR/src/argo_mini/argo_mini/frontier_explorer.py"
 
 # ── USB permissions ───────────────────────────────────────────────────────────
-chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
-  sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true
+chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || \
+  sudo chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || true
 
 # ── Kill any previous run ─────────────────────────────────────────────────────
 echo "[explore] Killing previous processes..."
@@ -133,7 +133,7 @@ sleep 5
 # ── 2. Serial bridge (odometry + motor control) ───────────────────────────────
 echo "[explore] 2. serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
-  -p port:=/dev/ttyUSB1 \
+  -p port:=/dev/esp32 \
   -p baud:=115200 \
   -p left_tick_scale:=0.66 &
 SERIAL_PID=$!
@@ -142,7 +142,7 @@ sleep 5
 # ── 3. RPLidar A1 ─────────────────────────────────────────────────────────────
 echo "[explore] 3. rplidar..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
-  -p serial_port:=/dev/ttyUSB0 \
+  -p serial_port:=/dev/lidar \
   -p serial_baudrate:=115200 \
   -p frame_id:=lidar_link \
   -p angle_compensate:=true \

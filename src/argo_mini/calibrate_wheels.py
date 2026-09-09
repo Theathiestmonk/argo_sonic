@@ -6,7 +6,7 @@ the correct left_tick_scale for serial_bridge.py.
 
 Usage:
     python3 calibrate_wheels.py [port] [baud] [dac] [seconds]
-    python3 calibrate_wheels.py /dev/ttyUSB1 115200 106 5
+    python3 calibrate_wheels.py /dev/esp32 115200 106 5
 
 The robot will drive straight forward for [seconds] seconds at [dac],
 measure ticks on both wheels, and report the scale factor to use.
@@ -16,7 +16,7 @@ Place the robot on the floor with clear space ahead before running.
 
 import sys, time, serial
 
-PORT    = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
+PORT    = sys.argv[1] if len(sys.argv) > 1 else '/dev/esp32'
 BAUD    = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 DAC     = int(sys.argv[3]) if len(sys.argv) > 3 else 106
 SECONDS = float(sys.argv[4]) if len(sys.argv) > 4 else 5.0

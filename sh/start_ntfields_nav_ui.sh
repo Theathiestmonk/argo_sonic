@@ -63,8 +63,8 @@ NAV_CONFIG="$SCRIPT_DIR/install/argo_mini/share/argo_mini/config/nav2.yaml"
 SLAM_CONFIG="$SCRIPT_DIR/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
 
 # ── USB permissions ────────────────────────────────────────────────────────
-chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \
-  sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true
+chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || \
+  sudo chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || true
 
 # ── kill previous run ──────────────────────────────────────────────────────
 echo "[argo] Killing previous processes..."
@@ -248,7 +248,7 @@ sleep 5
 # start_argo_nav_ui.sh's own (different) value.
 report "Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
-  -p port:=/dev/ttyUSB1 \
+  -p port:=/dev/esp32 \
   -p baud:=115200 \
   -p left_tick_scale:=0.66 &
 SERIAL_PID=$!
@@ -257,7 +257,7 @@ sleep 5
 # ── 4. RPLidar A1 ───────────────────────────────────────────────────────────
 report "Starting rplidar..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
-  -p serial_port:=/dev/ttyUSB0 \
+  -p serial_port:=/dev/lidar \
   -p serial_baudrate:=115200 \
   -p frame_id:=lidar_link \
   -p angle_compensate:=true \

@@ -17,7 +17,7 @@ Usage:  python3 esp32_teleop.py [port] [baud]
 
 import sys, time, termios, tty, threading, serial
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
+PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/esp32'
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 
 DAC_MIN = 104

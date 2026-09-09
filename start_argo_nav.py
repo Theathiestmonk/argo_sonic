@@ -391,8 +391,8 @@ def main():
     sdk_ros  = f"{home}/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2"
 
     subprocess.run(
-        "chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || "
-        "sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true",
+        "chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || "
+        "sudo chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || true",
         shell=True
     )
 
@@ -411,13 +411,13 @@ def main():
     # ?? 3. Serial bridge ??????????????????????????????????????????????????????
     launch_with_telem("Serial Bridge",
            ("ros2 run argo_mini serial_bridge --ros-args "
-            "-p port:=/dev/ttyUSB0 -p baud:=115200 -p left_tick_scale:=0.66"), env)
+            "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66"), env)
     time.sleep(3); step_done("Serial Bridge")
 
     # ?? 4. RPLidar ???????????????????????????????????????????????????????????
     launch("RPLidar A1",
            ("ros2 run rplidar_ros rplidar_composition --ros-args "
-            "-p serial_port:=/dev/ttyUSB1 -p serial_baudrate:=115200 "
+            "-p serial_port:=/dev/lidar -p serial_baudrate:=115200 "
             "-p frame_id:=lidar_link -p angle_compensate:=true -p scan_mode:=Standard"), env)
     time.sleep(3); step_done("RPLidar A1")
 

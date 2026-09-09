@@ -6,7 +6,7 @@ Reads ESP32 serial directly (no ROS) AND drives the robot via keyboard.
 
 Usage:
     python3 odom_check.py [port] [baud]
-    python3 odom_check.py /dev/ttyUSB1 115200
+    python3 odom_check.py /dev/esp32 115200
 
 Controls:
     W / ↑   forward        S / ↓   reverse
@@ -51,7 +51,7 @@ ANG_DECAY   = 0.68
 KEY_TIMEOUT = 0.12    # s — release threshold
 NUDGE       = 0.12    # m/s forward added when turning with lin ≈ 0
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
+PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/esp32'
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 
 

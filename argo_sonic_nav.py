@@ -596,7 +596,7 @@ def main():
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
 
-    # serial_bridge holds /dev/ttyUSB0 exclusively (pyserial) and is the only
+    # serial_bridge holds /dev/esp32 exclusively (pyserial) and is the only
     # publisher of /wheel_odom. If one survives the pkill above (started
     # manually, by another user, or just not yet reaped) the instance
     # launched later in this script fails to open the port and no odom data
@@ -613,7 +613,7 @@ def main():
     # that doesn't show "serial_bridge" anywhere in its own command line,
     # which the name-based pkill above can't touch.
     try:
-        subprocess.run(["fuser", "-k", "-9", "/dev/ttyUSB0"], capture_output=True, timeout=5)
+        subprocess.run(["fuser", "-k", "-9", "/dev/esp32"], capture_output=True, timeout=5)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     time.sleep(1)
@@ -621,9 +621,9 @@ def main():
     still_up = subprocess.run(["pgrep", "-f", "serial_bridge"], capture_output=True, text=True, timeout=5)
     if still_up.stdout.strip():
         log("A serial_bridge process survived the kill (likely started "
-            "manually by another user, or holding /dev/ttyUSB0) — odom "
+            "manually by another user, or holding /dev/esp32) — odom "
             "will probably fail below. Check `pgrep -af serial_bridge` / "
-            "`fuser /dev/ttyUSB0` manually.", "warn")
+            "`fuser /dev/esp32` manually.", "warn")
 
     log("Sourcing ROS2 + argo_sonic workspace...", "sys")
     env = build_env(home)
@@ -659,8 +659,8 @@ def main():
     sdk_ros      = f"{home}/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2"
 
     subprocess.run(
-        "chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || "
-        "sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true",
+        "chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || "
+        "sudo chmod 666 /dev/esp32 /dev/lidar 2>/dev/null || true",
         shell=True
     )
 
@@ -679,13 +679,13 @@ def main():
     # ── 3. Serial Bridge ──────────────────────────────────────────────────────
     launch_with_telem("Serial Bridge",
            ("ros2 run argo_mini serial_bridge --ros-args "
-            "-p port:=/dev/ttyUSB0 -p baud:=115200 -p left_tick_scale:=0.66"), env)
+            "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66"), env)
     time.sleep(3); step_done("Serial Bridge")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
     launch("RPLidar A1",
            ("ros2 run rplidar_ros rplidar_composition --ros-args "
-            "-p serial_port:=/dev/ttyUSB1 -p serial_baudrate:=115200 "
+            "-p serial_port:=/dev/lidar -p serial_baudrate:=115200 "
             "-p frame_id:=lidar_link -p angle_compensate:=true -p scan_mode:=Standard"), env)
     time.sleep(3); step_done("RPLidar A1")
 

@@ -1212,7 +1212,7 @@ def _wake_stop_locked():
 _serial_proc: subprocess.Popen | None = None
 _serial_estopped = False
 _serial_lock = threading.Lock()
-SERIAL_PORT = '/dev/ttyUSB1'
+SERIAL_PORT = '/dev/esp32'
 SERIAL_BAUD = 115200
 SERIAL_LEFT_TICK_SCALE = 0.66
 

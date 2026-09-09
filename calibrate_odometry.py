@@ -9,7 +9,7 @@ and left_tick_scale to paste into serial_bridge.py / start script.
 
 Usage:
     python3 calibrate_odometry.py
-    python3 calibrate_odometry.py /dev/ttyUSB1
+    python3 calibrate_odometry.py /dev/esp32
 """
 
 import math
@@ -25,7 +25,7 @@ POLE_PAIRS        = 10
 TICKS_PER_REV     = POLE_PAIRS * 6          # 90
 M_PER_TICK_NOW    = (2 * math.pi * WHEEL_RADIUS_NOW) / TICKS_PER_REV
 
-PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB1'
+PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/esp32'
 BAUD = 115200
 
 # ?? Shared serial state ??????????????????????????????????????????????????????
@@ -132,7 +132,7 @@ def main():
         print(f'  Connected to {PORT} at {BAUD} baud.')
     except serial.SerialException as e:
         print(f'\n  ERROR: Cannot open {PORT}: {e}')
-        print('  Run:  sudo chmod 666 /dev/ttyUSB1')
+        print('  Run:  sudo chmod 666 /dev/esp32')
         sys.exit(1)
 
     t_reader = threading.Thread(target=_serial_reader, args=(ser,), daemon=True)

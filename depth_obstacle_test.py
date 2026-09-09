@@ -104,7 +104,7 @@ def make_depth_visual(depth):
 def main():
     parser = argparse.ArgumentParser(
         description='Standalone depth-camera obstacle detection test for ESP32 motors.')
-    parser.add_argument('--serial-port', default='/dev/ttyUSB0',
+    parser.add_argument('--serial-port', default='/dev/esp32',
                         help='ESP32 serial port for motor commands')
     parser.add_argument('--baud', default=115200, type=int,
                         help='ESP32 serial speed')

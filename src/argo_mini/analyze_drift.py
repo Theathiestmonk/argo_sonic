@@ -21,7 +21,7 @@ physical measurement doesn't depend on any encoder-scale assumption at all.
 
 Usage:
     python3 analyze_drift.py [port] [baud] [target_rpm] [seconds] [current_scale]
-    python3 analyze_drift.py /dev/ttyUSB0 115200 40 5 0.66
+    python3 analyze_drift.py /dev/esp32 115200 40 5 0.66
 
 Procedure:
     1. Mark the robot's exact starting position and heading (e.g. tape line on
@@ -37,7 +37,7 @@ Procedure:
 
 import sys, time, math, serial
 
-PORT          = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyUSB0'
+PORT          = sys.argv[1] if len(sys.argv) > 1 else '/dev/esp32'
 BAUD          = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 TARGET_RPM    = float(sys.argv[3]) if len(sys.argv) > 3 else 40.0
 SECONDS       = float(sys.argv[4]) if len(sys.argv) > 4 else 5.0

@@ -28,7 +28,7 @@ class SerialBridge(Node):
     def __init__(self):
         super().__init__('serial_bridge')
 
-        self.declare_parameter('port', '/dev/ttyUSB1')
+        self.declare_parameter('port', '/dev/esp32')
         self.declare_parameter('baud', 115200)
         self.declare_parameter('forward_only', False)
         self.declare_parameter('left_tick_scale', 1.0)
