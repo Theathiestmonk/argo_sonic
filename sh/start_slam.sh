@@ -16,10 +16,20 @@ for arg in "$@"; do
 done
 
 # ── environment ────────────────────────────────────────────────────────────
-source /opt/ros/humble/setup.bash
-source ~/argo_mini_ws/install/setup.bash
+# Resolved from this script's own location, not hardcoded to ~/argo_mini_ws
+# (a stale workspace from before this project moved to my_project/argo_sonic)
+# — matches every other script/launcher in this repo, so there is only ever
+# one ROS2 workspace in play, never two running in parallel.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-SLAM_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/slam_mapping.yaml
+source /opt/ros/humble/setup.bash
+source "$SCRIPT_DIR/install/setup.bash"
+
+# Must match sh/start-rosbridge.sh's RMW setting or nodes started by each
+# simply can't discover each other at all.
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+SLAM_CONFIG="$SCRIPT_DIR/install/argo_mini/share/argo_mini/config/slam_mapping.yaml"
 
 # ── USB permissions ────────────────────────────────────────────────────────
 chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \

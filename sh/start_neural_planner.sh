@@ -5,8 +5,14 @@
 #   ./start_neural_planner.sh                          # with camera + RViz
 #   ./start_neural_planner.sh --no-cam                 # lidar-only
 
+# Resolved from this script's own location, not hardcoded to ~/argo_mini_ws
+# (a stale workspace from before this project moved to my_project/argo_sonic)
+# — matches every other script/launcher in this repo, so there is only ever
+# one ROS2 workspace in play, never two running in parallel.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
 NO_CAM=false
-MAP_BASE=~/my_project/argo_sonic/src/argo_mini/maps/office_map
+MAP_BASE="$SCRIPT_DIR/src/argo_mini/maps/office_map"
 
 for arg in "$@"; do
   [[ "$arg" == "--no-cam" ]] && NO_CAM=true
@@ -16,12 +22,16 @@ MAP_BASE="${MAP_BASE/#\~/$HOME}"
 
 # Environment Setup
 source /opt/ros/humble/setup.bash
-source ~/argo_mini_ws/install/setup.bash
+source "$SCRIPT_DIR/install/setup.bash"
+
+# Must match sh/start-rosbridge.sh's RMW setting or nodes started by each
+# simply can't discover each other at all.
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 CAMERA_SDK_PATH=~/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CAMERA_SDK_PATH/ascamera/libs/lib/aarch64-linux-gnu
 
-SLAM_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml
+SLAM_CONFIG="$SCRIPT_DIR/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
 
 # USB Permissions
 chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \

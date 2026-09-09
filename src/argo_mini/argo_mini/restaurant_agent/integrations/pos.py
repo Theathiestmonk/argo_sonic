@@ -19,7 +19,11 @@ import requests
 
 logger = logging.getLogger("argo_pos")
 
-_DB_PATH = os.path.expanduser("~/my_project/argo_sonic/restaurant_orders.db")
+# ARGO_WS = this repo's root on disk, overridable via ~/.bashrc
+# (export ARGO_WS=/path/to/argo_sonic); falls back to today's actual
+# deployment path so nothing breaks if unset.
+_ARGO_WS = os.environ.get('ARGO_WS', os.path.expanduser('~/my_project/argo_sonic'))
+_DB_PATH = os.environ.get('ARGO_RESTAURANT_DB_PATH', os.path.join(_ARGO_WS, 'restaurant_orders.db'))
 
 
 # ── Local SQLite fallback ──────────────────────────────────────────────────────

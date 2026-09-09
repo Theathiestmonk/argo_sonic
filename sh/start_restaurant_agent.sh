@@ -6,15 +6,23 @@
 #   ./start_restaurant_agent.sh --ryan       # use Ryan (male) voice
 #   ./start_restaurant_agent.sh --oww        # enable OWW neural wake word (needs trained model)
 
+# Resolved from this script's own location (falls back to ARGO_WS from
+# ~/.bashrc if set, then this repo's actual layout) so it isn't tied to one
+# clone path — matches every other script in sh/.
+SCRIPT_DIR="${ARGO_WS:-$(cd "$(dirname "$0")/.." && pwd)}"
+
 source /opt/ros/humble/setup.bash
-source ~/my_project/argo_sonic/install/setup.bash
+source "$SCRIPT_DIR/install/setup.bash"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-VOSK_MODEL=~/dhruvil/argo_mini_ws/src/argo_mini/argo_mini/STT_project/vosk-model-small-en-us-0.15
+# VOSK_MODEL/OWW_MODEL are overridable via ~/.bashrc (same ARGO_VOSK_MODEL_PATH /
+# ARGO_OWW_MODEL_PATH the Python nodes read) so these aren't stuck pointing at
+# one dev's home dir. Defaults below match today's actual deployment.
+VOSK_MODEL="${ARGO_VOSK_MODEL_PATH:-~/dhruvil/argo_mini_ws/src/argo_mini/argo_mini/STT_project/vosk-model-small-en-us-0.15}"
 PIPER_BIN=~/piper/piper
 PIPER_MODEL_LESSAC=~/piper-voices/en_US-lessac-medium.onnx
 PIPER_MODEL_RYAN=~/piper-voices/en_US-ryan-medium.onnx
-OWW_MODEL=~/my_project/argo_sonic/src/argo_mini/argo_mini/stt/Hey_Tom_20260615_085211.onnx
+OWW_MODEL="${ARGO_OWW_MODEL_PATH:-$SCRIPT_DIR/src/argo_mini/argo_mini/stt/Hey_Tom_20260615_085211.onnx}"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 PIPER_MODEL=$PIPER_MODEL_RYAN

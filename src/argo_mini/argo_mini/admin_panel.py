@@ -19,6 +19,14 @@ from dotenv import dotenv_values, load_dotenv
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# ARGO_WS = this repo's root on disk. Once this module is colcon-installed,
+# __file__ points into install/, not the source tree, so it can't be derived
+# from its own location the way argo_sonic_nav.py's REPO_ROOT is — it has to
+# come from the environment instead. Set once in ~/.bashrc:
+#   export ARGO_WS="$HOME/my_project/argo_sonic"
+# Falls back to today's actual deployment path so nothing breaks if unset.
+ARGO_WS = os.environ.get('ARGO_WS', os.path.expanduser('~/my_project/argo_sonic'))
+
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(PROJECT_DIR, '.env')
 DATA_FILE = os.path.join(PROJECT_DIR, 'restaurant_data.json')
@@ -33,7 +41,7 @@ VOICE_SCRIPT = os.environ.get(
   'ARGO_VOICE_SCRIPT',
   os.path.join(PROJECT_DIR, 'voice_agent2.py')
 )
-NAV_SCRIPT_PATH = os.environ.get('ARGO_NAV_SCRIPT_PATH', '/home/argo/my_project/argo_sonic/start_argo_nav.py')
+NAV_SCRIPT_PATH = os.environ.get('ARGO_NAV_SCRIPT_PATH', os.path.join(ARGO_WS, 'start_argo_nav.py'))
 AGENT_WS_URL = os.environ.get('ARGO_AGENT_WS_URL', 'ws://127.0.0.1:8765')
 MAX_LOG_ENTRIES = 200
 AGENT_STARTUP_TIMEOUT_SEC = 15

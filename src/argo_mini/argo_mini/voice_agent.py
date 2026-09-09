@@ -15,9 +15,15 @@ MIC_DEVICE     = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
 SPEAKER_DEVICE = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
 
 # ?? OpenWakeWord ???????????????????????????????????????????????????????????????
-OWW_MODEL_PATH = os.path.expanduser(
-    "~/my_project/argo_sonic/Hi_Sonic_20260616_213546.onnx" if _ON_JETSON
-    else "~/Desktop/argoworking/argo_mini_ws/Hi_Sonic_20260616_213546.onnx"
+# ARGO_OWW_MODEL_PATH overrides this — set once in ~/.bashrc so this
+# doesn't stay tied to one dev's home dir or clone location:
+#   export ARGO_OWW_MODEL_PATH=/path/to/Hi_Sonic_20260616_213546.onnx
+OWW_MODEL_PATH = os.environ.get(
+    'ARGO_OWW_MODEL_PATH',
+    os.path.expanduser(
+        "~/my_project/argo_sonic/Hi_Sonic_20260616_213546.onnx" if _ON_JETSON
+        else "~/Desktop/argoworking/argo_mini_ws/Hi_Sonic_20260616_213546.onnx"
+    ),
 )
 OWW_THRESHOLD  = 0.5    # confidence threshold (0.0 ? 1.0)
 OWW_CHUNK      = 1280   # 80 ms at 16 kHz ? OWW's required frame size

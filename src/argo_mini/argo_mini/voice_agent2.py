@@ -632,9 +632,15 @@ class VoiceAgentV21(Node):
         self.declare_parameter("wake_timeout", 30.0)
         self.declare_parameter("ollama_host", "http://localhost:11434")
         self.declare_parameter("piper_model", "/home/argo/piper-voices/en_US-lessac-medium.onnx")
+        # ARGO_VOSK_MODEL_PATH overrides this (same var
+        # restaurant_agent_node.py reads) — set once in ~/.bashrc so this
+        # doesn't stay tied to one dev's home dir.
         self.declare_parameter(
             "vosk_model_path",
-            "/home/argo/dhruvil/argo_mini_ws/src/argo_mini/argo_mini/STT_project/vosk-model-small-en-us-0.15",
+            os.environ.get(
+                'ARGO_VOSK_MODEL_PATH',
+                "/home/argo/dhruvil/argo_mini_ws/src/argo_mini/argo_mini/STT_project/vosk-model-small-en-us-0.15",
+            ),
         )
 
         self._sr = self.get_parameter("sample_rate").value

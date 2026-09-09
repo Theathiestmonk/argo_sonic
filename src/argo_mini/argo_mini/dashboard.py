@@ -60,11 +60,21 @@ def estimate_hours_and_minutes(percent: float) -> tuple[float, int]:
     seconds = max(0, int(round(hours * 3600)))
     return hours, seconds
 
+# ARGO_WS = this repo's root on disk. Once this module is colcon-installed,
+# __file__ points into install/, not the source tree, so this has to come
+# from the environment. Set once in ~/.bashrc:
+#   export ARGO_WS="$HOME/my_project/argo_sonic"
+# Falls back to today's actual deployment path so nothing breaks if unset.
+ARGO_WS = os.environ.get('ARGO_WS', os.path.expanduser('~/my_project/argo_sonic'))
+
 # Centralized Waypoints File path for sync
-WAYPOINTS_FILE = os.path.expanduser('~/my_project/argo_sonic/src/argo_mini/waypoints/waypoints.json')
+WAYPOINTS_FILE = os.environ.get(
+    'ARGO_WAYPOINTS_FILE',
+    os.path.join(ARGO_WS, 'src/argo_mini/waypoints/waypoints.json')
+)
 WAYPOINT_MANAGER_SCRIPT = os.environ.get(
     'ARGO_WAYPOINT_MANAGER_SCRIPT',
-    '/home/argo/my_project/argo_sonic/src/argo_mini/argo_mini/waypoint_manager.py'
+    os.path.join(ARGO_WS, 'src/argo_mini/argo_mini/waypoint_manager.py')
 )
 
 dashboard_node = None

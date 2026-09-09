@@ -31,7 +31,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
@@ -46,6 +46,14 @@ def generate_launch_description():
     # Default map path ? update after your first mapping session
     default_map = os.path.join(pkg, 'maps', 'indoor_map')
 
+    # nav2.yaml hardcodes default_nav_to_pose_bt_xml/default_nav_through_poses_bt_xml
+    # as an absolute /home/argo/my_project/argo_sonic/... path (plain YAML params
+    # files can't read $ENV_VARS ? that's a launch-file-only substitution in
+    # ROS2), so it breaks for any other clone location/username. Overriding it
+    # here with get_package_share_directory, which nav2_yaml itself already
+    # relies on, resolves correctly regardless of where this workspace lives.
+    bt_xml_path = os.path.join(pkg, 'config', 'bt', 'navigate_to_pose.xml')
+
     with open(urdf_file, 'r') as f:
         robot_desc = f.read()
 
@@ -54,12 +62,15 @@ def generate_launch_description():
     map_path   = LaunchConfiguration('map',         default=default_map)
 
     # Nav2 lifecycle nodes ? slam_toolbox is NOT a lifecycle node; it manages itself
+    # Order matches upstream nav2_bringup's navigation_launch.py: controller,
+    # planner, and behavior are configured+activated before bt_navigator
+    # (which holds action clients to all three), velocity_smoother last.
     nav2_nodes = [
-        'behavior_server',
         'controller_server',
         'planner_server',
-        'velocity_smoother',
+        'behavior_server',
         'bt_navigator',
+        'velocity_smoother',
     ]
 
     return LaunchDescription([
@@ -150,81 +161,115 @@ def generate_launch_description():
 
         # ?? 5.5. Pose Initializer (Auto-set kitchen pose) ?????????????????????
         # Reads kitchen location from office_map.json and initializes robot pose
-        # Runs once at startup, then exits cleanly
-        Node(
-            package='argo_mini',
-            executable='pose_init',
-            name='pose_init',
-            output='screen',
-        ),
-
-        # ?? 6. Behavior Server (Spin / BackUp / Wait recoveries) ?????????????
-        LifecycleNode(
-            package='nav2_behaviors',
-            executable='behavior_server',
-            name='behavior_server',
-            namespace='',
-            output='screen',
-            parameters=[nav2_yaml],
-            remappings=[('cmd_vel', '/cmd_vel_raw')],
-        ),
-
-        # ?? 7. Controller Server ? /cmd_vel_raw (remapped) ???????????????????
-        LifecycleNode(
-            package='nav2_controller',
-            executable='controller_server',
-            name='controller_server',
-            namespace='',
-            output='screen',
-            parameters=[nav2_yaml],
-            remappings=[('cmd_vel', '/cmd_vel_raw')],
-        ),
-
-        # ?? 8. Planner Server ????????????????????????????????????????????????
-        LifecycleNode(
-            package='nav2_planner',
-            executable='planner_server',
-            name='planner_server',
-            namespace='',
-            output='screen',
-            parameters=[nav2_yaml],
-        ),
-
-        # ?? 9. Velocity Smoother  /cmd_vel_raw ? /cmd_vel_smoothed ???????????
-        LifecycleNode(
-            package='nav2_velocity_smoother',
-            executable='velocity_smoother',
-            name='velocity_smoother',
-            namespace='',
-            output='screen',
-            parameters=[nav2_yaml],
-            remappings=[
-                ('cmd_vel',          '/cmd_vel_raw'),
-                ('cmd_vel_smoothed', '/cmd_vel_smoothed'),
+        # Runs once at startup, then exits cleanly.
+        # Delayed so slam_toolbox is up and serving the pose-set service it
+        # depends on (avoids a startup race on slower Jetson boots).
+        TimerAction(
+            period=5.0,
+            actions=[
+                Node(
+                    package='argo_mini',
+                    executable='pose_init',
+                    name='pose_init',
+                    output='screen',
+                ),
             ],
         ),
 
-        # ?? 10. BT Navigator ?????????????????????????????????????????????????
-        LifecycleNode(
-            package='nav2_bt_navigator',
-            executable='bt_navigator',
-            name='bt_navigator',
-            namespace='',
-            output='screen',
-            parameters=[nav2_yaml],
-        ),
+        # ?? 6-11. Nav2 Lifecycle Nodes + Lifecycle Manager ??????????????????
+        # Delayed ~6s so sensor/localization nodes (lidar, serial bridge,
+        # slam_toolbox, camera) get a head start. Launching everything at
+        # once on the Jetson caused some nodes to miss the lifecycle
+        # manager's bond_timeout window under startup CPU contention, which
+        # triggers a hard reset of ALL 5 managed nodes ? that's why nav only
+        # came up every other launch instead of every time.
+        # Node order matches upstream nav2_bringup (see nav2_nodes above).
+        TimerAction(
+            period=6.0,
+            actions=[
+                # Controller Server ? /cmd_vel_raw (remapped)
+                LifecycleNode(
+                    package='nav2_controller',
+                    executable='controller_server',
+                    name='controller_server',
+                    namespace='',
+                    output='screen',
+                    parameters=[nav2_yaml],
+                    remappings=[('cmd_vel', '/cmd_vel_raw')],
+                ),
 
-        # ?? 11. Nav2 Lifecycle Manager ???????????????????????????????????????
-        Node(
-            package='nav2_lifecycle_manager',
-            executable='lifecycle_manager',
-            name='lifecycle_manager_nav',
-            output='screen',
-            parameters=[{
-                'use_sim_time': False,
-                'autostart':    True,
-                'node_names':   nav2_nodes,
-            }],
+                # Planner Server
+                LifecycleNode(
+                    package='nav2_planner',
+                    executable='planner_server',
+                    name='planner_server',
+                    namespace='',
+                    output='screen',
+                    parameters=[nav2_yaml],
+                ),
+
+                # Behavior Server (Spin / BackUp / Wait recoveries)
+                LifecycleNode(
+                    package='nav2_behaviors',
+                    executable='behavior_server',
+                    name='behavior_server',
+                    namespace='',
+                    output='screen',
+                    parameters=[nav2_yaml],
+                    remappings=[('cmd_vel', '/cmd_vel_raw')],
+                ),
+
+                # BT Navigator ? bt_xml_path override (see above) takes
+                # precedence over nav2.yaml's hardcoded absolute path.
+                LifecycleNode(
+                    package='nav2_bt_navigator',
+                    executable='bt_navigator',
+                    name='bt_navigator',
+                    namespace='',
+                    output='screen',
+                    parameters=[
+                        nav2_yaml,
+                        {
+                            'default_nav_to_pose_bt_xml': bt_xml_path,
+                            'default_nav_through_poses_bt_xml': bt_xml_path,
+                        },
+                    ],
+                ),
+
+                # Velocity Smoother  /cmd_vel_raw ? /cmd_vel_smoothed
+                LifecycleNode(
+                    package='nav2_velocity_smoother',
+                    executable='velocity_smoother',
+                    name='velocity_smoother',
+                    namespace='',
+                    output='screen',
+                    parameters=[nav2_yaml],
+                    remappings=[
+                        ('cmd_vel',          '/cmd_vel_raw'),
+                        ('cmd_vel_smoothed', '/cmd_vel_smoothed'),
+                    ],
+                ),
+
+                # Nav2 Lifecycle Manager ? configures then activates all 5
+                # nodes above together, in nav2_nodes order.
+                Node(
+                    package='nav2_lifecycle_manager',
+                    executable='lifecycle_manager',
+                    name='lifecycle_manager_nav',
+                    output='screen',
+                    parameters=[{
+                        'use_sim_time':              False,
+                        'autostart':                 True,
+                        'node_names':                nav2_nodes,
+                        # Raised from the 4.0s default ? on the Jetson,
+                        # starting everything at once left too little
+                        # margin and occasionally missed this, forcing a
+                        # full reset of all 5 nodes.
+                        'bond_timeout':              10.0,
+                        'bond_respawn_max_duration': 15.0,
+                    }],
+                ),
+            ],
         ),
 
         # ?? 12. Depth Safety Shield  /cmd_vel_smoothed ? /cmd_vel ????????????

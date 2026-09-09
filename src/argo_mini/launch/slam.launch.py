@@ -55,6 +55,13 @@ def generate_launch_description():
     exploration_nav2    = os.path.join(pkg, 'config', 'exploration_nav2.yaml')
     urdf_file           = os.path.join(pkg, 'urdf',   'argo_mini.urdf')
 
+    # nav2.yaml hardcodes default_nav_to_pose_bt_xml as an absolute
+    # /home/argo/my_project/argo_sonic/... path (plain YAML params files
+    # can't read $ENV_VARS), so it breaks for any other clone location.
+    # Overriding it here with get_package_share_directory resolves
+    # correctly regardless of where this workspace lives.
+    bt_xml_path = os.path.join(pkg, 'config', 'bt', 'navigate_to_pose.xml')
+
     with open(urdf_file, 'r') as f:
         robot_desc = f.read()
 
@@ -223,13 +230,21 @@ def generate_launch_description():
                 ),
 
                 # 7e. BT Navigator — executes the navigate_to_pose behavior tree
+                # bt_xml_path override (see above) takes precedence over
+                # nav2.yaml's hardcoded absolute path.
                 LifecycleNode(
                     package='nav2_bt_navigator',
                     executable='bt_navigator',
                     name='bt_navigator',
                     namespace='',
                     output='screen',
-                    parameters=[nav2_yaml],
+                    parameters=[
+                        nav2_yaml,
+                        {
+                            'default_nav_to_pose_bt_xml': bt_xml_path,
+                            'default_nav_through_poses_bt_xml': bt_xml_path,
+                        },
+                    ],
                 ),
 
                 # 7f. Nav2 Lifecycle Manager — brings up 7a–7e in order

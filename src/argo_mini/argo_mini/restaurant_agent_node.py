@@ -38,9 +38,13 @@ logging.basicConfig(
 logger = logging.getLogger("argo.agent")
 
 # ?? Default paths ??????????????????????????????????????????????????????????????
-_DEFAULT_VOSK_PATH = (
+# ARGO_VOSK_MODEL_PATH overrides this (same var voice_agent2.py reads) —
+# set once in ~/.bashrc so this doesn't stay tied to one dev's home dir:
+#   export ARGO_VOSK_MODEL_PATH=/path/to/vosk-model-small-en-us-0.15
+_DEFAULT_VOSK_PATH = os.environ.get(
+    'ARGO_VOSK_MODEL_PATH',
     "/home/argo/dhruvil/argo_mini_ws/src/argo_mini/argo_mini/"
-    "STT_project/vosk-model-small-en-us-0.15"
+    "STT_project/vosk-model-small-en-us-0.15",
 )
 _DEFAULT_SHERPA_DIR  = os.path.expanduser("~/argo_models/sherpa-onnx-streaming-zipformer-en-2023-06-26")
 _DEFAULT_HOTWORDS    = os.path.expanduser("~/argo_models/hotwords.txt")
