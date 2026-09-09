@@ -50,7 +50,7 @@ sleep 2
 # fixed_dac=106: constant DAC → constant tick rate → cleaner odom
 echo "[slam] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
-  -p port:=/dev/ttyUSB1 \
+  -p port:=/dev/ttyUSB0 \
   -p baud:=115200 \
   -p left_tick_scale:=0.66 \
   -p fixed_dac:=112 &
@@ -60,7 +60,7 @@ sleep 3
 # ── 3. RPLidar A1 ─────────────────────────────────────────────────────────
 echo "[slam] Starting rplidar..."
 ros2 run rplidar_ros rplidar_composition --ros-args \
-  -p serial_port:=/dev/ttyUSB0 \
+  -p serial_port:=/dev/ttyUSB1 \
   -p serial_baudrate:=115200 \
   -p frame_id:=lidar_link \
   -p angle_compensate:=true \
