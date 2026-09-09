@@ -17,7 +17,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 for ws in \
     "$HOME/my_project/argo_sonic/install/setup.bash" \
     "$HOME/dhruvil/argo_sonic/install/setup.bash" \
-    "$HOME/argo_mini_ws/install/setup.bash"
+    "$HOME/my_project/argo_sonic/install/setup.bash"
 do
     [ -f "$ws" ] && source "$ws" && break
 done

@@ -7,14 +7,14 @@
 #   ./start_restaurant_agent.sh --oww        # enable OWW neural wake word (needs trained model)
 
 source /opt/ros/humble/setup.bash
-source ~/argo_mini_ws/install/setup.bash
+source ~/my_project/argo_sonic/install/setup.bash
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 VOSK_MODEL=~/dhruvil/argo_mini_ws/src/argo_mini/argo_mini/STT_project/vosk-model-small-en-us-0.15
 PIPER_BIN=~/piper/piper
 PIPER_MODEL_LESSAC=~/piper-voices/en_US-lessac-medium.onnx
 PIPER_MODEL_RYAN=~/piper-voices/en_US-ryan-medium.onnx
-OWW_MODEL=~/argo_mini_ws/src/argo_mini/argo_mini/stt/Hey_Tom_20260615_085211.onnx
+OWW_MODEL=~/my_project/argo_sonic/src/argo_mini/argo_mini/stt/Hey_Tom_20260615_085211.onnx
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 PIPER_MODEL=$PIPER_MODEL_RYAN

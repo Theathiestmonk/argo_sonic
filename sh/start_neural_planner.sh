@@ -6,7 +6,7 @@
 #   ./start_neural_planner.sh --no-cam                 # lidar-only
 
 NO_CAM=false
-MAP_BASE=~/argo_mini_ws/src/argo_mini/maps/office_map
+MAP_BASE=~/my_project/argo_sonic/src/argo_mini/maps/office_map
 
 for arg in "$@"; do
   [[ "$arg" == "--no-cam" ]] && NO_CAM=true

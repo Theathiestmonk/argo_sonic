@@ -19,7 +19,7 @@ import requests
 
 logger = logging.getLogger("argo_pos")
 
-_DB_PATH = os.path.expanduser("~/argo_mini_ws/restaurant_orders.db")
+_DB_PATH = os.path.expanduser("~/my_project/argo_sonic/restaurant_orders.db")
 
 
 # ── Local SQLite fallback ──────────────────────────────────────────────────────

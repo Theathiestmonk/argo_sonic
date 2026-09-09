@@ -33,7 +33,7 @@
 #   ./start_ntfields_nav_ui.sh --map /path/to/map       # custom map path (no extension)
 #   ./start_ntfields_nav_ui.sh --no-rviz                # headless (run via the web UI)
 #
-# Build first: cd ~/argo_mini_ws && colcon build --packages-select argo_mini --symlink-install
+# Build first: cd ~/my_project/argo_sonic && colcon build --packages-select argo_mini --symlink-install
 
 NO_CAM=false
 NO_RVIZ=false

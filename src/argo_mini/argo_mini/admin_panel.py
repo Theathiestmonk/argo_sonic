@@ -33,7 +33,7 @@ VOICE_SCRIPT = os.environ.get(
   'ARGO_VOICE_SCRIPT',
   os.path.join(PROJECT_DIR, 'voice_agent2.py')
 )
-NAV_SCRIPT_PATH = os.environ.get('ARGO_NAV_SCRIPT_PATH', '/home/argo/argo_mini_ws/start_argo_nav.py')
+NAV_SCRIPT_PATH = os.environ.get('ARGO_NAV_SCRIPT_PATH', '/home/argo/my_project/argo_sonic/start_argo_nav.py')
 AGENT_WS_URL = os.environ.get('ARGO_AGENT_WS_URL', 'ws://127.0.0.1:8765')
 MAX_LOG_ENTRIES = 200
 AGENT_STARTUP_TIMEOUT_SEC = 15

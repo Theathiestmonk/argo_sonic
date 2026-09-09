@@ -12,7 +12,7 @@ Rules:
 
 Run after sourcing ROS:
     source /opt/ros/humble/setup.bash
-    source ~/argo_mini_ws/install/setup.bash
+    source ~/my_project/argo_sonic/install/setup.bash
     python3 depth_stop.py
 """
 

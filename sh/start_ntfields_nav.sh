@@ -12,7 +12,7 @@
 #   ./start_ntfields_nav.sh --map /path/to/map     # custom map (no extension)
 #
 # Default map: ~/maps/indoor_map
-# Build first:  cd ~/argo_mini_ws && colcon build --packages-select argo_mini --symlink-install
+# Build first:  cd ~/my_project/argo_sonic && colcon build --packages-select argo_mini --symlink-install
 
 NO_CAM=false
 MAP_BASE=~/maps/gala_magnus_map
@@ -25,13 +25,13 @@ MAP_BASE="${MAP_BASE/#\~/$HOME}"
 
 # ?? environment ????????????????????????????????????????????????????????????????
 source /opt/ros/humble/setup.bash
-source ~/argo_mini_ws/install/setup.bash
+source ~/my_project/argo_sonic/install/setup.bash
 
 CAMERA_SDK_PATH=~/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CAMERA_SDK_PATH/ascamera/libs/lib/aarch64-linux-gnu
 
-NAV_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/nav2.yaml
-SLAM_CONFIG=~/argo_mini_ws/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml
+NAV_CONFIG=~/my_project/argo_sonic/install/argo_mini/share/argo_mini/config/nav2.yaml
+SLAM_CONFIG=~/my_project/argo_sonic/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml
 
 # ?? USB permissions ????????????????????????????????????????????????????????????
 chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || \

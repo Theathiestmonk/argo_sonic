@@ -61,10 +61,10 @@ def estimate_hours_and_minutes(percent: float) -> tuple[float, int]:
     return hours, seconds
 
 # Centralized Waypoints File path for sync
-WAYPOINTS_FILE = os.path.expanduser('~/argo_mini_ws/src/argo_mini/waypoints/waypoints.json')
+WAYPOINTS_FILE = os.path.expanduser('~/my_project/argo_sonic/src/argo_mini/waypoints/waypoints.json')
 WAYPOINT_MANAGER_SCRIPT = os.environ.get(
     'ARGO_WAYPOINT_MANAGER_SCRIPT',
-    '/home/argo/argo_mini_ws/src/argo_mini/argo_mini/waypoint_manager.py'
+    '/home/argo/my_project/argo_sonic/src/argo_mini/argo_mini/waypoint_manager.py'
 )
 
 dashboard_node = None
