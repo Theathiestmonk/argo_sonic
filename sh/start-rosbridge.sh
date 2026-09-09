@@ -14,12 +14,7 @@ source /opt/ros/humble/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # Also source the argo workspace if present (finds argo_mini packages)
-for ws in \
-    "$HOME/my_project/argo_sonic/install/setup.bash" \
-    "$HOME/dhruvil/argo_sonic/install/setup.bash" \
-    "$HOME/my_project/argo_sonic/install/setup.bash"
-do
-    [ -f "$ws" ] && source "$ws" && break
-done
+[ -f "$HOME/my_project/argo_sonic/install/setup.bash" ] && \
+    source "$HOME/my_project/argo_sonic/install/setup.bash"
 
 exec /opt/ros/humble/bin/ros2 launch rosbridge_server rosbridge_websocket_launch.xml

@@ -12,7 +12,7 @@ WHEEL_RADIUS = 0.0762
 WHEEL_BASE   = 0.41
 
 # Repo root, derived from this file's own location — not hardcoded to
-# ~/argo_sonic, since this checkout can (and on the actual robot, does)
+# ~/my_project/argo_sonic, since this checkout can (and on the actual robot, does)
 # live somewhere else, e.g. ~/my_project/argo_sonic. Matches the sh/*.sh
 # scripts' own SCRIPT_DIR convention for the same reason.
 REPO_ROOT = str(Path(__file__).resolve().parent)

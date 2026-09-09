@@ -27,7 +27,7 @@ from std_msgs.msg import Bool
 
 SCRIPT_DIR   = Path(__file__).resolve().parent
 EXPLORE_SH   = SCRIPT_DIR / "start_slam_explore.sh"
-MAPS_DIR     = Path.home() / "argo_sonic/src/argo_mini/maps"
+MAPS_DIR     = Path.home() / "my_project/argo_sonic/src/argo_mini/maps"
 SAVE_TIMEOUT = 30   # s – per service call
 
 

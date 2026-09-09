@@ -384,7 +384,7 @@ def main():
         log("ros2 daemon start timed out - action-server checks may be unreliable", "warn")
     time.sleep(2)
 
-    ws       = f"{home}/argo_sonic"
+    ws       = f"{home}/my_project/argo_sonic"
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
     slam_cfg     = f"{ws}/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
     ntfields_cfg = f"{ws}/install/argo_mini/share/argo_mini/config/ntfields.yaml"
