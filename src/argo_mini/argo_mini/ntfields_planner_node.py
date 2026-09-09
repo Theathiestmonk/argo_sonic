@@ -12,6 +12,7 @@ Action:    /compute_path_to_pose  (same as nav2_planner)
 
 import os
 import time
+import threading
 
 import numpy as np
 import rclpy
@@ -102,8 +103,43 @@ class NTFieldsPlannerNode(LifecycleNode):
 
         t0 = time.time()
         self.get_logger().info(f'[NTFieldsPlanner] loading {self._model_path}…')
-        self._model = NTFieldsModel(dim=2, device=self._device)
-        self._norm  = self._model.load(self._model_path)
+
+        # Run the load on a worker thread with a hard deadline instead of
+        # calling it inline: a stale/corrupted CUDA JIT cache on Jetson
+        # (~/.nv/ComputeCache) can make the very first CUDA kernel compile
+        # in a fresh process hang indefinitely at the driver level, with no
+        # exception and no log output — confirmed on this exact board.
+        # Without this, that hang blocks on_configure forever, which blocks
+        # the lifecycle service call forever, which leaves the whole nav
+        # stack silently stuck with zero diagnostic signal. join(timeout=...)
+        # lets us give up and report FAILURE cleanly instead; the hung
+        # thread is daemonized so it can't block process shutdown either.
+        result = {}
+        def _load():
+            try:
+                model = NTFieldsModel(dim=2, device=self._device)
+                result['model'] = model
+                result['norm']  = model.load(self._model_path)
+            except Exception as e:
+                result['error'] = e
+
+        load_thread = threading.Thread(target=_load, daemon=True)
+        load_thread.start()
+        load_thread.join(timeout=60.0)
+
+        if load_thread.is_alive():
+            self.get_logger().error(
+                f'[NTFieldsPlanner] model load hung past 60s on device={self._device} — '
+                'likely a stale CUDA JIT cache on this board; try: '
+                'rm -rf ~/.nv/ComputeCache ~/.cache/torch_extensions, then retry')
+            return TransitionCallbackReturn.FAILURE
+
+        if 'error' in result:
+            self.get_logger().error(f'[NTFieldsPlanner] model load failed: {result["error"]}')
+            return TransitionCallbackReturn.FAILURE
+
+        self._model = result['model']
+        self._norm  = result['norm']
 
         if self._norm is None:
             self.get_logger().error(

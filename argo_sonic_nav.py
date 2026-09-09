@@ -277,6 +277,52 @@ def launch_with_telem(name, cmd, env):
     threading.Thread(target=_telem_reader, args=(p,), daemon=True).start()
     return p
 
+def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
+    """Launch a node, and if it dies or never publishes ready_topic within
+    `settle` seconds, kill it and retry with growing backoff.
+
+    Written for the RPLidar step specifically: a fresh RPLIDAR A1's motor
+    needs a moment to spin up to speed, and a start-scan command sent before
+    that (or one landing on top of stale bytes left in the UART buffer from
+    an immediately-preceding attempt) fails with an SDK-level timeout/comms
+    error that looks identical to an actual hardware fault but isn't one —
+    confirmed on this exact unit: dmesg showed no USB disconnect/reset
+    around the failure, and a clean isolated retry succeeded.
+    """
+    global step_name
+    step_name = name
+    for attempt in range(1, attempts + 1):
+        tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
+        log(f"Starting  {name}{tag}", "run")
+        p = subprocess.Popen(
+            cmd, shell=True, env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,
+        )
+        pids[name] = p
+
+        deadline = time.time() + settle
+        while time.time() < deadline:
+            if p.poll() is not None:
+                break
+            r = runcmd(f"ros2 topic list --no-daemon 2>/dev/null | grep -qx '{ready_topic}'", env)
+            if r.returncode == 0:
+                log(f"{name} ready", "ok")
+                return p
+            time.sleep(0.5)
+
+        log(f"{name} did not come up cleanly (attempt {attempt}/{attempts})", "warn")
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        pids.pop(name, None)
+        if attempt < attempts:
+            time.sleep(2 * attempt)  # let the motor/port fully settle before respin
+
+    log(f"FAILED to bring up {name} after {attempts} attempts", "fail")
+    return None
+
 def runcmd(cmd, env, timeout=10):
     try:
         return subprocess.run(cmd, shell=True, env=env, capture_output=True,
@@ -364,13 +410,35 @@ def wait_nav_prerequisites(env, timeout_odom=25, timeout_scan=20, timeout_map=30
     return ok
 
 def wait_action(action, env, timeout=30):
+    # `ros2 action list` has no --no-daemon option and always depends on the
+    # daemon, spawning one if none exists — which is exactly the dependency
+    # this script otherwise avoids everywhere else (Cyclone DDS discovery
+    # doesn't need it, and every other ros2 CLI call here passes
+    # --no-daemon). Every rclcpp/rclpy action server auto-publishes an
+    # <action>/_action/status topic, so check that via `ros2 topic list
+    # --no-daemon` instead — same readiness signal, zero daemon dependency.
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = runcmd(f"ros2 action list 2>/dev/null | grep -qx '{action}'", env)
+        r = runcmd(f"ros2 topic list --no-daemon --include-hidden-topics 2>/dev/null | grep -qx '{action}/_action/status'", env)
         if r.returncode == 0:
             return True
         time.sleep(1)
     log(f"Timeout – action not found: {action}", "warn")
+    return False
+
+def wait_for_node(node, env, timeout=20):
+    # A fixed sleep before the first lifecycle call isn't reliable — a
+    # fresh process importing torch can occasionally take a beat longer
+    # than expected, and calling `ros2 lifecycle set` before the node has
+    # registered in the ROS graph yet fails immediately with "Node not
+    # Found" (seen on this exact sequence for /planner_server). Wait for
+    # the node to actually exist first instead of guessing with a delay.
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = runcmd(f"ros2 node list --no-daemon 2>/dev/null | grep -qx '{node}'", env)
+        if r.returncode == 0:
+            return True
+        time.sleep(0.5)
     return False
 
 def wait_lifecycle_state(node, state, env, timeout=30):
@@ -386,6 +454,9 @@ def wait_lifecycle_state(node, state, env, timeout=30):
     return False
 
 def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
+    if not wait_for_node(node, env):
+        log(f"{node} never appeared in 'ros2 node list' — process may have crashed on startup", "fail")
+        return False
     for attempt in range(1, attempts + 1):
         tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
         log(f"Lifecycle configure  {node}{tag}", "sys")
@@ -416,19 +487,25 @@ def lc_ntfields(node, env, model_path=None, attempts=2):
         report_progress("ERROR", msg)
         return False
 
+    if not wait_for_node(node, env):
+        msg = f"{node} never appeared in 'ros2 node list' — process may have crashed on startup"
+        log(msg, "fail")
+        report_progress("ERROR", msg)
+        return False
+
     for attempt in range(1, attempts + 1):
         tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
         log(f"Lifecycle configure  {node}  (loading NTFields model...){tag}", "sys")
         runcmd(f"ros2 lifecycle set {node} configure --no-daemon 2>&1", env)
 
-        if not wait_lifecycle_state(node, 'inactive', env, timeout=30):
+        if not wait_lifecycle_state(node, 'inactive', env, timeout=50):
             log(f"Configure timed out for {node} – model may still be loading", "warn")
             time.sleep(5)
 
         log(f"Lifecycle activate   {node}", "sys")
         runcmd(f"ros2 lifecycle set {node} activate --no-daemon 2>&1", env)
 
-        if wait_action("/compute_path_to_pose", env, timeout=15):
+        if wait_action("/compute_path_to_pose", env, timeout=45):
             log(f"Active  {node}  – /compute_path_to_pose ready", "ok")
             return True
 
@@ -585,6 +662,15 @@ def main():
     sys.stdout.flush()
     threading.Thread(target=ui_loop, daemon=True).start()
 
+    # `ros2 daemon stop` talks to the daemon over its own RPC socket, so a
+    # wedged daemon just eats the full 8s timeout below and never actually
+    # dies. Killing it directly by process name first guarantees it's gone
+    # before we ever try the graceful stop/start, instead of hoping the RPC
+    # call works.
+    log("Killing any stale ros2 daemon...", "sys")
+    subprocess.run(["pkill", "-9", "-f", "_ros2_daemon"], capture_output=True)
+    time.sleep(1)
+
     log("Clearing previous ROS processes...", "sys")
     for proc in [
         "slam_toolbox", "serial_bridge", "rplidar_composition", "rviz2",
@@ -629,29 +715,6 @@ def main():
     env = build_env(home)
     log("Environment ready", "ok")
 
-    # `ros2 lifecycle`/`topic` calls below all pass --no-daemon (added
-    # above) so they never depend on this daemon. But `ros2 action list` —
-    # what wait_action() uses to confirm /compute_path_to_pose,
-    # /follow_path, /backup actually registered — has NO --no-daemon
-    # option at all; it always goes through the daemon, spawning one if
-    # none exists. Dropping this reset outright (previous fix) left that
-    # one call still depending on whatever daemon happened to already be
-    # running, stale or not — which is exactly why every lifecycle
-    # transition above started succeeding again but every action-server
-    # wait kept timing out regardless of the node actually being up.
-    # Bounded with a timeout on each call so a wedged daemon socket can't
-    # re-create the original "stuck before step 1" hang.
-    log("Resetting ros2 daemon...", "sys")
-    try:
-        subprocess.run(["ros2", "daemon", "stop"], env=env, capture_output=True, timeout=8)
-    except subprocess.TimeoutExpired:
-        log("ros2 daemon stop timed out – proceeding anyway", "warn")
-    try:
-        subprocess.run(["ros2", "daemon", "start"], env=env, capture_output=True, timeout=8)
-    except subprocess.TimeoutExpired:
-        log("ros2 daemon start timed out – action-server checks may be unreliable", "warn")
-    time.sleep(2)
-
     ws           = REPO_ROOT
     nav_cfg      = f"{ws}/install/argo_mini/share/argo_mini/config/nav2.yaml"
     slam_cfg     = f"{ws}/install/argo_mini/share/argo_mini/config/slam_toolbox.yaml"
@@ -683,11 +746,12 @@ def main():
     time.sleep(3); step_done("Serial Bridge")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
-    launch("RPLidar A1",
+    launch_with_retry("RPLidar A1",
            ("ros2 run rplidar_ros rplidar_composition --ros-args "
             "-p serial_port:=/dev/lidar -p serial_baudrate:=115200 "
-            "-p frame_id:=lidar_link -p angle_compensate:=true -p scan_mode:=Standard"), env)
-    time.sleep(3); step_done("RPLidar A1")
+            "-p frame_id:=lidar_link -p angle_compensate:=true -p scan_mode:=Boost"),
+           env, ready_topic="/scan", attempts=3, settle=6)
+    step_done("RPLidar A1")
 
     # ── 5. Scan Relay ─────────────────────────────────────────────────────────
     launch("Scan Relay", "ros2 run argo_mini scan_relay", env)
@@ -755,7 +819,9 @@ def main():
 
     # ── 11. BT Navigator ──────────────────────────────────────────────────────
     launch("BT Navigator",
-           f"ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file {nav_cfg}", env)
+           f"ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file {nav_cfg} "
+           f"-p default_nav_to_pose_bt_xml:={ws}/src/argo_mini/config/bt/navigate_to_pose.xml "
+           f"-p default_nav_through_poses_bt_xml:={ws}/src/argo_mini/config/bt/navigate_to_pose.xml", env)
     time.sleep(5)
     bt_active = lc_node("/bt_navigator", env, configure_timeout=40, activate_timeout=30)
     step_done("BT Navigator")

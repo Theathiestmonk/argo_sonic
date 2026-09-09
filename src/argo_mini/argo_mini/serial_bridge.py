@@ -78,6 +78,7 @@ class SerialBridge(Node):
         self.theta      = 0.0
         self.prev_left  = None
         self.prev_right = None
+        self._bad_tick_streak = 0
         self.last_time  = self.get_clock().now()
         self.last_cmd        = self.get_clock().now()
         self._last_watchdog_stop = False
@@ -234,14 +235,41 @@ class SerialBridge(Node):
 
         dl = (left_ticks  - self.prev_left)  * METERS_PER_TICK * self.left_tick_scale
         dr = (right_ticks - self.prev_right) * METERS_PER_TICK
-        self.prev_left  = left_ticks
-        self.prev_right = right_ticks
 
         if abs(dl) > 0.10 or abs(dr) > 0.10:
+            # Deliberately NOT committing prev_left/prev_right here: a single
+            # corrupted serial line (bit error, not a real reboot) used to
+            # get adopted as the new baseline unconditionally, which just
+            # relocated the bad delta onto the NEXT (good) reading instead
+            # of discarding it — seen on-robot as two consecutive warnings
+            # with mirrored signs (e.g. dr=-1.78 immediately followed by
+            # dr=+1.78), one real glitch corrupting two cycles instead of
+            # one. Keep comparing against the last known-good baseline so
+            # an isolated bad line is fully discarded.
+            self._bad_tick_streak += 1
             self.get_logger().warn(
                 f'Implausible tick delta dl={dl:.3f} dr={dr:.3f} ? '
-                'skipping (ESP32 reboot or serial glitch)')
+                f'skipping (streak={self._bad_tick_streak})')
+            # A single corrupted line self-corrects next cycle against the
+            # unchanged baseline above. But a genuine ESP32 brown-out/reboot
+            # resets its tick counters near zero and STAYS there, so it
+            # would fail this same check forever without ever resyncing.
+            # After a few consecutive failures, trust it's a real reboot —
+            # adopt the new counts as the baseline (robot's integrated
+            # x/y/theta pose is untouched; only the raw tick reference
+            # resets, exactly like a fresh serial_bridge start).
+            if self._bad_tick_streak >= 3:
+                self.get_logger().warn(
+                    'Sustained implausible ticks ? treating as a genuine '
+                    'ESP32 reboot and resyncing tick baseline (pose kept).')
+                self.prev_left  = left_ticks
+                self.prev_right = right_ticks
+                self._bad_tick_streak = 0
             return
+
+        self._bad_tick_streak = 0
+        self.prev_left  = left_ticks
+        self.prev_right = right_ticks
 
         d_center      = (dl + dr) / 2.0
         d_theta_wheel = (dr - dl) / WHEEL_BASE

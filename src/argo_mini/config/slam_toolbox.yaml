@@ -17,6 +17,14 @@ slam_toolbox:
     max_laser_range:    6.0
     min_laser_range: 0.30
 
+    # Default 0.2s is too tight under Jetson CPU load (many nodes competing
+    # for the same cores) — TF broadcasts occasionally lag past that,
+    # backing up the scan message filter's queue until it drops scans
+    # ("Message Filter dropping message ... queue is full"). More slack
+    # here trades a little localization latency for not losing scans.
+    transform_timeout:  0.5
+    tf_buffer_duration: 10.0
+
     # Tighter update cadence for responsive localization
     minimum_travel_distance: 0.05
     minimum_travel_heading:  0.017   # ~1 degree
