@@ -38,7 +38,7 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 DAC_STOP = 0
 DAC_MIN  = 104
 DAC_MAX  = 108
-VMAX     = 0.40
+VMAX     = 0.30
 V_DEAD   = 0.04
 
 # ── Teleop constants ────────────────────────────────────────────────────────

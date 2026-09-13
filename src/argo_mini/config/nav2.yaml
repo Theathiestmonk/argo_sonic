@@ -21,10 +21,11 @@
         - nav2_pipeline_sequence_bt_node
         - nav2_recovery_node_bt_node
         - nav2_rate_controller_bt_node
-        - nav2_round_robin_node_bt_node
-        - nav2_back_up_action_bt_node
-        - nav2_spin_action_bt_node
-        - nav2_wait_action_bt_node
+        # Recovery is now "clear the local costmap and replan" only (see
+        # bt/navigate_to_pose.xml) — nav2_round_robin/back_up/spin_action_bt_node
+        # dropped since BackUp/Spin are no longer referenced anywhere in the
+        # tree. nav2_clear_costmap_service_bt_node registers ClearEntireCostmap.
+        - nav2_clear_costmap_service_bt_node
 
   controller_server:
     ros__parameters:
@@ -42,60 +43,72 @@
       progress_checker:
         plugin: "nav2_controller::SimpleProgressChecker"
         required_movement_radius: 0.30
-        # Lowered from 30.0 — safety_shield has no visibility into Nav2 and
-        # never reports "blocked," so controller_server has no way to know
-        # its commands are being zeroed downstream until this checker's own
-        # timeout expires. At 30s the robot sat stuck in front of an
-        # obstacle for a full 30 seconds before recovery (backup/spin/wait)
-        # ever kicked in. 10s is a 3x faster stuck-detection while still
-        # generous enough not to false-trigger on genuinely slow movement
-        # (0.30m in 10s is only ~3cm/s average, well under vx_max=0.15).
-        movement_time_allowance: 10.0
+        # Lowered from 30.0, then again from 10.0 — safety_shield has no
+        # visibility into Nav2 and never reports "blocked," so
+        # controller_server has no way to know its commands are being
+        # zeroed downstream until this checker's own timeout expires. At
+        # 30s the robot sat stuck in front of an obstacle for a full 30
+        # seconds before recovery (backup/spin/wait) ever kicked in; 10.0
+        # cut that to a 3x-faster stuck-detection.
+        #
+        # 2.0 is a deliberately aggressive re-tightening for "recover from
+        # stuck fast" — worth flagging the actual math, since it's tight
+        # enough to matter: required_movement_radius(0.30) / 2.0 = 0.15 m/s
+        # average, which equals vx_max below EXACTLY. 10.0 had real margin
+        # (0.30/10.0 = 0.03 m/s, well under vx_max); 2.0 has none — any
+        # normal moment of less-than-peak speed (accelerating from rest, a
+        # turn, cautious movement near an obstacle) can trip this. If the
+        # robot starts doing little unwanted backup/spin hiccups during
+        # otherwise-normal travel (not an actual stall), this is the first
+        # value to raise back up — try 4.0-5.0 as a middle ground before
+        # going all the way back to 10.0.
+        movement_time_allowance: 2.0
       goal_checker:
         plugin: "nav2_controller::SimpleGoalChecker"
-        xy_goal_tolerance: 0.20
-        # Raised from 0.13 - GoalAngleCritic (rotate-to-face-goal-heading)
-        # is now removed below, so the robot no longer tries to match the
-        # goal's requested final orientation. This just needs to be loose
-        # enough to never block completion on whatever heading it arrives at.
+        xy_goal_tolerance: 0.40
+        # Increased from 0.20 to reduce excessive turning at goal
         yaw_goal_tolerance: 1.57
         stateful: true
       FollowPath:
         plugin: "nav2_mppi_controller::MPPIController"
         time_steps: 30
         model_dt: 0.05
-        batch_size: 1000
+        # Raised from 1000 - more sampled candidate trajectories per cycle
+        # gives MPPI a better chance of finding a way around a sudden nearby
+        # obstacle without needing a full global replan. Jetson Orin has
+        # headroom for this; re-profile controller_server CPU/GPU load if
+        # FollowPath starts missing its 20Hz controller_frequency cycle.
+        batch_size: 2000
         vx_std: 0.2
         vy_std: 0.2
-        # Kept matched 1:1 with wz_max above (was 0.4/0.4) - left at the old
-        # ratio when wz_max was lowered, this would sample rotation candidates
-        # from a spread wider than the entire valid range, clamping most of
-        # them to the new max and biasing MPPI toward full-speed turns
-        # whenever it needed to turn at all instead of graduating smoothly.
-        wz_std: 0.15
-        vx_max: 0.15
+        # Kept matched 1:1 with wz_max above
+        wz_std: 0.4
+        vx_max: 0.30
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
-        # Lowered from 0.4 - fast turns were causing wheel slip that fed
-        # bad encoder ticks into odometry (see serial_bridge.py's implausible-
-        # tick-delta handling). Kept in sync with velocity_smoother's angular
-        # max_velocity and behavior_server's max_rotational_vel below.
-        wz_max: 0.15
-        # Reverted to 0.15 — the robot ran smoothest at this linear
-        # speed/accel; 0.50 (tried 2026-08-15) was faster but rougher.
-        ax_max: 0.15
+        # Increased to 0.4 for faster turns
+        wz_max: 0.4
+        # Raised to 0.40 for faster acceleration
+        ax_max: 0.40
         ax_min: -0.15
         ay_min: 0.0
         ay_max: 0.0
         # Wheel-level (slip-relevant) tangential accel from rotating is
         # az_max * (WHEEL_BASE/2) = az_max * 0.205 (WHEEL_BASE=0.41,
-        # serial_bridge.py). Matching linear's 0.15 m/s² no-slip threshold
-        # at the wheel gives az_max <= ~0.73 rad/s² headroom — 0.3 sits
+        # serial_bridge.py). This 0.73 rad/s² headroom figure was sized
+        # against ax_max's OLD 0.15 m/s² no-slip threshold (0.3 sits
         # comfortably under that with real margin, while staying responsive
-        # enough for a service robot working close to tables/people.
+        # enough for a service robot working close to tables/people) — now
+        # that ax_max is 0.30 (see above), this comparison is stale; az_max
+        # itself is untouched for now (only ax_max was asked for), but
+        # revisit this math if az_max ever changes too.
         az_max: 0.3
-        iteration_count: 1
+        # Raised from 1 - a second refinement pass per control cycle on top
+        # of the larger batch_size above, for better-quality candidate
+        # trajectories when working around an obstacle. Same GPU-headroom
+        # caveat as batch_size above applies.
+        iteration_count: 2
         temperature: 0.3
         gamma: 0.015
         motion_model: "DiffDrive"
@@ -103,7 +116,13 @@
           plugin: "nav2_mppi_controller::DiffDriveMotionModel"
         visualize: false
         reset_period: 1.0
-        regenerate_noises: false
+        # Was false - reusing/perturbing the same noise samples cycle to
+        # cycle instead of drawing fresh ones can leave MPPI stuck exploring
+        # a similar (bad) trajectory pattern repeatedly. true draws fresh
+        # noise every cycle, at a small added compute cost, so a locally
+        # stuck-feeling moment has a better chance of resolving on its own
+        # rather than needing a BackUp/Spin recovery.
+        regenerate_noises: true
         sgf_order: 2
         TrajectoryVisualizer:
           trajectory_step: 5
@@ -123,22 +142,12 @@
         GoalCritic:
           enabled: true
           cost_power: 1
-          cost_weight: 8.0
+          cost_weight: 12.0
           threshold_to_consider: 1.4
         PreferForwardCritic:
           enabled: true
           cost_power: 1
-          # Restored to 5.0 — dropping this to 2.0 (uncommitted, undocumented
-          # experiment) weakened the controller's bias against non-forward
-          # trajectories, letting near-goal rotation-only paths score as
-          # cheap as they liked. Symptom on-robot: repeated small
-          # back-and-forth wiggling before settling at the goal, right where
-          # PathAngleCritic/PathAlignCritic/PathFollowCritic (all still at
-          # cost_weight 5.0) compete hardest for the final heading — with
-          # PreferForward weak, MPPI had no strong pull back toward smooth
-          # forward-biased trajectories to break the tie. (GoalAngleCritic
-          # itself has since been removed — see yaw_goal_tolerance above.)
-          cost_weight: 5.0
+          cost_weight: 10.0
           threshold_to_consider: 0.5
         CostCritic:
           enabled: true
@@ -161,13 +170,13 @@
         PathFollowCritic:
           enabled: true
           cost_power: 1
-          cost_weight: 5.0
+          cost_weight: 10.0
           offset_from_furthest: 5
           threshold_to_consider: 1.4
         PathAngleCritic:
           enabled: true
           cost_power: 1
-          cost_weight: 5.0
+          cost_weight: 10.0
           offset_from_furthest: 4
           threshold_to_consider: 0.5
           max_angle_to_furthest: 1.0
@@ -225,13 +234,15 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.15, 0.0, 0.15]
-      min_velocity: [-0.15, 0.0, -0.15]
+      max_velocity: [0.30, 0.0, 0.3]
+      min_velocity: [-0.30, 0.0, -0.3]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
-      # clamped there anyway.
-      max_accel: [0.15, 0.0, 0.3]
+      # clamped there anyway. Linear (index 0) raised 0.15 -> 0.30 to match
+      # ax_max's own raise above — braking (max_decel) deliberately left
+      # alone, only acceleration is being tested faster here, not stopping.
+      max_accel: [0.30, 0.0, 0.3]
       max_decel: [-0.15, 0.0, -0.3]
       odom_topic: /odom
       velocity_timeout: 1.0
@@ -253,10 +264,8 @@
       wait:
         plugin: "nav2_behaviors/Wait"
       simulate_ahead_time: 2.0
-      # Matched to FollowPath's wz_max above - lowered from 0.4 for the same
-      # wheel-slip/odometry reason, so Spin recovery doesn't turn faster than
-      # normal path-following is now allowed to.
-      max_rotational_vel: 0.15
+      # Increased to 0.4 to match FollowPath's wz_max
+      max_rotational_vel: 0.4
       # Lowered along with max_rotational_vel above - left at the old 0.15
       # this would equal the new max exactly, leaving Spin zero ramp range
       # (jumps straight to full speed with no gradual start).

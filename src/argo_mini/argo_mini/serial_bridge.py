@@ -20,7 +20,7 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 IMU_ALPHA = 0.95
 
 # Velocity limits
-VMAX   = 0.15    # m/s ? cap wheel speed to match nav2 vx_max
+VMAX   = 0.30    # m/s – cap wheel speed to match nav2 vx_max
 
 
 class SerialBridge(Node):
@@ -47,14 +47,25 @@ class SerialBridge(Node):
         if self.disable_tank_turns:
             self.get_logger().info('disable_tank_turns=true')
 
-        try:
-            self.ser = serial.Serial(port, baud, timeout=0.05)
-            time.sleep(2.0)
-            self.ser.reset_input_buffer()
-            self.get_logger().info(f'Connected to ESP32 on {port}')
-        except serial.SerialException as e:
-            self.get_logger().error(f'Cannot open {port}: {e}')
-            raise
+        self.ser = None
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                self.ser = serial.Serial(port, baud, timeout=0.05)
+                time.sleep(2.0)
+                self.ser.reset_input_buffer()
+                self.get_logger().info(f'Connected to ESP32 on {port}')
+                break
+            except serial.SerialException as e:
+                if attempt < max_attempts - 1:
+                    wait_time = min(2 ** attempt, 8)  # exponential backoff: 1s, 2s, 4s, 8s, 8s
+                    self.get_logger().warn(
+                        f'Attempt {attempt + 1}/{max_attempts}: Cannot open {port}: {e} — '
+                        f'retrying in {wait_time}s (device may still be initializing)')
+                    time.sleep(wait_time)
+                else:
+                    self.get_logger().error(f'Failed to connect to ESP32 on {port} after {max_attempts} attempts: {e}')
+                    raise
 
         self.odom_pub       = self.create_publisher(Odometry, '/odom', 10)
         # Per-wheel measured speed (m/s) — /odom's twist.linear.x/angular.z
