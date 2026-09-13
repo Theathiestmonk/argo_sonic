@@ -787,7 +787,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 : "Not connected to Argo — the map can't load until the connection is back."}
             </div>
           )}
-          <div style={{ height: 200, marginTop: 12, borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ height: 480, marginTop: 12, borderRadius: 12, overflow: 'hidden' }}>
             <CameraFeed />
           </div>
         </div>

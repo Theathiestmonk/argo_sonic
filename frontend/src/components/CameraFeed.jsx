@@ -22,15 +22,30 @@ export default function CameraFeed() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [activeTopic, setActiveTopic] = useState(null)
+  const [debugInfo, setDebugInfo] = useState('')
   const subRef = useRef(null)
   const foundRef = useRef(false)
 
-  useEffect(() => {
-    if (!canvasRef.current || !ros?.connection?.isConnected) return
+  const addDebug = (msg) => {
+    console.log('[CameraFeed]', msg)
+    setDebugInfo(prev => prev ? prev + '\n' + msg : msg)
+  }
 
+  useEffect(() => {
+    if (!canvasRef.current) return
+
+    if (!ros || typeof ros.isConnected !== 'function' || !ros.isConnected()) {
+      addDebug('Not connected to ROS')
+      return
+    }
+
+    addDebug('Starting camera feed subscription...')
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) {
+      addDebug('Canvas context not available')
+      return
+    }
 
     let activeSubscription = null
 
@@ -39,7 +54,30 @@ export default function CameraFeed() {
       try {
         const { width, height, data, encoding } = msg
 
-        if (!data || !width || !height) return
+        addDebug(`Received ${isDepth ? 'depth' : 'RGB'} frame: ${width}x${height}, encoding=${encoding}`)
+
+        if (!data || !width || !height) {
+          addDebug('Invalid image data')
+          return
+        }
+
+        // Convert data to Uint8Array if needed (roslib might send as string or array)
+        let bytes
+        if (typeof data === 'string') {
+          // Base64 encoded
+          const binaryString = atob(data)
+          bytes = new Uint8Array(binaryString.length)
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i)
+          }
+        } else if (Array.isArray(data)) {
+          bytes = new Uint8Array(data)
+        } else if (data instanceof Uint8Array) {
+          bytes = data
+        } else {
+          addDebug(`Unknown data type: ${typeof data}`)
+          return
+        }
 
         const imageData = ctx.createImageData(width, height)
         const imgData = imageData.data
@@ -47,36 +85,36 @@ export default function CameraFeed() {
         // Handle different encodings
         if (encoding === 'rgb8') {
           // RGB8: 3 bytes per pixel
-          for (let i = 0; i < data.length; i += 3) {
+          for (let i = 0; i < bytes.length; i += 3) {
             const pixelIdx = (i / 3) * 4
-            imgData[pixelIdx] = data[i]         // R
-            imgData[pixelIdx + 1] = data[i + 1] // G
-            imgData[pixelIdx + 2] = data[i + 2] // B
+            imgData[pixelIdx] = bytes[i]         // R
+            imgData[pixelIdx + 1] = bytes[i + 1] // G
+            imgData[pixelIdx + 2] = bytes[i + 2] // B
             imgData[pixelIdx + 3] = 255          // A
           }
         } else if (encoding === 'bgr8') {
-          // BGR8: 3 bytes per pixel (OpenCV format)
-          for (let i = 0; i < data.length; i += 3) {
+          // BGR8: 3 bytes per pixel (OpenCV format - HP60C uses this)
+          for (let i = 0; i < bytes.length; i += 3) {
             const pixelIdx = (i / 3) * 4
-            imgData[pixelIdx] = data[i + 2]     // R
-            imgData[pixelIdx + 1] = data[i + 1] // G
-            imgData[pixelIdx + 2] = data[i]     // B
+            imgData[pixelIdx] = bytes[i + 2]     // R (from B position)
+            imgData[pixelIdx + 1] = bytes[i + 1] // G
+            imgData[pixelIdx + 2] = bytes[i]     // B (from R position)
             imgData[pixelIdx + 3] = 255          // A
           }
         } else if (encoding === 'mono8' || encoding === '8UC1') {
           // Grayscale/Depth: 1 byte per pixel
-          for (let i = 0; i < data.length; i++) {
+          for (let i = 0; i < bytes.length; i++) {
             const pixelIdx = i * 4
-            imgData[pixelIdx] = data[i]         // R
-            imgData[pixelIdx + 1] = data[i]     // G
-            imgData[pixelIdx + 2] = data[i]     // B
+            imgData[pixelIdx] = bytes[i]         // R
+            imgData[pixelIdx + 1] = bytes[i]     // G
+            imgData[pixelIdx + 2] = bytes[i]     // B
             imgData[pixelIdx + 3] = 255          // A
           }
         } else if (encoding === '16UC1' || encoding === 'mono16') {
           // 16-bit depth: 2 bytes per pixel
-          for (let i = 0; i < data.length; i += 2) {
+          for (let i = 0; i < bytes.length; i += 2) {
             const pixelIdx = (i / 2) * 4
-            const depthValue = (data[i + 1] << 8) | data[i]
+            const depthValue = (bytes[i + 1] << 8) | bytes[i]
             // Scale 16-bit depth to 0-255
             const normalized = Math.min(255, Math.floor((depthValue / 65535) * 255))
             imgData[pixelIdx] = normalized
@@ -84,18 +122,25 @@ export default function CameraFeed() {
             imgData[pixelIdx + 2] = normalized
             imgData[pixelIdx + 3] = 255
           }
+        } else {
+          addDebug(`Unsupported encoding: ${encoding}`)
+          return
         }
 
         ctx.putImageData(imageData, 0, 0)
+        addDebug(`Drew frame to canvas`)
       } catch (err) {
-        console.error('Error handling raw image:', err)
+        addDebug(`Error handling image: ${err.message}`)
       }
     }
 
     // Handle compressed image
     const handleCompressedImage = (msg) => {
       try {
-        if (!msg.data || !msg.data.length) return
+        if (!msg.data || !msg.data.length) {
+          addDebug('No compressed image data')
+          return
+        }
 
         const binaryString = atob(msg.data)
         const bytes = new Uint8Array(binaryString.length)
@@ -111,11 +156,12 @@ export default function CameraFeed() {
           URL.revokeObjectURL(url)
         }
         img.onerror = () => {
+          addDebug('Failed to load compressed image')
           URL.revokeObjectURL(url)
         }
         img.src = url
       } catch (err) {
-        console.error('Error handling compressed image:', err)
+        addDebug(`Error handling compressed image: ${err.message}`)
       }
     }
 
@@ -137,6 +183,8 @@ export default function CameraFeed() {
 
       try {
         const { topic, type, format } = topicConfig
+        addDebug(`Trying topic: ${topic} (${type})`)
+
         const rosSubscriber = ros.topic(topic, type, { queue_size: 1 })
 
         let messageCount = 0
@@ -149,6 +197,7 @@ export default function CameraFeed() {
               foundRef.current = true
               setActiveTopic(`${topic.split('/').pop()}`)
               setError(null)
+              addDebug(`✓ Connected to ${topic}`)
             }
 
             setLoading(false)
@@ -160,7 +209,7 @@ export default function CameraFeed() {
               handleCompressedImage(msg)
             }
           } catch (err) {
-            // Silently ignore individual frame errors
+            addDebug(`Message handler error: ${err.message}`)
           }
         })
 
@@ -170,17 +219,19 @@ export default function CameraFeed() {
         if (index < CAMERA_TOPICS.length - 1) {
           setTimeout(() => {
             if (!foundRef.current) {
+              addDebug(`No messages on ${topic}, trying next...`)
               subscription?.unsubscribe()
               tryTopic(CAMERA_TOPICS[index + 1], index + 1)
             }
-          }, 300)
+          }, 500)
         } else if (!foundRef.current) {
           // Last topic and still not found
+          addDebug('No camera topics found - check robot connection')
           setError('No camera feed available')
           setLoading(false)
         }
       } catch (err) {
-        console.error('Error trying topic:', err)
+        addDebug(`Topic subscription error: ${err.message}`)
         // Try next topic on error
         if (index < CAMERA_TOPICS.length - 1) {
           setTimeout(() => {
@@ -205,8 +256,8 @@ export default function CameraFeed() {
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', borderRadius: 12, overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
-        width={760}
-        height={200}
+        width={1520}
+        height={960}
         style={{
           display: 'block',
           width: '100%',
@@ -228,8 +279,13 @@ export default function CameraFeed() {
           fontSize: 12,
           color: 'var(--muted)',
           zIndex: 10,
+          flexDirection: 'column',
+          gap: 8,
         }}>
-          Waiting for camera feed...
+          <div>Waiting for camera feed...</div>
+          <div style={{ fontSize: 10, color: 'var(--muted)', opacity: 0.7, maxWidth: 300, textAlign: 'center' }}>
+            {debugInfo && debugInfo.split('\n').slice(-2).join('\n')}
+          </div>
         </div>
       )}
       {error && (
