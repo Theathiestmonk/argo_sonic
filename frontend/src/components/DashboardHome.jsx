@@ -2,19 +2,26 @@ import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHand
 import { ros } from '../ros'
 import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
+import CameraFeed from './CameraFeed'
 import TeleopPad from './TeleopPad'
 import TelemetryCard from './TelemetryCard'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
 // panels. Places come from GET /waypoints/<selectedMap> (live, per-map)
-// instead of localStorage. Navigation itself is never triggered from here
-// directly — every trip is either a table action (below, backend-managed by
-// main_agent.py via POST /voice/start) or the "Go to kitchen" button
-// (backend-managed by POST /nav/goto) — this component only displays status
-// polled back from those, it never publishes a Nav2 goal itself. Same plain
-// '$'-prefixed formatting TablesPanel.jsx uses for the same reason — no
-// shared access to menu-data.js's currency/tax settings here.
+// instead of localStorage. Every TRACKED trip is either a table action
+// (below, backend-managed by companion_agent.py via POST /voice/start) or
+// the "Go to kitchen" button (backend-managed by POST /nav/goto) — this
+// component displays status polled back from those rather than publishing
+// a Nav2 goal itself. The one deliberate exception is the Live Map card's
+// "Set Goal" tool (goalMode below) — a direct /goal_pose publish via
+// onNavigate (App.jsx's sendNavGoal), same mechanism RViz's own "2D Nav
+// Goal" uses, for driving to an arbitrary point with no named waypoint —
+// untracked by navGotoStatus/voiceStatus for the same reason RViz itself
+// doesn't integrate with either, so it's gated on both being idle first
+// (see the Set Goal button below) rather than actually coordinating with
+// them. Same plain '$'-prefixed formatting TablesPanel.jsx uses for the
+// same reason — no shared access to menu-data.js's currency/tax settings here.
 const money = (n) => '$' + Number(n || 0).toFixed(2)
 
 // A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
@@ -48,9 +55,10 @@ const TABLE_ACTIONS = [
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, costmapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onAgentRunning }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
+  const [goalMode, setGoalMode]     = useState(false)   // goal-set drag mode on the same map card — see onGoalSet below
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
   // Blue goal marker on the map — set whenever a table action, "Navigate",
@@ -77,6 +85,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     stopNav: stopNav,
     estop: estop,
     setPoseMode: setPoseMode,
+    startAgent: startAgent,
+    stopAgent: stopAgent,
   }))
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
@@ -313,6 +323,37 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
 
+  // Report the agent's on/off state up to App.jsx, same pattern navReady
+  // above uses — drives the header's own Start/Stop Agent button.
+  useEffect(() => {
+    onAgentRunning?.(voiceStatus.wake_loop_running)
+  }, [voiceStatus.wake_loop_running, onAgentRunning])
+
+  // Manual on/off for the wake-word/companion-agent loop — deliberately
+  // independent of startNav/stopNav below (see backend/launcher.py's own
+  // POST /agent/start comment): it loads an LLM onto the same GPU
+  // ntfields_planner_node needs, so this is a separate choice from nav
+  // being up, not tied to it in either direction anymore.
+  const startAgent = useCallback(async () => {
+    try {
+      const r = await fetch(`${launcherUrl}/agent/start`, { method: 'POST' })
+      const d = await r.json()
+      if (d.ok) showToast('Agent started', 'ok')
+      else showToast('Could not start the agent', 'danger')
+    } catch {
+      showToast('Could not reach launcher', 'danger')
+    }
+  }, [launcherUrl, showToast])
+
+  const stopAgent = useCallback(async () => {
+    try {
+      await fetch(`${launcherUrl}/agent/stop`, { method: 'POST' })
+      showToast('Agent stopped', 'info')
+    } catch {
+      showToast('Could not reach launcher', 'danger')
+    }
+  }, [launcherUrl, showToast])
+
   // Voice transcript (GET /voice/transcript) — only polled while the panel
   // is actually open, unlike voiceStatus above which other UI state depends
   // on regardless of visibility.
@@ -528,6 +569,35 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     addActivity(name, 'Navigate')
   }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
 
+  // "Set Goal" on the Live Map card — the arbitrary-point equivalent of
+  // goToDestination() above, for driving anywhere on the map rather than
+  // only a named waypoint (like RViz's own "2D Nav Goal" tool). Goes
+  // straight over rosbridge via onNavigate (App.jsx's sendNavGoal /
+  // /goal_pose publish) rather than the backend's /nav/goto — there's no
+  // named destination for it to log/track, so it's deliberately outside
+  // navGotoStatus/voiceStatus's tracking (see this file's own top comment)
+  // and just gated on both being idle first, same busy-check reasoning as
+  // goToDestination above (don't let a manual click silently steal Nav2
+  // out from under an in-progress table trip or Sonic conversation).
+  const onGoalSet = useCallback(({ wx, wy, theta }) => {
+    if (voiceStatus.running) {
+      showToast('Sonic is busy with a table — wait for that session to finish', 'warn')
+      return
+    }
+    if (navGotoStatus.running) {
+      showToast('Argo is on a trip right now — wait for it to finish', 'warn')
+      return
+    }
+    setGoalMode(false)
+    setGoalMarker({ x: wx, y: wy })
+    const qz = Math.sin(theta / 2), qw = Math.cos(theta / 2)
+    onNavigate?.(wx, wy, qz, qw, 'Heading to the selected point…', () => {
+      setGoalMarker(null)
+      showToast('Arrived', 'ok')
+    })
+    addActivity(`(${wx.toFixed(1)}, ${wy.toFixed(1)})`, 'Navigate')
+  }, [voiceStatus, navGotoStatus, onNavigate, showToast, addActivity])
+
   // Cancels whichever table's order-processing session is currently
   // running and frees that table's lock. Only one voice session runs at a
   // time system-wide, so /voice/stop always targets the right one — no
@@ -646,28 +716,56 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               Live Map
             </div>
             {navState === 'running' && navActionReady && (
-              <button
-                onClick={() => connected && setPoseMode(v => !v)}
-                disabled={!connected}
-                title={!connected
-                  ? "Can't set pose — not connected to Argo"
-                  : (poseMode ? 'Cancel' : "Click where Argo is standing, then drag toward where it's facing")}
-                style={{
-                  padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
-                  background: poseMode ? 'rgba(255,65,65,0.12)' : 'rgba(59,240,155,0.12)',
-                  border: `1px solid ${poseMode ? 'rgba(255,65,65,0.3)' : 'rgba(59,240,155,0.3)'}`,
-                  color: poseMode ? 'var(--danger)' : 'var(--ok)',
-                  cursor: connected ? 'pointer' : 'not-allowed',
-                  opacity: connected ? 1 : 0.5,
-                }}
-              >
-                {poseMode ? '✕ Cancel' : '📍 Set Pose'}
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => connected && setGoalMode(v => {
+                    const next = !v
+                    if (next) setPoseMode(false)   // mutually exclusive — same canvas drag mechanic
+                    return next
+                  })}
+                  disabled={!connected}
+                  title={!connected
+                    ? "Can't set a goal — not connected to Argo"
+                    : (goalMode ? 'Cancel' : "Click where Argo should go, drag to face a direction on arrival")}
+                  style={{
+                    padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
+                    background: goalMode ? 'rgba(255,65,65,0.12)' : 'rgba(127,168,232,0.12)',
+                    border: `1px solid ${goalMode ? 'rgba(255,65,65,0.3)' : 'rgba(127,168,232,0.3)'}`,
+                    color: goalMode ? 'var(--danger)' : '#7fa8e8',
+                    cursor: connected ? 'pointer' : 'not-allowed',
+                    opacity: connected ? 1 : 0.5,
+                  }}
+                >
+                  {goalMode ? '✕ Cancel' : '🎯 Set Goal'}
+                </button>
+                <button
+                  onClick={() => connected && setPoseMode(v => {
+                    const next = !v
+                    if (next) setGoalMode(false)   // mutually exclusive — same canvas drag mechanic
+                    return next
+                  })}
+                  disabled={!connected}
+                  title={!connected
+                    ? "Can't set pose — not connected to Argo"
+                    : (poseMode ? 'Cancel' : "Click where Argo is standing, then drag toward where it's facing")}
+                  style={{
+                    padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
+                    background: poseMode ? 'rgba(255,65,65,0.12)' : 'rgba(59,240,155,0.12)',
+                    border: `1px solid ${poseMode ? 'rgba(255,65,65,0.3)' : 'rgba(59,240,155,0.3)'}`,
+                    color: poseMode ? 'var(--danger)' : 'var(--ok)',
+                    cursor: connected ? 'pointer' : 'not-allowed',
+                    opacity: connected ? 1 : 0.5,
+                  }}
+                >
+                  {poseMode ? '✕ Cancel' : '📍 Set Pose'}
+                </button>
+              </div>
             )}
           </div>
           <div style={{ height: 260, borderRadius: 12, overflow: 'hidden' }}>
             <MapCanvas
               mapData={mapData}
+              costmapData={costmapData}
               robotPose={robotPose}
               goalPose={goalMarker}
               plannedPath={plannedPath}
@@ -678,6 +776,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 setPoseMode(false)
                 showToast?.('Pose set', 'ok')
               }}
+              goalSetMode={goalMode}
+              onGoalSet={onGoalSet}
             />
           </div>
           {!mapData && (
@@ -687,6 +787,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 : "Not connected to Argo — the map can't load until the connection is back."}
             </div>
           )}
+          <div style={{ height: 200, marginTop: 12, borderRadius: 12, overflow: 'hidden' }}>
+            <CameraFeed />
+          </div>
         </div>
 
       </aside>
