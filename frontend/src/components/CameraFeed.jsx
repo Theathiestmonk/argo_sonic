@@ -3,17 +3,18 @@ import { ros } from '../ros'
 
 // Camera topics to try - ordered by priority
 const CAMERA_TOPICS = [
-  // RGB/Color cameras
-  { topic: '/camera/image_raw/compressed', type: 'sensor_msgs/CompressedImage', format: 'rgb' },
-  { topic: '/usb_cam/image_raw/compressed', type: 'sensor_msgs/CompressedImage', format: 'rgb' },
-  { topic: '/rgb/image_raw/compressed', type: 'sensor_msgs/CompressedImage', format: 'rgb' },
-  { topic: '/oak/rgb/preview/image_raw', type: 'sensor_msgs/CompressedImage', format: 'rgb' },
-  { topic: '/ascamera_hp60c/camera_publisher/rgb0/image', type: 'sensor_msgs/CompressedImage', format: 'rgb' },
+  // HP60C RGB/Color camera (raw Image format)
+  { topic: '/ascamera_hp60c/camera_publisher/rgb0/image', type: 'sensor_msgs/Image', format: 'rgb' },
 
-  // Depth visualizations
+  // Compressed RGB cameras (fallback)
+  { topic: '/camera/image_raw/compressed', type: 'sensor_msgs/CompressedImage', format: 'rgb_compressed' },
+  { topic: '/usb_cam/image_raw/compressed', type: 'sensor_msgs/CompressedImage', format: 'rgb_compressed' },
+  { topic: '/rgb/image_raw/compressed', type: 'sensor_msgs/CompressedImage', format: 'rgb_compressed' },
+
+  // Depth cameras
+  { topic: '/ascamera_hp60c/camera_publisher/depth0/image_raw', type: 'sensor_msgs/Image', format: 'depth' },
   { topic: '/depth_filtered', type: 'sensor_msgs/Image', format: 'depth' },
   { topic: '/camera/depth/image', type: 'sensor_msgs/Image', format: 'depth' },
-  { topic: '/ascamera_hp60c/camera_publisher/depth0/image', type: 'sensor_msgs/Image', format: 'depth' },
 ]
 
 export default function CameraFeed() {
@@ -33,12 +34,69 @@ export default function CameraFeed() {
 
     let activeSubscription = null
 
-    // Handle RGB compressed image
+    // Handle raw RGB/grayscale Image message
+    const handleRawImage = (msg, isDepth = false) => {
+      try {
+        const { width, height, data, encoding } = msg
+
+        if (!data || !width || !height) return
+
+        const imageData = ctx.createImageData(width, height)
+        const imgData = imageData.data
+
+        // Handle different encodings
+        if (encoding === 'rgb8') {
+          // RGB8: 3 bytes per pixel
+          for (let i = 0; i < data.length; i += 3) {
+            const pixelIdx = (i / 3) * 4
+            imgData[pixelIdx] = data[i]         // R
+            imgData[pixelIdx + 1] = data[i + 1] // G
+            imgData[pixelIdx + 2] = data[i + 2] // B
+            imgData[pixelIdx + 3] = 255          // A
+          }
+        } else if (encoding === 'bgr8') {
+          // BGR8: 3 bytes per pixel (OpenCV format)
+          for (let i = 0; i < data.length; i += 3) {
+            const pixelIdx = (i / 3) * 4
+            imgData[pixelIdx] = data[i + 2]     // R
+            imgData[pixelIdx + 1] = data[i + 1] // G
+            imgData[pixelIdx + 2] = data[i]     // B
+            imgData[pixelIdx + 3] = 255          // A
+          }
+        } else if (encoding === 'mono8' || encoding === '8UC1') {
+          // Grayscale/Depth: 1 byte per pixel
+          for (let i = 0; i < data.length; i++) {
+            const pixelIdx = i * 4
+            imgData[pixelIdx] = data[i]         // R
+            imgData[pixelIdx + 1] = data[i]     // G
+            imgData[pixelIdx + 2] = data[i]     // B
+            imgData[pixelIdx + 3] = 255          // A
+          }
+        } else if (encoding === '16UC1' || encoding === 'mono16') {
+          // 16-bit depth: 2 bytes per pixel
+          for (let i = 0; i < data.length; i += 2) {
+            const pixelIdx = (i / 2) * 4
+            const depthValue = (data[i + 1] << 8) | data[i]
+            // Scale 16-bit depth to 0-255
+            const normalized = Math.min(255, Math.floor((depthValue / 65535) * 255))
+            imgData[pixelIdx] = normalized
+            imgData[pixelIdx + 1] = normalized
+            imgData[pixelIdx + 2] = normalized
+            imgData[pixelIdx + 3] = 255
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0)
+      } catch (err) {
+        console.error('Error handling raw image:', err)
+      }
+    }
+
+    // Handle compressed image
     const handleCompressedImage = (msg) => {
       try {
         if (!msg.data || !msg.data.length) return
 
-        // Decode base64 image data
         const binaryString = atob(msg.data)
         const bytes = new Uint8Array(binaryString.length)
         for (let i = 0; i < binaryString.length; i++) {
@@ -47,7 +105,6 @@ export default function CameraFeed() {
         const blob = new Blob([bytes], { type: msg.format || 'image/jpeg' })
         const url = URL.createObjectURL(blob)
 
-        // Draw image on canvas
         const img = new Image()
         img.onload = () => {
           drawImage(ctx, img, canvas)
@@ -58,38 +115,7 @@ export default function CameraFeed() {
         }
         img.src = url
       } catch (err) {
-        // Silently ignore individual frame errors
-      }
-    }
-
-    // Handle depth image (grayscale)
-    const handleDepthImage = (msg) => {
-      try {
-        if (!msg.data || !msg.step) return
-
-        const width = msg.width
-        const height = msg.height
-        const imgData = ctx.createImageData(width, height)
-        const data = imgData.data
-
-        // Convert depth data to grayscale visualization
-        for (let i = 0; i < msg.data.length; i += 2) {
-          // Depth is 16-bit, so read 2 bytes at a time
-          const depthValue = (msg.data[i + 1] << 8) | msg.data[i]
-
-          // Scale depth to 0-255 (assuming depth range 0-3000mm)
-          const normalized = Math.min(255, Math.floor((depthValue / 3000) * 255))
-
-          const pixelIndex = (i / 2) * 4
-          data[pixelIndex] = normalized     // R
-          data[pixelIndex + 1] = normalized // G
-          data[pixelIndex + 2] = normalized // B
-          data[pixelIndex + 3] = 255        // A
-        }
-
-        ctx.putImageData(imgData, 0, 0)
-      } catch (err) {
-        // Silently ignore individual frame errors
+        console.error('Error handling compressed image:', err)
       }
     }
 
@@ -121,17 +147,17 @@ export default function CameraFeed() {
             // Mark as found on first message
             if (!foundRef.current && messageCount === 1) {
               foundRef.current = true
-              setActiveTopic(`${topic} (${format})`)
+              setActiveTopic(`${topic.split('/').pop()}`)
               setError(null)
             }
 
             setLoading(false)
 
             // Route to appropriate handler based on format
-            if (format === 'rgb') {
+            if (format === 'rgb' || format === 'depth') {
+              handleRawImage(msg, format === 'depth')
+            } else if (format === 'rgb_compressed') {
               handleCompressedImage(msg)
-            } else if (format === 'depth') {
-              handleDepthImage(msg)
             }
           } catch (err) {
             // Silently ignore individual frame errors
@@ -150,10 +176,11 @@ export default function CameraFeed() {
           }, 300)
         } else if (!foundRef.current) {
           // Last topic and still not found
-          setError('No camera feed available. Ensure camera is connected and driver is running.')
+          setError('No camera feed available')
           setLoading(false)
         }
       } catch (err) {
+        console.error('Error trying topic:', err)
         // Try next topic on error
         if (index < CAMERA_TOPICS.length - 1) {
           setTimeout(() => {
