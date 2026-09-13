@@ -31,7 +31,7 @@
 NO_CAM=false
 NO_RVIZ=false
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-MAP_BASE="$SCRIPT_DIR/src/argo_mini/maps/office_map2"
+MAP_BASE="$SCRIPT_DIR/src/argo_mini/maps/Atsn_cafe_map"
 
 for arg in "$@"; do
   [[ "$arg" == "--no-cam" ]]  && NO_CAM=true

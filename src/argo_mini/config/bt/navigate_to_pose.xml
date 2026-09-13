@@ -5,16 +5,28 @@
     <RecoveryNode number_of_retries="1000" name="NavigateRecovery">
 
       <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="3.0">
+        <!-- Raised from 3.0 - was throttling global replans to every ~333ms
+             despite NTFields (planner_server/GridBased) itself running in
+             well under 30ms per call (benchmarked directly on this Jetson,
+             see argo_sonic_nav.py history). 20.0 matches controller_server's
+             own controller_frequency below it in nav2.yaml - there's no
+             benefit replanning faster than the local MPPI loop that
+             actually consumes {path} can react to it. NTFields has no live
+             obstacle awareness of its own (trained only on the static map,
+             no costmap subscription) - this makes it recompute a fresh
+             route from the robot's ACTUAL current pose much sooner after a
+             deviation or a recovery backup/spin, not "notice" a dynamic
+             obstacle mid-corridor - that's still entirely MPPI/local-costmap's job. -->
+        <RateController hz="20.0">
           <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
         </RateController>
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
 
-      <RoundRobin name="RecoveryActions">
-        <BackUp backup_dist="0.20" backup_speed="0.30"/>
-        <Spin spin_dist="1.57"/>
-      </RoundRobin>
+      <!-- Recovery: Clear costmap and replan with reverse enabled.
+           The mppi_reverse_controller continuously enables/disables reverse based on nav state.
+           Clearing the costmap gives the planner fresh obstacle data to route around. -->
+      <ClearEntireCostmap name="ClearLocalCostmap" service_name="local_costmap/clear_entirely_local_costmap"/>
 
     </RecoveryNode>
 

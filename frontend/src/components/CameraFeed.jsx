@@ -253,16 +253,18 @@ export default function CameraFeed() {
   }, [])
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', borderRadius: 12, overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', margin: 0, padding: 0 }}>
       <canvas
         ref={canvasRef}
-        width={1520}
-        height={960}
+        width={520}
+        height={520}
         style={{
           display: 'block',
           width: '100%',
           height: '100%',
-          objectFit: 'contain',
+          objectFit: 'cover',
+          margin: 0,
+          padding: 0,
         }}
       />
       {loading && (

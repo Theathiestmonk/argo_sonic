@@ -38,9 +38,15 @@ export default function App() {
   const [navReady, setNavReady] = useState(false)
   const [navPoseSet, setNavPoseSet] = useState(false)
   const [navProgress, setNavProgress] = useState(null)   // live step-by-step message (e.g. "Starting Serial Bridge"), shown on the Start Argo button while initializing
+  // Wake-word/companion-agent loop — deliberately independent of navReady
+  // above now (see backend/launcher.py's POST /agent/start comment): the
+  // agent loads an LLM onto the same GPU ntfields_planner_node needs, so
+  // it's a separate manual on/off, not tied to Start/Stop Argo anymore.
+  const [agentRunning, setAgentRunning] = useState(false)
   const retryRef = useRef(null)
 
   const [mapData, setMapData]     = useState(null)
+  const [costmapData, setCostmapData] = useState(null)
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
   const [plannedPath, setPlannedPath] = useState([])
@@ -54,6 +60,12 @@ export default function App() {
   // this on an interval and doesn't need a re-render on every tick the way
   // the on-screen marker (robotPose state) does.
   const mapPoseRef = useRef(null)
+  // Raw /odom position (not map-frame-corrected) at the moment it was last
+  // received — used only to re-anchor the local costmap (see the
+  // /local_costmap/costmap subscription below) into map-frame coordinates,
+  // never for the on-screen robot marker itself (mapPoseRef/robotPose
+  // above are the map-frame-correct ones for that).
+  const odomPoseRef = useRef(null)
   const arrivalWatch = useRef(null) // { intervalId, timeoutId } while awaiting arrival
 
   const [toast, setToast] = useState(null)
@@ -115,14 +127,51 @@ export default function App() {
       subRefs.current.pose = t
     }
     if (!subRefs.current.odom) {
-      // Raw dead-reckoning is fine here (unlike /pose above) — only the
-      // instantaneous twist is used, never accumulated position, so drift
-      // doesn't matter.
+      // Raw dead-reckoning is fine here (unlike /pose above) for the
+      // telemetry card — only the instantaneous twist is used there, never
+      // accumulated position, so drift doesn't matter. Position IS also
+      // captured now (odomPoseRef), but only to re-anchor the local
+      // costmap subscription below into map-frame coordinates.
       const t = ros.topic('/odom', 'nav_msgs/msg/Odometry', { throttle_rate: 200 })
       t?.subscribe(msg => {
         setDriveTelemetry(d => ({ ...d, speed: msg.twist.twist.linear.x, angularVel: msg.twist.twist.angular.z }))
+        odomPoseRef.current = { x: msg.pose.pose.position.x, y: msg.pose.pose.position.y }
       })
       subRefs.current.odom = t
+    }
+    if (!subRefs.current.costmap) {
+      // Nav2's local costmap (MPPI's own obstacle view — ObstacleLayer +
+      // InflationLayer, see nav2.yaml) — a small rolling window in the
+      // ODOM frame (global_frame: odom there), not map, so it can't be
+      // drawn using its own reported origin directly the way /map is: odom
+      // and map frames slowly diverge (see /pose's own comment above on
+      // exactly this drift), so a naive origin would drift out of true
+      // alignment with the static map over time/distance. Re-anchored here
+      // instead: the costmap's world origin, minus the robot's raw odom
+      // position at that same moment, plus the robot's real map-frame
+      // position (mapPoseRef) — i.e. "this many metres from the robot,
+      // wherever the robot actually is" rather than trusting odom's own
+      // absolute coordinates. A reasonable approximation for a ~6m window
+      // (translation only, no heading-drift correction) — the amount an
+      // odom/map heading estimate typically diverges over a few metres is
+      // negligible next to what this is for (an approximate live overlay,
+      // not a safety-critical position).
+      const t = ros.topic('/local_costmap/costmap', 'nav_msgs/OccupancyGrid', { throttle_rate: 500 })
+      t?.subscribe(msg => {
+        const mapPose = mapPoseRef.current
+        const odomPose = odomPoseRef.current
+        if (!mapPose || !odomPose) return   // no fix yet on either frame — skip this one, next message tries again
+        setCostmapData({
+          width: msg.info.width, height: msg.info.height,
+          resolution: msg.info.resolution,
+          origin: {
+            x: msg.info.origin.position.x + (mapPose.x - odomPose.x),
+            y: msg.info.origin.position.y + (mapPose.y - odomPose.y),
+          },
+          data: msg.data,
+        })
+      })
+      subRefs.current.costmap = t
     }
     if (!subRefs.current.wheelSpeeds) {
       // serial_bridge.py's per-wheel measured speed — /odom's twist only
@@ -261,13 +310,16 @@ export default function App() {
     }
   }, [showToast])
 
-  // The UI equivalent of RViz's "2D Pose Estimate" tool — amcl/slam_toolbox's
-  // localization mode has no idea where the robot actually is on a saved map
-  // until told, and the robot is headless (no RViz/DISPLAY, see DEPLOYMENT.md
-  // §4) so this is otherwise a manual SSH+RViz step every time "navigate"
-  // mode restarts. Same topic, message type, and covariance RViz itself
-  // publishes, so amcl/slam_toolbox-localization behave exactly as if it
-  // came from RViz.
+  // The UI equivalent of RViz's "2D Pose Estimate" tool. There's no AMCL in
+  // this stack at all — slam_toolbox's own localization mode (see
+  // nav.launch.py) replaces both map_server AND amcl, and its scan-matcher
+  // doesn't strictly need an initial pose the way AMCL's particle filter
+  // would. This still helps convergence speed and disambiguates
+  // symmetric-looking spaces (e.g. a row of identical tables), and the
+  // robot is headless (no RViz/DISPLAY, see DEPLOYMENT.md §4) so it's
+  // otherwise a manual SSH+RViz step every time "navigate" mode restarts.
+  // Same topic, message type, and covariance RViz itself publishes, so
+  // slam_toolbox's localization behaves exactly as if it came from RViz.
   const sendInitialPose = useCallback((wx, wy, theta) => {
     const qz = Math.sin(theta / 2)
     const qw = Math.cos(theta / 2)
@@ -517,6 +569,35 @@ export default function App() {
           >
             🛑 Stop Argo
           </button>
+
+          {/* Start/Stop Sonic (companion_agent.py's wake-word loop) —
+              deliberately separate from Start/Stop Argo above: it loads an
+              LLM onto the same GPU ntfields_planner_node needs, so it's a
+              manual choice, not tied to nav being up (see
+              backend/launcher.py's POST /agent/start comment). */}
+          {!agentRunning ? (
+            <button
+              onClick={() => dashboardRef.current?.startAgent?.()}
+              style={{
+                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
+                background: 'rgba(127,168,232,0.14)', border: '1px solid rgba(127,168,232,0.4)', color: '#7fa8e8',
+                display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+              }}
+            >
+              🎙️ Start Sonic
+            </button>
+          ) : (
+            <button
+              onClick={() => dashboardRef.current?.stopAgent?.()}
+              style={{
+                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
+                background: 'rgba(59,240,155,0.12)', border: '1px solid rgba(59,240,155,0.3)', color: 'var(--ok)',
+                display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+              }}
+            >
+              ✓ Sonic On — Stop
+            </button>
+          )}
         </div>
       </header>
 
@@ -546,6 +627,7 @@ export default function App() {
             onNavigate={sendNavGoal}
             onSetInitialPose={sendInitialPose}
             mapData={mapData}
+            costmapData={costmapData}
             robotPose={robotPose}
             plannedPath={plannedPath}
             driveTelemetry={driveTelemetry}
@@ -556,6 +638,7 @@ export default function App() {
             onNavReady={setNavReady}
             onNavPoseSet={setNavPoseSet}
             onNavProgress={setNavProgress}
+            onAgentRunning={setAgentRunning}
           />
         )}
 

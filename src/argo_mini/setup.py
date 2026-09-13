@@ -52,6 +52,7 @@ setup(
             'restaurant_agent=argo_mini.restaurant_agent_node:main',
             'ntfields_planner_node=argo_mini.ntfields_planner_node:main',
             'ntfields_data_logger=argo_mini.ntfields_data_logger:main',
+            'mppi_reverse_controller=argo_mini.mppi_reverse_controller:main',
         ],
     },
 )

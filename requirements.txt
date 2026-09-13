@@ -23,3 +23,25 @@ websockets>=12.0   # Sarvam streaming TTS (sarvam_tts_stream) — optional at ru
 fastapi>=0.110,<1.0
 uvicorn[standard]>=0.29,<1.0
 pydantic>=2.5,<3.0
+
+# ── src/argo_mini/ (ROS2 package) ──────────────────────────────────────────
+# NOT installable into .venv above — these back `ros2 run argo_mini <node>`
+# console-script entry points (voice_agent, voice_agent2, restaurant_agent,
+# ntfields_planner_node), which run on the system/global Python alongside
+# rclpy, not a project venv. Install with the system pip3 instead:
+#   pip3 install -r requirements.txt   (this section only — the rest above
+#   assumes a venv and will pull in packages this system python doesn't need)
+#
+# torch — ntfields_model.py / ntfields_speed.py / ntfields_offline_train.py
+# (NTFields planner). Do NOT `pip3 install torch` for this — that pulls the
+# generic PyPI wheel with no Jetson GPU support. Use NVIDIA's Jetson-specific
+# wheel instead (already installed as of 2026-06-23: torch 2.5.0a0+872d972e41
+# .nv24.08); see NVIDIA's Jetson PyTorch install instructions for the matching
+# JetPack/CUDA version if it ever needs reinstalling.
+#
+openwakeword       # voice_agent.py (top-level import), argo_mini/stt/wake.py (lazy)
+vosk               # argo_mini/stt/wake.py, argo_mini/stt/pipeline.py (lazy imports)
+sherpa-onnx        # argo_mini/stt/recognizer.py (lazy import, streaming ASR)
+pyaudio            # voice_agent.py
+# requests, numpy, sounddevice, langgraph — already listed above; same
+# packages, needed here too for voice_agent.py / restaurant_agent_node.py

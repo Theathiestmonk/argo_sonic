@@ -8,26 +8,31 @@ Pipeline:
 Three independent sensor sources with graduated forward-speed response:
 
   Lidar (LaserScan)  – /scan_corrected
-    > LIDAR_SLOW_DIST (1.30 m) : full speed
+    > LIDAR_SLOW_DIST (0.70 m) : full speed
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
-    < LIDAR_STOP_DIST (1.00 m) : hard stop — raised to a full metre for
-      more stopping margin (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST comments
-      below for the earlier 1.00/0.70/0.40 history this builds on)
+    < LIDAR_STOP_DIST (0.40 m) : hard stop (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST
+      comments below for the full 1.30/1.00 <-> 1.00/0.70 <-> 0.70/0.40 history)
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
     > DEPTH_SLOW_DIST (0.55 m) : full speed — lowered from 0.80 m, same reasoning
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
     < DEPTH_STOP_DIST (0.25 m) : hard stop — lowered from 0.40 m, same reasoning
 
-  Ultrasonic (Range x 4)  – binary, no slow zone needed
-    FL/FR < US_FRONT_DIST (0.15 m) : hard stop forward
-    BL/BR < US_REAR_DIST  (0.40 m) : hard stop reverse
+  Ultrasonic (Range x 4)  – graduated, same ramp shape as lidar/depth above
+    > US_FRONT_SLOW_DIST (0.25 m) : full speed forward
+    US_FRONT_DIST .. US_FRONT_SLOW_DIST : forward speed scaled linearly 0→100%
+    < US_FRONT_DIST (0.10 m) : hard stop forward
+    > US_REAR_SLOW_DIST (0.25 m) : full speed reverse
+    US_REAR_DIST .. US_REAR_SLOW_DIST : reverse speed scaled linearly 0→100%
+    < US_REAR_DIST (0.10 m) : hard stop reverse — this is the ONLY sensor
+      covering the rear at all (lidar/depth are both forward-only)
 
 Gate:
-    fwd_scale = min(lidar_scale, depth_scale, us_scale)   ∈ [0.0, 1.0]
-    linear.x  = commanded_linear.x * fwd_scale            (forward only)
-    reverse   = blocked by US rear (binary)
-    angular.z = always passes through
+    fwd_scale  = min(lidar_scale, depth_scale, us_front_scale)   ∈ [0.0, 1.0]
+    rear_scale = us_rear_scale                                  ∈ [0.0, 1.0]
+    linear.x   = commanded_linear.x * fwd_scale   (if commanded forward)
+               = commanded_linear.x * rear_scale  (if commanded reverse)
+    angular.z  = always passes through
 
 All sensors stale → full pass-through (fail-open, robot never freezes).
 """
@@ -51,16 +56,9 @@ from sensor_msgs.msg import LaserScan, PointCloud2, Range
 from std_msgs.msg import Float32
 
 # ── Lidar ─────────────────────────────────────────────────────────────────────
-# Raised to 1.30/1.00 — explicitly asked for a 1m hard-stop distance for
-# more stopping margin, up from the earlier 0.70/0.40. Slow-start raised
-# along with it (not just the stop distance) to keep the ~0.3m graduated
-# deceleration corridor intact — leaving slow-start below the new stop
-# distance would collapse the ramp into an abrupt full-speed-to-dead-stop
-# cutoff right at the stop line, with no gradual slowdown beforehand. See
-# git history for the earlier 1.00/0.70 → 0.70/0.40 back-and-forth this
-# builds on.
-LIDAR_SLOW_DIST  = 1.30    # m   – begin speed reduction
-LIDAR_STOP_DIST  = 1.00    # m   – hard stop
+# Raised to 0.70/0.50 for increased safety margin.
+LIDAR_SLOW_DIST  = 0.70    # m   – begin speed reduction
+LIDAR_STOP_DIST  = 0.50    # m   – hard stop
 LIDAR_WIDTH_HALF = 0.35    # m   – half-width of danger corridor
 LIDAR_MIN_PTS    = 3       # minimum scan points to register an obstacle
 LIDAR_STALE_SECS = 1.0     # s   – treat as stale if no scan arrives
@@ -76,12 +74,18 @@ DEPTH_HEIGHT_MAX =  0.05   # opt Y – upper bound (ignore ceiling)
 DEPTH_STALE_SECS = 1.0     # s
 
 # ── Ultrasonic ────────────────────────────────────────────────────────────────
-# FRONT lowered 0.40 -> 0.15 — the front sensors' mounting angle likely picks
-# up the floor a short distance ahead as a false "obstacle," and at 0.40m
-# that was triggering hard stops with nothing actually in front of the robot.
-# REAR left at 0.40 — no evidence of the same issue back there.
-US_FRONT_DIST    = 0.15    # m   – hard stop forward
-US_REAR_DIST     = 0.40    # m   – hard stop reverse
+# Raised to 0.30 m for increased safety margin.
+US_FRONT_DIST    = 0.30    # m   – hard stop forward
+US_REAR_DIST     = 0.30    # m   – hard stop reverse
+# Added — ultrasonic used to be pure binary (full speed right up until a
+# hard stop at US_FRONT_DIST/US_REAR_DIST), the only one of the three
+# sensor sources with no graduated ramp. A 0.15m ramp above each hard-stop
+# distance — shorter than lidar/depth's ~0.30m ramps since ultrasonic's
+# whole useful range is already close-in — smooths that out the same way
+# _scale_for()/DIST_FILTER_ALPHA already do for lidar/depth, instead of a
+# sudden full-speed-to-zero snap right at the stop distance.
+US_FRONT_SLOW_DIST = 0.25  # m   – begin speed reduction forward
+US_REAR_SLOW_DIST  = 0.25  # m   – begin speed reduction reverse
 US_STALE_SECS    = 1.0     # s
 
 # ── Graduated-speed smoothing ─────────────────────────────────────────────────
@@ -202,6 +206,8 @@ class SafetyShield(Node):
         self._us_rear_blocked  = False
         self._us_dists = {'fl': math.inf, 'fr': math.inf,
                           'bl': math.inf, 'br': math.inf}
+        self._us_front_dist_smooth = math.inf   # EMA'd — drives the graduated slow-zone scale only
+        self._us_rear_dist_smooth  = math.inf
 
         self._last_lidar = 0.0
         self._last_depth = 0.0
@@ -409,13 +415,28 @@ class SafetyShield(Node):
             self._us_dists[sensor] = dist
             prev_f = self._us_front_blocked
             prev_r = self._us_rear_blocked
-            self._us_front_blocked = (
-                min(self._us_dists['fl'], self._us_dists['fr']) < US_FRONT_DIST)
-            self._us_rear_blocked = (
-                min(self._us_dists['bl'], self._us_dists['br']) < US_REAR_DIST)
+            us_front_raw = min(self._us_dists['fl'], self._us_dists['fr'])
+            us_rear_raw  = min(self._us_dists['bl'], self._us_dists['br'])
+            self._us_front_blocked = us_front_raw < US_FRONT_DIST
+            self._us_rear_blocked  = us_rear_raw  < US_REAR_DIST
             new_f = self._us_front_blocked
             new_r = self._us_rear_blocked
             d     = dict(self._us_dists)
+
+            # Same EMA pattern as lidar/depth's own *_fwd_dist_smooth above —
+            # smooths sensor noise out of the graduated slow-zone ramp only;
+            # the hard-stop booleans just above always react to the raw
+            # reading, never delayed by this.
+            if math.isinf(self._us_front_dist_smooth) or math.isinf(us_front_raw):
+                self._us_front_dist_smooth = us_front_raw
+            else:
+                self._us_front_dist_smooth = (
+                    DIST_FILTER_ALPHA * us_front_raw + (1 - DIST_FILTER_ALPHA) * self._us_front_dist_smooth)
+            if math.isinf(self._us_rear_dist_smooth) or math.isinf(us_rear_raw):
+                self._us_rear_dist_smooth = us_rear_raw
+            else:
+                self._us_rear_dist_smooth = (
+                    DIST_FILTER_ALPHA * us_rear_raw + (1 - DIST_FILTER_ALPHA) * self._us_rear_dist_smooth)
 
         if new_f and not prev_f:
             self.get_logger().warn(
@@ -446,20 +467,23 @@ class SafetyShield(Node):
             lidar_dist_smooth = self._lidar_fwd_dist_smooth if not lidar_stale else math.inf
             depth_dist        = self._depth_fwd_dist if not depth_stale else math.inf
             depth_dist_smooth = self._depth_fwd_dist_smooth if not depth_stale else math.inf
-            us_fwd_blocked = not us_stale and self._us_front_blocked
-            us_rear_blocked = not us_stale and self._us_rear_blocked
+            us_front_dist        = min(self._us_dists['fl'], self._us_dists['fr']) if not us_stale else math.inf
+            us_front_dist_smooth = self._us_front_dist_smooth if not us_stale else math.inf
+            us_rear_dist         = min(self._us_dists['bl'], self._us_dists['br']) if not us_stale else math.inf
+            us_rear_dist_smooth  = self._us_rear_dist_smooth if not us_stale else math.inf
 
         fwd_scale = min(
             _scale_for(lidar_dist, lidar_dist_smooth, LIDAR_STOP_DIST, LIDAR_SLOW_DIST),
             _scale_for(depth_dist, depth_dist_smooth, DEPTH_STOP_DIST, DEPTH_SLOW_DIST),
-            0.0 if us_fwd_blocked else 1.0,
+            _scale_for(us_front_dist, us_front_dist_smooth, US_FRONT_DIST, US_FRONT_SLOW_DIST),
         )
+        rear_scale = _scale_for(us_rear_dist, us_rear_dist_smooth, US_REAR_DIST, US_REAR_SLOW_DIST)
 
         lin = msg.linear.x
         if lin > 0.0:
             lin *= fwd_scale
-        if us_rear_blocked and lin < 0.0:
-            lin = 0.0
+        if lin < 0.0:
+            lin *= rear_scale
 
         out = Twist()
         out.linear.x  = lin

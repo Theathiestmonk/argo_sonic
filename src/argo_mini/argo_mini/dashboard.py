@@ -1,5 +1,7 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
+import tf2_ros
 from sensor_msgs.msg import BatteryState, LaserScan
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
@@ -12,7 +14,7 @@ import os
 import subprocess
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from bleak import BleakClient
-from admin_panel import handle_admin_get, handle_admin_post, is_admin_route, admin_router
+from argo_mini.admin_panel import handle_admin_get, handle_admin_post, is_admin_route, admin_router
 from std_msgs.msg import String
 
 # ==================== BMS CONFIGURATION ====================
@@ -242,7 +244,21 @@ class DashboardNode(Node):
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, '/pose', self.pose_cb, slam_qos)
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_cb, map_qos)
 
+        # Guards goal-sending below: nav2's costmaps/planner need a live
+        # map->base_link transform. Without this check, publishing a goal
+        # while localization is down (e.g. right after set_initial_pose,
+        # or if slam_toolbox never came up) makes bt_navigator fail its
+        # very first planning step and immediately fall back to a "backup"
+        # recovery, with no local costmap ever formed — confirmed exact
+        # cause of a real incident on 2026-09-11 (two initialpose calls in
+        # quick succession left slam_toolbox not publishing map->odom).
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         self.get_logger().info("Dashboard Node Started with Integrated BMS")
+
+    def is_localized(self) -> bool:
+        return self.tf_buffer.can_transform('map', 'base_link', Time())
 
     def battery_cb(self, msg):
         # Fallback if BMS is not connected
@@ -517,8 +533,20 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                         print(f"Invalid waypoint command: {raw}")
 
                 elif command == 'navigate' and dashboard_node:
-                    # New logic: Send the Waypoint Index to the Manager!
                     wp_id = int(args.get('waypoint', 0))
+
+                    if not dashboard_node.is_localized():
+                        print(f"Refusing navigate to waypoint {wp_id}: no map->base_link transform (not localized)")
+                        self._send_json(409, {
+                            "status": "rejected",
+                            "reason": "not_localized",
+                            "message": "Robot is not localized (no map->base_link transform yet). "
+                                       "Set/confirm the initial pose and wait for the laser scan to "
+                                       "align with the map before sending a goal.",
+                        })
+                        return
+
+                    # New logic: Send the Waypoint Index to the Manager!
                     msg = String()
                     msg.data = f"g {wp_id}"
                     dashboard_node.cmd_pub.publish(msg)

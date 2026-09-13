@@ -4,12 +4,24 @@ Argo Sonic – NTFields Navigation Launcher
 Usage: python3 argo_sonic_nav.py [--no-cam] [--map /path/to/map]
 """
 
-import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math, select
+import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math, select, json, yaml
 from datetime import datetime
 from pathlib import Path
 
 WHEEL_RADIUS = 0.0762
 WHEEL_BASE   = 0.41
+
+# Where the robot's last localized pose gets saved on shutdown and read
+# back on the next start — see save_last_pose()/seed_initial_pose() below.
+# /tmp, not somewhere in the repo, since a genuine reboot (not just a
+# Stop/Start Argo cycle) makes a saved pose no more trustworthy than not
+# having one — if the robot got physically moved while powered off, this
+# should NOT survive that.
+LAST_POSE_PATH = "/tmp/argo_last_pose.json"
+# A saved pose older than this is more likely to reflect the robot having
+# been moved by hand since than to still be accurate — skip seeding rather
+# than confidently feed slam_toolbox a stale guess.
+POSE_MAX_AGE_S = 3600
 
 # Repo root, derived from this file's own location — not hardcoded to
 # ~/my_project/argo_sonic, since this checkout can (and on the actual robot, does)
@@ -64,6 +76,11 @@ def row(content="", bg=BG_L, w=80):
 #  Global state
 # ──────────────────────────────────────────────────────────────────────────────
 pids       : dict = {}
+# Mutated (not reassigned) after build_env(home) runs in main(), so
+# cleanup() — a signal handler with no direct access to main()'s locals —
+# can still shell out with the correct sourced ROS environment to capture
+# the last pose. Empty until then; save_last_pose() no-ops safely on that.
+_last_env  : dict = {}
 log_lines  : list = []
 log_lock   = threading.Lock()
 ui_lock    = threading.Lock()
@@ -75,14 +92,14 @@ stop_ui    = threading.Event()
 telem      = {"lin": 0.0, "ang": 0.0, "rpm_l": 0.0, "rpm_r": 0.0}
 telem_lock = threading.Lock()
 
-TOTAL_STEPS = 15
+TOTAL_STEPS = 14
 
 STEP_NAMES = [
     "Robot State Publisher", "Camera TF Bridge",    "Serial Bridge",
     "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
-    "Pose Initializer",      "NTFields Planner",    "Controller Server",
-    "Velocity Smoother",     "Behavior Server",     "BT Navigator",
-    "Depth Camera",          "PC Restamper",        "Safety Shield",
+    "NTFields Planner",      "Controller Server",   "Velocity Smoother",
+    "Behavior Server",       "BT Navigator",        "Depth Camera",
+    "PC Restamper",          "Safety Shield",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -372,6 +389,117 @@ def wait_tf(parent, child, env, timeout=20):
     log(f"Timeout – TF {parent} -> {child} not available", "warn")
     return False
 
+def save_last_pose(env):
+    """Captures slam_toolbox's own last localized estimate — the SAME /pose
+    topic the dashboard's live map marker reads (see frontend/src/App.jsx's
+    mapPoseRef) — to LAST_POSE_PATH right before shutdown, so the NEXT
+    start can seed its scan-matcher from the robot's real last position
+    instead of assuming a fixed spot (e.g. "Kitchen") that may not be where
+    it actually is. Called first thing in cleanup(), while /pose is still
+    alive — best-effort: any failure here just means the next start won't
+    have a seed to work from, not a fatal error, since slam_toolbox's own
+    scan-matching doesn't strictly require one (see nav.launch.py's own
+    comment on this node)."""
+    if not env:
+        return   # cleanup() fired before build_env(home) ever ran (e.g. Ctrl-C during map selection) — nothing to capture yet
+    try:
+        # Try to get slam_toolbox's final localized pose from /pose
+        check = runcmd("ros2 topic list --no-daemon 2>/dev/null | grep -qx '/pose'", env, timeout=2)
+        if check.returncode == 0:
+            for attempt in range(3):
+                r = runcmd("timeout 5 ros2 topic echo /pose --once --no-daemon", env, timeout=6)
+                if r.returncode == 0 and r.stdout.strip():
+                    try:
+                        msg = yaml.safe_load(r.stdout)
+                        if not msg or "pose" not in msg:
+                            raise ValueError("Invalid message structure")
+                        pos = msg["pose"]["pose"]["position"]
+                        ori = msg["pose"]["pose"]["orientation"]
+                        with open(LAST_POSE_PATH, "w") as f:
+                            json.dump({"x": pos["x"], "y": pos["y"], "qz": ori["z"], "qw": ori["w"],
+                                       "saved_at": time.time()}, f)
+                        log(f"Saved last pose ({pos['x']:.2f}, {pos['y']:.2f}) for next start", "ok")
+                        return
+                    except (ValueError, KeyError, TypeError) as e:
+                        log(f"Pose parse error (attempt {attempt + 1}/3): {e}", "warn")
+                if attempt < 2:
+                    time.sleep(0.5)
+            log("Couldn't capture /pose topic — trying odometry fallback", "warn")
+
+        # Fallback: get last odometry position if /pose topic unavailable
+        r = runcmd("timeout 3 ros2 topic echo /odom --once --no-daemon", env, timeout=4)
+        if r.returncode == 0 and r.stdout.strip():
+            msg = yaml.safe_load(r.stdout)
+            if msg and "pose" in msg and "pose" in msg["pose"]:
+                pos = msg["pose"]["pose"]["position"]
+                ori = msg["pose"]["pose"]["orientation"]
+                with open(LAST_POSE_PATH, "w") as f:
+                    json.dump({"x": pos["x"], "y": pos["y"], "qz": ori["z"], "qw": ori["w"],
+                               "saved_at": time.time()}, f)
+                log(f"Saved last odometry pose ({pos['x']:.2f}, {pos['y']:.2f}) for next start", "ok")
+                return
+
+        log("Couldn't capture pose from /pose or /odom — robot position won't be seeded next start", "warn")
+    except Exception as e:
+        log(f"Couldn't save last pose: {e}", "warn")
+
+def seed_initial_pose(env):
+    """Publishes the pose save_last_pose() captured on the PREVIOUS
+    shutdown to /initialpose, seeding slam_toolbox's scan-matcher with the
+    robot's actual last position instead of leaving it to converge from
+    nothing. Not strictly required (nav.launch.py's own comment: this
+    node's scan-matching works fine with no initial pose at all) but helps
+    convergence speed and disambiguates symmetric-looking spaces (e.g. a
+    row of visually-identical tables). Silent no-op if there's nothing
+    saved yet (first-ever start on this map) or it's too old to trust —
+    see POSE_MAX_AGE_S. Called once, right after SLAM Toolbox itself is up
+    (its /initialpose subscriber has to actually exist before this can
+    reach it — a message published before that has no subscriber to catch
+    it and is simply lost, standard ROS 2 pub/sub, not queued for a late
+    joiner)."""
+    try:
+        if not os.path.isfile(LAST_POSE_PATH):
+            return
+        with open(LAST_POSE_PATH) as f:
+            saved = json.load(f)
+        age = time.time() - saved.get("saved_at", 0)
+        if age > POSE_MAX_AGE_S:
+            log(f"Saved pose is {age / 3600:.1f}h old — too stale to trust, skipping seed", "warn")
+            return
+
+        # Wait for /initialpose subscriber to be ready (up to 5s) before publishing
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            r = runcmd("ros2 topic info /initialpose --no-daemon 2>/dev/null | grep -q 'Subscription count'", env, timeout=2)
+            if r.returncode == 0:
+                break
+            time.sleep(0.2)
+
+        # Same covariance values RViz's own "2D Pose Estimate" publishes —
+        # see frontend/src/App.jsx's sendInitialPose, kept identical so a
+        # seeded pose behaves exactly like a manually-set one.
+        msg = (
+            '{header: {frame_id: "map"}, '
+            f'pose: {{pose: {{position: {{x: {saved["x"]}, y: {saved["y"]}, z: 0.0}}, '
+            f'orientation: {{x: 0.0, y: 0.0, z: {saved["qz"]}, w: {saved["qw"]}}}}}, '
+            'covariance: [0.25,0,0,0,0,0, 0,0.25,0,0,0,0, 0,0,0,0,0,0, '
+            '0,0,0,0,0,0, 0,0,0,0,0,0, 0,0,0,0,0,0.06853891945200942]}}'
+        )
+
+        # Retry up to 3 times with a small delay to ensure delivery
+        for attempt in range(3):
+            r = runcmd(f"ros2 topic pub -1 /initialpose geometry_msgs/msg/PoseWithCovarianceStamped "
+                       f"'{msg}' --no-daemon 2>&1", env, timeout=5)
+            if r.returncode == 0:
+                log(f"Seeded initial pose from last run ({saved['x']:.2f}, {saved['y']:.2f})", "ok")
+                return
+            if attempt < 2:
+                time.sleep(0.3)
+
+        log(f"Couldn't publish seeded initial pose after 3 attempts: {(r.stderr or r.stdout or '')[-200:]}", "warn")
+    except Exception as e:
+        log(f"Couldn't seed initial pose: {e}", "warn")
+
 def wait_nav_prerequisites(env, timeout_odom=25, timeout_scan=20, timeout_map=30, timeout_tf=45):
     """Block until odometry, scan streams, map, and TFs are strictly active.
 
@@ -530,6 +658,7 @@ def step_done(name):
 #  Cleanup
 # ──────────────────────────────────────────────────────────────────────────────
 def cleanup(sig=None, frame=None):
+    save_last_pose(_last_env)   # while /pose is still alive — before anything below gets killed
     stop_ui.set()
     report_progress("STOPPED", "Stack shut down")
     log("Shutting down – terminating all nodes...", "warn")
@@ -713,6 +842,7 @@ def main():
 
     log("Sourcing ROS2 + argo_sonic workspace...", "sys")
     env = build_env(home)
+    _last_env.update(env)   # so cleanup() (a signal handler with no access to this local) can still shell out correctly
     log("Environment ready", "ok")
 
     ws           = REPO_ROOT
@@ -730,32 +860,42 @@ def main():
     # ── 1. Robot State Publisher ───────────────────────────────────────────────
     launch("Robot State Publisher",
            "ros2 launch argo_mini robot_state_publisher.launch.py", env)
-    time.sleep(3); step_done("Robot State Publisher")
+    time.sleep(1); step_done("Robot State Publisher")
 
     # ── 2. Camera TF ──────────────────────────────────────────────────────────
     launch("Camera TF Bridge",
            ("ros2 run tf2_ros static_transform_publisher "
             "--x 0.2575 --y 0.0 --z 0.170 --roll 0.0 --pitch 0.0 --yaw 0.0 "
             "--frame-id base_link --child-frame-id ascamera_hp60c_color_0"), env)
-    time.sleep(2); step_done("Camera TF Bridge")
+    time.sleep(0.5); step_done("Camera TF Bridge")
 
     # ── 3. Serial Bridge ──────────────────────────────────────────────────────
     launch_with_telem("Serial Bridge",
            ("ros2 run argo_mini serial_bridge --ros-args "
             "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66"), env)
-    time.sleep(3); step_done("Serial Bridge")
+    time.sleep(1); step_done("Serial Bridge")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
-    launch_with_retry("RPLidar A1",
+    # settle raised 6 -> 20: the readiness check itself (`ros2 topic list
+    # --no-daemon`) is an ephemeral CLI call that must rediscover the whole
+    # ROS graph from scratch every time — measured at 1.9s near-idle and
+    # 3.3s+ under the load this stack actually runs under (Jetson, several
+    # nodes already up). At 6s that left room for maybe one real check, so
+    # an unlucky discovery-timing check could report "failed" even though
+    # the lidar itself was already scanning fine (confirmed: it connects
+    # and starts scanning in <2s every time run standalone).
+    rplidar_ok = launch_with_retry("RPLidar A1",
            ("ros2 run rplidar_ros rplidar_composition --ros-args "
             "-p serial_port:=/dev/lidar -p serial_baudrate:=115200 "
             "-p frame_id:=lidar_link -p angle_compensate:=true -p scan_mode:=Boost"),
-           env, ready_topic="/scan", attempts=3, settle=6)
+           env, ready_topic="/scan", attempts=3, settle=10)
+    if rplidar_ok is None:
+        report_progress("ERROR", "RPLidar failed to come up - no obstacle data for SLAM/safety_shield")
     step_done("RPLidar A1")
 
     # ── 5. Scan Relay ─────────────────────────────────────────────────────────
     launch("Scan Relay", "ros2 run argo_mini scan_relay", env)
-    time.sleep(2); step_done("Scan Relay")
+    time.sleep(0.5); step_done("Scan Relay")
 
     # ── 6. SLAM Toolbox (localization) ────────────────────────────────────────
     launch("SLAM Toolbox",
@@ -763,16 +903,8 @@ def main():
             f"--params-file {slam_cfg} -p map_file_name:={map_base}"), env)
     if not wait_topic("/map", env, timeout=40):
         log("SLAM map not published – check map file path", "warn")
-    time.sleep(4); step_done("SLAM Toolbox")
-
-    # ── 6.5. Pose Initializer (Auto-set kitchen pose) ────────────────────────
-    log("Initializing robot pose at kitchen...", "sys")
-    r = runcmd("ros2 run argo_mini pose_init", env, timeout=10)
-    if r.returncode == 0:
-        log("Robot pose initialized at kitchen", "ok")
-    else:
-        log("Pose initialization failed – check office_map2.json", "warn")
-    time.sleep(2); step_done("Pose Initializer")
+    time.sleep(2); step_done("SLAM Toolbox")
+    seed_initial_pose(env)   # from the last shutdown, if any — see save_last_pose() in cleanup()
 
     # Verify sensor flow & TFs before configuring downstream Nav2 servers
     wait_nav_prerequisites(env)
@@ -790,7 +922,7 @@ def main():
     launch("Controller Server",
            (f"ros2 run nav2_controller controller_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
-    time.sleep(4)
+    time.sleep(2)
     lc_node("/controller_server", env, configure_timeout=40, activate_timeout=30)
     step_done("Controller Server")
 
@@ -799,7 +931,7 @@ def main():
            (f"ros2 run nav2_velocity_smoother velocity_smoother --ros-args "
             f"--params-file {nav_cfg} "
             f"-r cmd_vel:=/cmd_vel_raw -r cmd_vel_smoothed:=/cmd_vel_smoothed"), env)
-    time.sleep(3)
+    time.sleep(1)
     lc_node("/velocity_smoother", env, configure_timeout=35, activate_timeout=25)
     step_done("Velocity Smoother")
 
@@ -807,7 +939,7 @@ def main():
     launch("Behavior Server",
            (f"ros2 run nav2_behaviors behavior_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
-    time.sleep(3)
+    time.sleep(1)
     lc_node("/behavior_server", env, configure_timeout=35, activate_timeout=25)
     step_done("Behavior Server")
 
@@ -859,6 +991,11 @@ def main():
     # ── 14. Safety Shield ─────────────────────────────────────────────────────
     launch("Safety Shield", "ros2 run argo_mini safety_shield", env)
     time.sleep(3); step_done("Safety Shield")
+
+    # ── 14.5 MPPI Reverse Controller ────────────────────────────────────────────
+    # Monitors BT Navigator and auto-enables reverse (-0.15) only during recovery attempts
+    launch("MPPI Reverse Controller", "ros2 run argo_mini mppi_reverse_controller", env)
+    time.sleep(1); step_done("MPPI Reverse Controller")
 
     # ── RViz (optional) ──────────────────────────────────────────────────────
     if not no_rviz:

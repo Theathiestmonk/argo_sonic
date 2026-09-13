@@ -10,8 +10,20 @@ slam_toolbox:
     # map_file_name is set at launch time (map:= argument or --map flag).
     # Pass the path WITHOUT the .posegraph extension.
     map_file_name: ""
-    # Start at map origin and scan-match to find actual pose automatically.
-    map_start_at_dock: true
+    # Was true — despite the old comment here ("start at map origin and
+    # scan-match to find actual pose automatically"), this actually tells
+    # slam_toolbox to assume the robot starts at the map's recorded "dock"
+    # pose specifically, a real hardcoded starting-position guess, not a
+    # neutral/automatic one (map_start_pose: [x,y,theta] is slam_toolbox's
+    # OTHER, explicit-coordinate version of the same idea — both are
+    # commented out, i.e. off, in slam_toolbox's own upstream sample
+    # config; unbiased scan-matching with no starting assumption is the
+    # real default). false restores that — matches nav.launch.py's own
+    # comment on this exact node ("no initial pose needed") and lets
+    # argo_sonic_nav.py's seed_initial_pose() (a real saved last-position,
+    # not a fixed guess — see save_last_pose() in cleanup()) be the only
+    # starting-pose hint in play, when one exists at all.
+    map_start_at_dock: false
 
     resolution:         0.05
     max_laser_range:    6.0

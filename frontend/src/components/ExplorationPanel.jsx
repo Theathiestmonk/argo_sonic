@@ -195,7 +195,9 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
       () => {
         showToast('Pose graph saved ✓  — saving map image…', 'info')
 
-        // Step 2 — Save occupancy grid (.pgm + .yaml) for Nav2 / AMCL
+        // Step 2 — Save occupancy grid (.pgm + .yaml), the standard Nav2
+        // map format (this repo uses slam_toolbox's own localization mode
+        // to read it back, not map_server+AMCL — see nav.launch.py).
         // Equivalent: ros2 run nav2_map_server map_saver_cli -f <path>
         const mapSvc = ros.service('/slam_toolbox/save_map', 'slam_toolbox/SaveMap')
         mapSvc?.callService(

@@ -15,13 +15,22 @@ function worldToCanvas(wx, wy, md, offX, offY, scale) {
 }
 
 export default function MapCanvas({
-  mapData, robotPose, goalPose, plannedPath = [], labels = [], frontiers = [], clickable = false, onMapClick,
+  mapData, costmapData, robotPose, goalPose, plannedPath = [], labels = [], frontiers = [], clickable = false, onMapClick,
   // poseEstimateMode mirrors RViz's "2D Pose Estimate" tool — click-drag
   // instead of a plain click, since a pose needs a heading too, not just a
   // position. Mutually exclusive with `clickable`'s plain-click "add table"
   // behavior (see handleClick/handleMouseDown below).
   poseEstimateMode = false, onPoseEstimate,
+  // goalSetMode mirrors RViz's OTHER click-drag tool, "2D Nav Goal" — same
+  // click-for-position-drag-for-heading mechanic as poseEstimateMode (so it
+  // shares that mode's handleMouseDown/Move/Up below), but drives the robot
+  // there instead of just telling localization where it already is. The two
+  // are mutually exclusive at the call site (DashboardHome.jsx toggles one
+  // off when the other turns on) — this component doesn't enforce that
+  // itself, just picks whichever's active for the shared drag mechanics.
+  goalSetMode = false, onGoalSet,
 }) {
+  const dragMode = poseEstimateMode || goalSetMode
   const canvasRef  = useRef(null)
   const offRef     = useRef(null)   // { img: ImageBitmap, md: mapData }
   const [drag, setDrag] = useState(null)   // { startWX, startWY, curWX, curWY } while dragging a pose estimate
@@ -210,16 +219,20 @@ export default function MapCanvas({
       ctx.restore()
     }
 
-    // Pose-estimate drag preview — a green arrow from where the click
-    // started (position) to wherever the pointer currently is (heading),
-    // same visual idea as RViz's own "2D Pose Estimate" tool.
+    // Drag preview — an arrow from where the click started (position) to
+    // wherever the pointer currently is (heading), same visual idea as
+    // RViz's own click-drag tools. Green for pose-estimate (matches that
+    // mode's own marker color elsewhere in this app), blue for goal-set
+    // (matches the goalPose marker's own blue above) so the two read as
+    // related-but-distinct tools rather than identical.
     if (drag) {
+      const color = goalSetMode ? '#7fa8e8' : '#3bf09b'
       const [sx, sy] = toC(drag.startWX, drag.startWY)
       const [cx, cy] = toC(drag.curWX, drag.curWY)
-      ctx.strokeStyle = '#3bf09b'; ctx.lineWidth = 3; ctx.lineCap = 'round'
+      ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round'
       ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(cx, cy); ctx.stroke()
       ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2)
-      ctx.fillStyle = '#3bf09b'; ctx.fill()
+      ctx.fillStyle = color; ctx.fill()
     }
 
     // Bottom-left, not bottom-right — the zoom buttons now own that corner.
@@ -234,6 +247,12 @@ export default function MapCanvas({
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click where Argo is, drag toward where it’s facing', 12, H - 10)
+    }
+    if (goalSetMode) {
+      ctx.fillStyle = 'rgba(127,168,232,0.7)'
+      ctx.font = '12px Inter,sans-serif'
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
+      ctx.fillText('Click where Argo should go, drag to face a direction on arrival', 12, H - 10)
     }
 
     ctx.restore()
@@ -261,33 +280,34 @@ export default function MapCanvas({
   }, [zoom])
 
   const handleClick = useCallback(e => {
-    if (poseEstimateMode || !clickable || !onMapClick || !offRef.current) return
+    if (dragMode || !clickable || !onMapClick || !offRef.current) return
     onMapClick(eventToWorld(e))
-  }, [clickable, onMapClick, poseEstimateMode, eventToWorld])
+  }, [clickable, onMapClick, dragMode, eventToWorld])
 
   const handleMouseDown = useCallback(e => {
-    if (!poseEstimateMode || !offRef.current) return
+    if (!dragMode || !offRef.current) return
     const { wx, wy } = eventToWorld(e)
     setDrag({ startWX: wx, startWY: wy, curWX: wx, curWY: wy })
-  }, [poseEstimateMode, eventToWorld])
+  }, [dragMode, eventToWorld])
 
   const handleMouseMove = useCallback(e => {
-    if (!poseEstimateMode || !drag || !offRef.current) return
+    if (!dragMode || !drag || !offRef.current) return
     const { wx, wy } = eventToWorld(e)
     setDrag(d => d && { ...d, curWX: wx, curWY: wy })
-  }, [poseEstimateMode, drag, eventToWorld])
+  }, [dragMode, drag, eventToWorld])
 
   const handleMouseUp = useCallback(() => {
-    if (!poseEstimateMode || !drag) return
+    if (!dragMode || !drag) return
     const { startWX, startWY, curWX, curWY } = drag
     const dx = curWX - startWX, dy = curWY - startWY
     // Too short a drag to mean anything as a heading — keep whatever
     // heading the robot already has instead of snapping it to a garbage
     // near-zero-length direction.
     const theta = Math.hypot(dx, dy) > 0.05 ? Math.atan2(dy, dx) : (robotPose?.theta ?? 0)
-    onPoseEstimate?.({ wx: startWX, wy: startWY, theta })
+    if (goalSetMode) onGoalSet?.({ wx: startWX, wy: startWY, theta })
+    else onPoseEstimate?.({ wx: startWX, wy: startWY, theta })
     setDrag(null)
-  }, [poseEstimateMode, drag, onPoseEstimate, robotPose])
+  }, [dragMode, goalSetMode, drag, onPoseEstimate, onGoalSet, robotPose])
 
   const ZOOM_MIN = 0.5, ZOOM_MAX = 4, ZOOM_STEP = 1.25
   const zoomIn  = useCallback(() => setZoom(z => Math.min(z * ZOOM_STEP, ZOOM_MAX)), [])
@@ -309,11 +329,11 @@ export default function MapCanvas({
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={() => poseEstimateMode && setDrag(null)}
+      onMouseLeave={() => dragMode && setDrag(null)}
       style={{
         width: '100%', height: '100%',
         borderRadius: 16,
-        cursor: (clickable || poseEstimateMode) ? 'crosshair' : 'default',
+        cursor: (clickable || dragMode) ? 'crosshair' : 'default',
         // Matches the map's own UNK (unexplored-area) gray above, rather
         // than a near-black that fought for contrast against it — the
         // letterboxed area around a non-square map, and anywhere the map
