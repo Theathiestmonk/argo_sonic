@@ -256,8 +256,8 @@ export default function CameraFeed() {
     <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden', margin: 0, padding: 0 }}>
       <canvas
         ref={canvasRef}
-        width={520}
-        height={520}
+        width={320}
+        height={320}
         style={{
           display: 'block',
           width: '100%',
