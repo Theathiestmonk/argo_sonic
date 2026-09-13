@@ -262,7 +262,7 @@ export default function CameraFeed() {
           display: 'block',
           width: '100%',
           height: '100%',
-          objectFit: 'cover',
+          objectFit: 'contain',
           margin: 0,
           padding: 0,
         }}
