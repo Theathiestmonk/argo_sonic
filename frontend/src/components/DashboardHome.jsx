@@ -790,8 +790,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         </div>
 
         {/* ── Camera Feed ── */}
-        <div style={{ width: 320, height: 320, borderRadius: 12, overflow: 'hidden' }}>
-          <CameraFeed />
+        <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ width: 320, height: 320, overflow: 'hidden' }}>
+            <CameraFeed />
+          </div>
         </div>
 
       </aside>
