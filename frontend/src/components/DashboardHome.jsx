@@ -687,19 +687,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
-          {[
-            { k: "Today's Revenue", v: '₹18,240', d: '+12.5% vs yesterday', pos: true },
-            { k: 'Total Orders', v: '56', d: '+8 new today' },
-          ].map(({ k, v, d, pos }) => (
-            <div key={k} className="glass-card" style={{ padding: 12 }}>
-              <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{k}</div>
-              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 5, color: 'var(--gold-bright)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
-              <div style={{ fontSize: 10.5, color: pos ? 'var(--ok)' : 'var(--muted)', marginTop: 2 }}>{d}</div>
-            </div>
-          ))}
-        </div>
-
         {/* ── Live map — always visible here (not tucked behind a modal),
             so it's obvious at a glance whether map data is actually
             arriving. Pose-setting now happens right on this same card
