@@ -448,6 +448,81 @@ correct, and it is telling us that this corridor may not be able to supply 25
 honest pairs at all. If a drive stalls with most pairs rejected, that is the
 ceiling talking, not a bug.
 
+## Getting the azimuth from map sharpness instead
+
+`ceiling_azimuth_scan` replaces the hand-eye drive for this ceiling. The
+hand-eye solve is not badly implemented — it is the wrong instrument here, for
+a structural reason:
+
+> It measures motion **pairwise**, so each pair leans on whatever landmarks were
+> in view for those two keyframes. Here that is two. With two points the rigid
+> fit is exactly determined, so its residual is near zero whether the
+> correspondence was right or wrong, and a bad pair is indistinguishable from a
+> good one until it has already poisoned the answer.
+
+Three drives gave three different azimuths, every one rejected by its own checks.
+
+The azimuth leaves a far stronger signature than pairwise motion: **if it is
+wrong, landmarks smear.** Every sighting is rotated into the map through the
+mount transform, so a wrong rotation puts repeat sightings of one fixture in a
+slightly different place each time, by an amount that grows with how far the
+robot drove between them. Get it right and they stack.
+
+So the azimuth is whichever value makes the map sharpest — a one-dimensional
+search that **every observation contributes to at once**. That is precisely the
+redundancy a sparse ceiling lacks pairwise: two lights per frame is thin, two
+lights across nine hundred frames is not.
+
+### Two traps, both hit while building it
+
+**Scoring on "observations gathered into confirmed landmarks" is wrong.** Greedy
+clustering with a running mean *chains*: each new point drags the centre a
+little, the centre reaches the next point, and under a smeared azimuth one
+cluster walks across the room swallowing everything. That makes the wrong
+azimuth look best. The first version of this scan reported an azimuth **24° from
+truth**, confidently.
+
+Fixed by **leader clustering** — a centre never moves once placed, so it cannot
+chain — and by scoring as model selection:
+
+```
+cost = sum of squared residuals + n_landmarks × gate²
+```
+
+Smear pushes up the first term, fragmentation the second. Either alone is
+gameable: raw residual goes to zero if every sighting becomes its own landmark,
+and landmark count is lowest when everything smears into one blob.
+
+**ICP must not run during the scan.** The builder refines each keyframe pose
+against the map, which would quietly absorb a wrong azimuth by nudging the pose
+to match — erasing the very signal being measured. The scan uses the raw laser
+pose only.
+
+### Measured against known truth
+
+| lights/frame | keyframes | recovered | error |
+|---|---|---|---|
+| **2** | 80 | +92.30° | **0.06°** |
+| **2** | 200 | +92.20° | **0.16°** |
+| 5 | 200 | +92.40° | 0.04° |
+
+Against hand-eye's 0.8–2.8° in simulation and outright failure live. Two lights
+and eighty keyframes is enough.
+
+The scan reports how flat the cost curve is — the share of azimuths scoring
+within 5% of the best. Above ~25% means the drive did not separate them and the
+answer is not worth installing; **translation is what makes a wrong azimuth
+visible**, so drive for coverage and revisit places rather than doing the
+straights-and-turns calibration dance.
+
+### Note on the installed +92.361°
+
+It is **not a measurement**. With no `ceiling_azimuth_deg` supplied,
+`ceiling_calibrate` falls back to `mount_azimuth_deg` (default 0.0), labelled in
+the code as `'assumed mount azimuth'`. The drive was always meant to confirm it.
+The scan cross-checks it for free: if the minimum lands near +92.361°, the guess
+was right.
+
 ## The line channel
 
 Built and validated 2026-09-16. Conduit runs and slab seams, **orientation

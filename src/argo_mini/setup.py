@@ -56,6 +56,7 @@ setup(
             'ceiling_features=argo_mini.ceiling_features:main',
             'ceiling_calibrate=argo_mini.ceiling_calibrate:main',
             'ceiling_map_builder=argo_mini.ceiling_map_builder:main',
+            'ceiling_azimuth_scan=argo_mini.ceiling_azimuth_scan:main',
         ],
     },
 )
