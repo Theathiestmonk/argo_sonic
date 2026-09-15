@@ -27,10 +27,11 @@ general 3D solver would burn Jetson compute fighting the geometry.
 |---|---|
 | `ceiling_calibrate` — mount TF from the ceiling plane | Done, run on the robot |
 | `ceiling_features` — landmark detector | Lights **validated against the live camera 2026-09-16**; line/orientation channel **added and validated** the same day |
-| `ceiling_map_builder` — azimuth + ceiling map | Done, **verified in simulation only** |
+| `ceiling_map_builder` — azimuth + ceiling map | **First real map written 2026-09-16**; hand-eye azimuth unusable here, use `ceiling_azimuth_scan` |
+| `ceiling_azimuth_scan` — azimuth from map sharpness | New 2026-09-16; recovers 0.06° on synthetic truth, blocked live by pose noise |
 | localizer publishing `map -> odom` | **Not started** |
 
-Committed on 2026-09-16 (`9b7990b` and the commit following it).
+Committed and pushed 2026-09-16 (`9b7990b` through `aea8928`).
 
 ## Measured facts about the camera
 
@@ -577,34 +578,177 @@ detector would publish, and check what comes back.
 The zero-noise case is the important one: it is what rules out a sign or
 convention error, which is the failure mode this geometry invites.
 
+## Three silent failures, and the first map
+
+The afternoon of 2026-09-16 was spent on drives that produced nothing, and all
+three causes were silent — the node reported "no lights in view" while staring
+at a lit ceiling. Most of the work went into making each one audible.
+
+### Two detectors at once
+
+Two `ceiling_features` were running, both publishing `/ceiling_features/lights`.
+The builder interleaved readings from two independently smoothed ceiling planes,
+which reads as sensor noise and is not. One of them had been left running from a
+debugging session hours earlier.
+
+`sh/start_ceiling_map.sh` now kills any existing detector before starting one,
+and cleans up **by node name** rather than by the `ros2 run` wrapper's PID —
+killing the wrapper leaves the node alive, which is how the orphan arose.
+
+### The plane fit locked onto a wall
+
+The clearest line in the whole session:
+
+```
+ceiling plane settled: 1.456 m, tilt 65.5 deg
+```
+
+against the ceiling's real 3.59 m and 23.8°. The RANSAC takes whichever plane
+owns the most pixels, and parked near a wall at startup that is the wall.
+`plane_alpha` then smoothed the wrong plane in for the rest of the run, every
+landmark was projected through it, and the incidence gate threw them all away —
+while the depth stream showed the ceiling at 3.39 m with 80% valid returns the
+entire time.
+
+A popularity contest between planes cannot know which one is the ceiling. But
+**the mount tilt is fixed in hardware**, so the ceiling normal can only arrive
+from one direction, and that is knowledge already in the URDF. `fit_plane` now
+discards hypotheses more than `max_tilt_dev_deg` from `expected_tilt_deg`
+*before* the vote. Verified on a synthetic scene matching the failure — 7000
+wall points at 1.46 m/65.5° against 3000 ceiling points at 3.59 m/23.8°, so the
+wall wins on count: ungated it returns the wall, gated it returns the ceiling.
+On the live camera the gate changes nothing when the ceiling is plainly in view.
+
+When nothing survives, the node now says the ceiling is not visible instead of
+silently holding a stale plane.
+
+### The map could not grow
+
+With the plane fixed, the first ceiling map was written — and then stalled at
+**2 landmarks over 84 keyframes** while the robot drove past plenty of fixtures.
+One condition in `insert()`:
+
+```python
+trusted = len(known) == 0 or (matched >= 2 and rms < assoc_gate)
+```
+
+Landmarks are only planted from a pose the ceiling map agrees with, and
+agreement needs two matched landmarks. This restaurant averages barely one light
+in view, so once the first landmark existed `trusted` was false forever.
+
+The reasoning is sound and worth keeping — a pose resting on the laser alone is
+the drifting thing the ceiling is meant to fix, and landmarks planted on it
+become ghosts. But it assumes the ceiling can vouch for a pose, and underneath
+is a **bootstrapping problem**: the map cannot vouch until it is dense, and
+cannot become dense while it refuses to grow.
+
+`trust_laser_pose` (`--bootstrap`) breaks the cycle, planting landmarks on the
+laser pose with `min_lights` dropped to 1. The map then inherits the laser map's
+accuracy — precisely what the ceiling was meant to improve on — so it is a first
+pass, not the finished article.
+
+### First map written
+
+```
+frame_id             map          registered_to_laser_map  True
+keyframes            84           ceiling height           3.5185 m
+mount azimuth        92.361 (parameter)
+landmarks   x=+10.447 y=-1.132  seen 11  sigma  65.3 mm
+            x=+8.430  y=-0.563  seen 36  sigma 154.4 mm
+```
+
+Correctly registered to the laser map. The sigmas are the open problem below.
+
+## The open problem: ~82 mm
+
+Landmarks stack, but loosely — 65–155 mm where the detector itself is good to
+2 mm standing still. Traced on a saved recording to a floor of **82 mm between
+consecutive sightings of one light, across a single 0.21 m keyframe step**, with
+drift on top (121 mm at 2–3 keyframes, 193 mm past 21).
+
+Ruled out, each by measurement:
+
+| suspect | evidence against |
+|---|---|
+| angular error (pitch/roll/azimuth) | residual vs landmark distance **r = +0.04**; angular error scales with it |
+| velocity-proportional timing lag | pose-shift sweep flat, minimum at zero shift |
+| odom drift alone | 82 mm appears across *one* 0.21 m step |
+| `map` frame jumps | real, ~0.15 m — scanning in `odom` improved sigma 142→124 mm, but did not remove the floor |
+
+Still open, in order of suspicion:
+
+1. **Lens distortion.** The driver publishes `d: [0,0,0,0,0]` under `plumb_bob`,
+   which for a consumer depth camera much more likely means "not reported" than
+   "none". ~13 px of uncorrected distortion is the 80 mm seen, it varies with
+   image position, and standing still a light holds one image position — which
+   is exactly why the bench measurement was clean. Needs a checkerboard
+   calibration to confirm. `~/lights` now carries `u_px`/`v_px` so the next
+   recording can test it offline.
+2. **A timing offset after all.** The sweep that cleared it used a fraction of
+   the keyframe step as its proxy, and keyframes fire on *distance*, so the
+   interval between them is not constant. The scan now records message stamps,
+   making a proper test possible.
+
+**Worth keeping in proportion:** 40 mm was a threshold chosen for clean
+calibration, not a product requirement. The laser map drifts *without bound* as
+furniture moves; a ceiling map stable at 80–150 mm may already be the better
+reference. That question is answerable only once a reasonably complete map
+exists.
+
 ## Where to resume
 
-1. ~~Run the detector on the robot.~~ **Done 2026-09-16** — see "First live run"
-   above. Lights are sane and stable; the plane fit needed rewriting.
-2. **Drive it, and compare the measured azimuth against +92.361°** (the yaw
-   currently installed). That single number validates the whole chain, and it is
-   the one thing blocking everything downstream. It needs a drive with straight
-   runs *and* turns, which is why it did not happen in the 2026-09-16 session —
-   that was a stationary bench check.
+**Next session starts here.** Run:
 
-   Do this somewhere with **3+ lights in view at once**. The corridor used on
-   2026-09-16 only ever showed 2, which is `min_lights` exactly and leaves the
-   solve no redundancy.
-3. ~~Pipe/line detection in `ceiling_features`.~~ **Done 2026-09-16** — see
-   "The line channel". Publishes `~/orientation`, measured at 0.435° sd. Not yet
-   *consumed* by anything: wiring it into the pose solve, so orientation comes
-   from the conduit rather than from two sparse points, is the obvious next win
-   and is what makes a 2-light ceiling workable.
-4. **The localizer.** It reuses the map builder's matching step almost verbatim
-   — `icp()` against the stored landmarks — then publishes `map -> odom` instead
-   of updating the map. The fusion question with AMCL/slam_toolbox (who owns
-   `map -> odom`, or whether the ceiling feeds in as a pose source) is still
-   open and is the main design decision left.
+```bash
+sh/start_argo_nav.sh --map ~/my_project/argo_sonic/src/argo_mini/maps/Atsn_cafe_map
+sh/start_ceiling_map.sh --bootstrap
+```
 
-A smaller one, if it ever matters: the detector now runs at 4.2 Hz against 6.3 Hz
-of available RGB. The remaining gap is the 2 Hz plane fit blocking in bursts. A
-callback group per stream, or moving the fit to its own thread, would close it —
-but 4 Hz is already ample for a delivery robot, so this is not worth doing until
-something shows it needs doing.
+Check the first `ceiling plane settled` line says **~3.6 m and ~23°**. If it says
+anything else, that run is dead — stop it.
 
-Committed. The line channel is published but not yet consumed by anything.
+1. **Get a complete bootstrap map.** Drive the whole restaurant; coverage matters
+   more than revisits now, since landmarks no longer need confirmation to be
+   planted. Target 8–10 landmarks. Watch how often
+   `ceiling disagrees with the laser pose ... clamping` appears: occasional is
+   the clamp working, *constant* would mean +92.361° is wrong.
+2. **Then judge the map, not the calibration.** With landmarks and sigmas in
+   hand the real question becomes answerable — does this localise better than a
+   laser map built on furniture that moves? That is the question the project
+   exists to answer, and it has never been reachable before.
+3. **Re-run with `--extend`** against the bootstrap map, now dense enough for the
+   ceiling to refine poses against. Compare the sigmas: if they tighten, the
+   premise is holding.
+4. **Chase the 82 mm** only if step 2 says the map is not good enough. Distortion
+   first — a checkerboard calibration of the RGB stream — since it is both the
+   most likely cause and the one with a standard fix.
+5. **Wire `~/orientation` into the pose solve.** Built and measured at 0.435° sd,
+   published, consumed by nothing. On a ceiling averaging one light in view,
+   taking rotation from the conduit instead of from sparse points is what makes
+   the geometry work at all.
+6. **The localizer.** Reuses the builder's `icp()` against stored landmarks, then
+   publishes `map -> odom` instead of updating the map. The fusion question with
+   AMCL/slam_toolbox — who owns `map -> odom`, or whether the ceiling feeds in as
+   a pose source — is still the main design decision left.
+
+### Lessons worth not relearning
+
+- **Every quality gate here assumed redundancy this ceiling does not have.** With
+  two landmarks a rigid fit is exactly determined, so `rms` is near zero whether
+  the correspondence is right or wrong. Gates that work on a dense ceiling are
+  blind on a sparse one.
+- **Chasing a third light was the wrong instinct.** Two points give four
+  constraints on a 3-DOF pose. The count was never the blocker; the
+  trustworthiness of the two was. Fix what the detector emits before asking for a
+  richer scene.
+- **Silent failure cost more than any bug.** A wall-locked plane, a duplicate
+  node and a map that could not grow all presented identically as "no lights in
+  view". Every check added since says what failed and what to do.
+- **Never throw away a recording.** The scan now always saves and can `--replay`;
+  the first one could not be re-analysed and a drive was wasted.
+
+A smaller one, if it ever matters: the detector runs at 4.2 Hz against 6.3 Hz of
+available RGB, the gap being the 2 Hz plane fit blocking in bursts. A callback
+group per stream would close it, but 4 Hz is ample for a delivery robot.
+
+Committed and pushed. The line channel is published but not yet consumed.
