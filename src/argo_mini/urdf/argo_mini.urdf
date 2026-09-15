@@ -539,7 +539,10 @@
   <joint name="camera_optical_joint" type="fixed">
     <parent link="camera_link"/>
     <child link="depth_camera_optical_frame"/>
-    <origin rpy="-1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+    <!-- HP60C faces UP, tilted 23.9 deg off vertical (fixed in hardware).
+         Measured from the ceiling plane by `ros2 run argo_mini ceiling_calibrate`;
+         was the forward-facing optical rpy, which did not match the mount. -->
+    <origin rpy="0.417281 -0.018276 1.611996" xyz="0 0 0"/>
   </joint>
   <gazebo reference="base_link">
     <material>Gazebo/Grey</material>

@@ -19,7 +19,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
-        ('share/' + package_name + '/maps', glob('maps/*.pgm') + glob('maps/*.yaml') + glob('maps/*.posegraph') + glob('maps/*.data')),
+        ('share/' + package_name + '/maps', glob('maps/*.pgm') + glob('maps/*.yaml') + glob('maps/*.posegraph') + glob('maps/*.data') + glob('maps/*.json')),
         ('share/' + package_name + '/waypoints', glob('waypoints/*.json')),
         ('share/' + package_name + '/config/bt', glob('config/bt/*.xml')),
         ('share/' + package_name + '/urdf', glob('urdf/*.urdf')),
@@ -53,6 +53,9 @@ setup(
             'ntfields_planner_node=argo_mini.ntfields_planner_node:main',
             'ntfields_data_logger=argo_mini.ntfields_data_logger:main',
             'mppi_reverse_controller=argo_mini.mppi_reverse_controller:main',
+            'ceiling_features=argo_mini.ceiling_features:main',
+            'ceiling_calibrate=argo_mini.ceiling_calibrate:main',
+            'ceiling_map_builder=argo_mini.ceiling_map_builder:main',
         ],
     },
 )

@@ -226,7 +226,7 @@ sleep 2
 # ── 2. Camera TF bridge ────────────────────────────────────────────────────
 report "Starting camera TF bridge..."
 ros2 run tf2_ros static_transform_publisher \
-  --x 0.2575 --y 0.0 --z 0.170 --roll 0.0 --pitch 0.0 --yaw 0.0 \
+  --x 0.2575 --y 0.0 --z 0.170 --roll 0.417281 --pitch -0.018276 --yaw 1.611996 \
   --frame-id base_link --child-frame-id ascamera_hp60c_color_0 &
 CAM_TF_PID=$!
 sleep 1
