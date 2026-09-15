@@ -602,11 +602,23 @@ class CeilingFeatures(Node):
         msg.header.frame_id = 'ceiling_plane'
         inc_ch = ChannelFloat32(name='incidence_deg')
         rng_ch = ChannelFloat32(name='range_m')
+        # The source pixel, carried through so a consumer can ask whether an
+        # error depends on *where in the image* a landmark fell. That matters
+        # because the driver publishes d = [0,0,0,0,0] — almost certainly "not
+        # reported" rather than "no distortion" — and an uncorrected lens shifts
+        # a landmark by an amount that varies across the frame. Such an error is
+        # invisible standing still, where a light stays in one place, and shows
+        # up only under motion: exactly the signature of the 82 mm of landmark
+        # movement seen across a single 0.2 m keyframe step.
+        u_ch = ChannelFloat32(name='u_px')
+        v_ch = ChannelFloat32(name='v_px')
         for m in marks:
             msg.points.append(Point32(x=m.x, y=m.y, z=0.0))
             inc_ch.values.append(m.inc)
             rng_ch.values.append(m.rng)
-        msg.channels = [inc_ch, rng_ch]
+            u_ch.values.append(float(m.u))
+            v_ch.values.append(float(m.v))
+        msg.channels = [inc_ch, rng_ch, u_ch, v_ch]
         self.pub_lights.publish(msg)
 
     def publish_debug(self, bgr, marks, lines, header):

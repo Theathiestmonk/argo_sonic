@@ -108,6 +108,7 @@ class Scan(Node):
         self.tf = Buffer()
         self.lis = TransformListener(self.tf, self)
         self.frames = []          # (pose, pts) per keyframe
+        self.extra = []           # per-message stamps and pixels, for rescans
         self.last_kf = None
         self.pose_frame = None
         self.skipped = 0
@@ -145,13 +146,27 @@ class Scan(Node):
         if len(pts) < self.min_lights:
             self.skipped += 1
             return
-        pose = self.robot_pose(rclpy.time.Time.from_msg(msg.header.stamp))
+        stamp = rclpy.time.Time.from_msg(msg.header.stamp)
+        pose = self.robot_pose(stamp)
         if pose is None:
             self.skipped += 1
             return
+        # Recorded so a rescan can test what the scan itself cannot: a timing
+        # offset needs real elapsed time (keyframes fire on distance, so the
+        # interval between them is not constant), and a lens-distortion error
+        # needs to know where in the frame each landmark fell. The first
+        # recording had neither, which left both suspects untestable without
+        # driving again.
+        ch = {c.name: list(c.values) for c in msg.channels}
+        self.extra.append({
+            't': stamp.nanoseconds * 1e-9,
+            'recv': self.get_clock().now().nanoseconds * 1e-9,
+            'u': ch.get('u_px', []), 'v': ch.get('v_px', []),
+            'inc': ch.get('incidence_deg', [])})
         if self.last_kf is not None:
             d = compose(invert(self.last_kf), pose)
             if np.hypot(d[0], d[1]) < self.kf_dist and abs(wrap(d[2])) < self.kf_rot:
+                self.extra.pop()
                 return
         self.last_kf = pose
         self.frames.append((pose, pts))
@@ -333,8 +348,10 @@ class Scan(Node):
                 json.dump({'frame_id': self.pose_frame,
                            'camera_xy': self.cam.tolist(),
                            'azimuth_deg': fbest[0],
-                           'frames': [{'pose': p.tolist(), 'pts': q.tolist()}
-                                      for p, q in self.frames]}, f)
+                           'frames': [dict(pose=p.tolist(), pts=q.tolist(),
+                                           **(self.extra[i] if i < len(self.extra)
+                                              else {}))
+                                      for i, (p, q) in enumerate(self.frames)]}, f)
             print(f'\nrecording saved to {path} — rescan offline without '
                   f'driving again')
 
