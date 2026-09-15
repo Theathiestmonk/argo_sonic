@@ -279,6 +279,11 @@ class CeilingMapBuilder(Node):
         # that wrong is not to be trusted on the one you cannot measure.
         self.declare_parameter('max_residual_mm', 25.0)
         self.declare_parameter('max_lever_error_m', 0.15)
+        # How far |t_a| may sit from what odometry and the bolted camera offset
+        # say it must be. Keyframes are ~0.20 m, landmark jitter is ~2 mm, and
+        # the URDF offset is good to a couple of cm, so honest pairs land well
+        # inside 60 mm; the bad ones measured here were 80-150 mm out.
+        self.declare_parameter('max_translation_mismatch_m', 0.06)
 
         self.declare_parameter('track_gate', 0.60)   # keyframe-to-keyframe ICP
         self.declare_parameter('assoc_gate', 0.30)   # observation -> map
@@ -303,6 +308,10 @@ class CeilingMapBuilder(Node):
         self.lever_exc = float(g('lever_excitation_rad'))
         self.max_resid_mm = float(g('max_residual_mm'))
         self.max_lever_err = float(g('max_lever_error_m'))
+        self.max_t_mismatch = float(g('max_translation_mismatch_m'))
+        self.camera_xy = np.array([float(v) for v in
+                                   self.get_parameter('camera_xy').value])
+        self.rej_translation = 0
         self.solve_at = None     # pair count at which to (re)try the solve
         self.track_gate = float(g('track_gate'))
         self.assoc_gate = float(g('assoc_gate'))
@@ -454,12 +463,36 @@ class CeilingMapBuilder(Node):
         if abs(wrap(A[2] - B[2])) > self.rot_tol:
             return
 
+        # And so is |t_a| == |(R_b - I)·t_x + t_b|, because R(psi) preserves
+        # length. That is computable from odometry alone — the camera is bolted
+        # at the URDF offset, so t_x is known to a few cm well before psi is —
+        # which makes it a gate on the input rather than a check on the output.
+        #
+        # It matters here in a way it would not on a dense ceiling. With only
+        # two landmarks in view the rigid fit is exactly determined, so `rms`
+        # is near zero whether the correspondence is right or wrong and
+        # pair_rms_max can never fire. Lights keep entering and leaving frame,
+        # so the "same" pair between keyframes is often not the same two
+        # physical lights; ICP still returns a clean-looking transform and the
+        # rotation gate passes it, because what the bad match corrupts is the
+        # translation. Measured on this ceiling, accepted pairs ran |t_a|/|t_b|
+        # from 0.40 to 1.65 where they should sit near 1.0, and it was those
+        # pairs that drove the hand-eye residual to 214 mm.
+        c, s = math.cos(B[2]), math.sin(B[2])
+        rot_minus_i = np.array([[c - 1.0, -s], [s, c - 1.0]])
+        expect = float(np.linalg.norm(rot_minus_i @ self.camera_xy + B[:2]))
+        if abs(float(np.hypot(A[0], A[1])) - expect) > self.max_t_mismatch:
+            self.rej_translation += 1
+            return
+
         self.pairs.append((A, B))
         self.excitation += abs(B[2])
         if len(self.pairs) % 5 == 0:
             self.get_logger().info(
                 f'  {len(self.pairs)}/{self.min_pairs} motion pairs '
-                f'(rotation {self.excitation:.1f} rad)')
+                f'(rotation {self.excitation:.1f} rad)'
+                + (f', {self.rej_translation} rejected on translation'
+                   if self.rej_translation else ''))
         if self.solve_at is None:
             self.solve_at = self.min_pairs
         if len(self.pairs) >= self.solve_at:

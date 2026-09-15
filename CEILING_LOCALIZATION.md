@@ -404,6 +404,50 @@ against the simulation values (accepted), and against a straight-only drive
 below 3**, so a scene too thin to solve says so instead of being inferred later
 from an empty map.
 
+### Second drive: the gates were right, and the real cause was deeper
+
+With the detector clean — exactly two real lights, no glints, no glow pool —
+the drive was rejected again, and *worse*: residual 214 mm, lever arm 0.78 m
+from the URDF. So the false landmarks had never been the whole story.
+
+Instrumenting the pairs actually fed to the solve showed it:
+
+| | measured | should be |
+|---|---|---|
+| `\|t_a\|/\|t_b\|` | **0.40 – 1.65** | ≈ 1.0 |
+| `dtheta` | ≤ 1.5° (gate 3°) | — passes everything |
+| `rms` | 15–58 mm (gate 100 mm) | — rejects nothing |
+| frames with < 2 lights | 17 in 40 s | — |
+
+The cloud and the robot were describing **different motions**, by up to 2.5×,
+and neither existing gate could see it.
+
+**Why the existing gates are blind on a sparse ceiling.** With two landmarks the
+rigid fit is exactly determined, so `rms` is near zero whether the
+correspondence is right or wrong — `pair_rms_max` can *never* fire. Lights keep
+entering and leaving frame, so the "same" pair between keyframes is often not
+the same two physical lights. ICP still returns a clean-looking transform, and
+the rotation gate passes it, because what a bad match corrupts is the
+*translation*. Those pairs are what drove the residual to 214 mm.
+
+This is worth generalising: **every quality gate in this pipeline assumed a
+redundancy that a two-light ceiling does not have.**
+
+**The gate that does work.** `X·A = B·X` forces `|t_a| = |(R_b − I)·t_x + t_b|`,
+because `R(psi)` preserves length. The right-hand side is computable from
+odometry alone — the camera is *bolted* at the URDF offset, so `t_x` is known to
+a couple of cm long before `psi` is. That makes it a gate on the **input**, not
+a check on the output, and it needs no azimuth.
+
+`max_translation_mismatch_m` (0.06) separates cleanly: honest pairs, including
+ones with a full 8° of keyframe rotation, miss by 0–29 mm; the bad pairs
+measured here miss by 88–145 mm.
+
+**But note what it implies.** Five of six measured pairs fail it. The gate is
+correct, and it is telling us that this corridor may not be able to supply 25
+honest pairs at all. If a drive stalls with most pairs rejected, that is the
+ceiling talking, not a bug.
+
 ## The line channel
 
 Built and validated 2026-09-16. Conduit runs and slab seams, **orientation
