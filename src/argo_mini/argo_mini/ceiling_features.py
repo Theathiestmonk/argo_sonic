@@ -142,6 +142,18 @@ class CeilingFeatures(Node):
         # at plane_alpha anyway, and what it tracks (floor slope under the
         # robot) changes over metres of driving, not between frames.
         self.declare_parameter('plane_rate_hz', 2.0)
+        # The mount tilt is fixed in hardware, so the ceiling's normal can only
+        # ever arrive from one direction and any plane far off it is not the
+        # ceiling. Without this the RANSAC simply takes whatever plane owns the
+        # most pixels: parked near a wall at startup it settled at 1.456 m and
+        # 65.5 deg, against the ceiling's real 3.59 m and 23.8 deg, and then
+        # plane_alpha smoothing locked that in for the whole run. Every landmark
+        # was projected through a wall, the incidence gate threw them all away,
+        # and the node reported "no lights in view" while staring at a lit
+        # ceiling. Cheap knowledge, applied early, that removes a whole class of
+        # silent failure.
+        self.declare_parameter('expected_tilt_deg', 24.0)
+        self.declare_parameter('max_tilt_dev_deg', 20.0)
         # Lines: conduit runs and slab seams. These matter because a ceiling of
         # lights is rotationally ambiguous — a regular grid maps onto itself
         # under 90 deg — and because on a sparse ceiling there may only be two
@@ -183,6 +195,8 @@ class CeilingFeatures(Node):
         self.p_minlen = int(self.get_parameter('line_min_length_px').value)
         self.p_maxgap = int(self.get_parameter('line_max_gap_px').value)
         self.p_near = float(self.get_parameter('line_near_frac').value)
+        self.p_tilt = float(self.get_parameter('expected_tilt_deg').value)
+        self.p_tilt_dev = float(self.get_parameter('max_tilt_dev_deg').value)
         # The frame is dim and low contrast and the tilt makes the near edge
         # much brighter than the far edge, so a global stretch would wash out
         # one end. Tiled equalisation keeps both usable.
@@ -197,6 +211,7 @@ class CeilingFeatures(Node):
         self.count_n = self.count_sum = 0      # 10 s window of landmark counts
         self.count_min = 10**9
         self.last_count_t = 0.0
+        self.plane_reject = 0
 
         q = QoSPresetProfiles.SENSOR_DATA.value
         self.create_subscription(
@@ -408,9 +423,20 @@ class CeilingFeatures(Node):
                         (v[ok] - cy) / fy * ds[ok],
                         ds[ok]], axis=1)
 
-        n, off = self.fit_plane(pts)
+        n, off = self.fit_plane(pts, tilt_deg=self.p_tilt,
+                                tilt_dev_deg=self.p_tilt_dev)
         if n is None:
+            # Say so. Silently holding a stale plane is how a whole drive gets
+            # spent projecting landmarks through a wall.
+            self.plane_reject += 1
+            if self.plane_reject % 20 == 1:
+                self.get_logger().warn(
+                    f'no plane within {self.p_tilt_dev:.0f} deg of the expected '
+                    f'{self.p_tilt:.0f} deg mount tilt — the ceiling is not in '
+                    f'view, or something large is blocking it',
+                    throttle_duration_sec=10.0)
             return
+        self.plane_reject = 0
         self.plane_n += 1
         if self.plane is None:
             self.plane = (n, off)
@@ -440,7 +466,8 @@ class CeilingFeatures(Node):
         return n, float(n @ c)
 
     @staticmethod
-    def fit_plane(pts, iters=120, tol=0.05, refine=3, rng=None):
+    def fit_plane(pts, iters=120, tol=0.05, refine=3, rng=None,
+                  tilt_deg=None, tilt_dev_deg=None):
         """RANSAC the dominant plane, then polish it on its own inliers.
 
         Every hypothesis is scored the same way against the same points, so the
@@ -482,6 +509,16 @@ class CeilingFeatures(Node):
         nv[flip] *= -1.0
         off[flip] *= -1.0
         cnt = (np.abs(pts @ nv.T - off) < tol).sum(axis=0)
+        # Discard hypotheses that cannot be the ceiling before the vote, not
+        # after. A wall can easily own more pixels than the ceiling — the robot
+        # only has to be parked near one — and a popularity contest between
+        # planes has no way to know which is which.
+        if tilt_deg is not None and tilt_dev_deg is not None:
+            tilt = np.degrees(np.arccos(np.clip(np.abs(nv[:, 2]), 0.0, 1.0)))
+            ok = np.abs(tilt - tilt_deg) <= tilt_dev_deg
+            if not ok.any():
+                return None, None
+            cnt = np.where(ok, cnt, -1)
         k = int(np.argmax(cnt))
         if cnt[k] < 300:
             return None, None
