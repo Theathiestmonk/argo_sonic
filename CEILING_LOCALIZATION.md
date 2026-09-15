@@ -26,11 +26,11 @@ general 3D solver would burn Jetson compute fighting the geometry.
 | Component | State |
 |---|---|
 | `ceiling_calibrate` — mount TF from the ceiling plane | Done, run on the robot |
-| `ceiling_features` — landmark detector | Lights **validated against the live camera 2026-09-16**; no pipe/line channel yet |
+| `ceiling_features` — landmark detector | Lights **validated against the live camera 2026-09-16**; line/orientation channel **added and validated** the same day |
 | `ceiling_map_builder` — azimuth + ceiling map | Done, **verified in simulation only** |
 | localizer publishing `map -> odom` | **Not started** |
 
-Nothing is committed. All of it is in the working tree.
+Committed on 2026-09-16 (`9b7990b` and the commit following it).
 
 ## Measured facts about the camera
 
@@ -157,9 +157,9 @@ hopping a grid cell.
 
 | Path | Change |
 |---|---|
-| `src/argo_mini/argo_mini/ceiling_features.py` | new — detector (lights); vectorised + refined `fit_plane`, `plane_rate_hz` |
+| `src/argo_mini/argo_mini/ceiling_features.py` | detector: lights + `~/orientation` line channel; vectorised + refined `fit_plane`, `plane_rate_hz`, `light_min_area` 500, low-count warning |
 | `src/argo_mini/argo_mini/ceiling_calibrate.py` | new — mount TF; `ceiling_azimuth_deg` param + `mount_rotation()`; `fit_plane` now delegates to the detector's |
-| `src/argo_mini/argo_mini/ceiling_map_builder.py` | new — azimuth + map |
+| `src/argo_mini/argo_mini/ceiling_map_builder.py` | new — azimuth + map; `max_residual_mm` / `max_lever_error_m` guards on the mount solve |
 | `src/argo_mini/setup.py` | 3 entry points, `maps/*.json` in data_files |
 | `src/argo_mini/urdf/argo_mini.urdf` / `.xacro` | `camera_optical_joint` rpy corrected |
 | `sh/start_*.sh` (7 files), `start_argo_nav.py` | camera TF was identity, now measured |
@@ -332,6 +332,111 @@ latched onto the **wall** at the right of frame. Lines must be gated the same
 way lights are — by incidence, and against the fitted ceiling plane — or the
 orientation estimate will follow the architecture instead of the ceiling.
 
+## First drive, and what it exposed
+
+The first real drive ran the hand-eye solve to completion and it returned a
+confident, wrong answer:
+
+```
+ceiling azimuth: +79.00 deg   (from 25 pairs, residual 90.7 mm)
+  lever arm : [+0.6362 -0.2879] m  (estimated)
+```
+
+Three things are wrong there. The azimuth is 13.4° from the installed +92.361°.
+The residual is 90.7 mm where simulation gives 4.8 mm — the solve does not fit
+its own data. And the lever arm is **physically impossible**: it puts the camera
+0.48 m from where it is bolted, which is a quantity you can check with a tape
+measure. No ceiling map was written at all, because with the mount transform
+that wrong, repeat sightings of one light never land on each other and nothing
+ever reaches `min_observations`.
+
+### The cause was the detector, not the drive
+
+The ceiling in that corridor shows **two** lights, and `light_min_area` was 60 —
+low enough that two other classes of bright thing were being published as
+landmarks:
+
+| | measured area |
+|---|---|
+| real fixtures | 1522–2757 px |
+| **glow pool** — light cast on the slab by a fixture out of frame | 317 px |
+| **glints** — specular highlights on brackets and conduit | 9–93 px |
+
+Neither is fixed to the ceiling the way a fixture is. A glow pool in particular
+*slides as the robot drives*, so it corrupts exactly the quantity the hand-eye
+solve measures. With only two real lights there is no redundancy to outvote it.
+
+`light_min_area` is now **500**, which sits 3× below the smallest real fixture
+and 1.6× above the glow pool. It is keyed to ~0.3 m fixtures; the code says so,
+and says what to do if a ceiling of genuinely small fixtures ever turns up.
+
+After the change: exactly 2 landmarks in 98/98 frames, both real, jitter
+1.8–2.3 mm, separation 2.082 m holding to **0.6 mm sd**.
+
+### Chasing a third light was the wrong instinct
+
+It is worth writing down, because the same reasoning will come back. The
+corridor cannot show three: fixtures sit ~2 m apart in a single line and the
+frame covers ~3 m of ceiling, so three span more than fits. Repositioning cannot
+fix that.
+
+But two *is* enough in principle — two points give four constraints on a 3-DOF
+2D pose. The count was never the blocker; **the trustworthiness of the two was**.
+Prefer fixing what the detector emits over asking for a richer scene.
+
+### Guards, so this fails loudly next time
+
+`ceiling_map_builder` now checks its own answer before locking it in:
+
+* `max_residual_mm` (25) — the solve's fit to its own data.
+* `max_lever_error_m` (0.15) — distance from the URDF camera offset. This is the
+  stronger test, because the camera is bolted and the true value is known. A
+  solve that gets a measurable quantity wrong is not to be trusted on the one
+  you cannot measure. Skipped when rotation was too small to observe the lever
+  arm at all, since it falls back to the URDF value anyway.
+
+On failure it refuses to lock an azimuth, says which check failed, and retries
+10 pairs later. Checked against the real numbers above (rejected on both counts),
+against the simulation values (accepted), and against a straight-only drive
+(accepted — the lever test correctly abstains).
+
+`ceiling_features` also now reports its landmark count every 10 s and **warns
+below 3**, so a scene too thin to solve says so instead of being inferred later
+from an empty map.
+
+## The line channel
+
+Built and validated 2026-09-16. Conduit runs and slab seams, **orientation
+only** — pipes are standoff-mounted, so `drop × tan(incidence)` puts them 5–16 cm
+from where they look and that error moves as the robot drives. An angle is
+unaffected by it.
+
+This matters more on a sparse ceiling than the original "a light grid is
+rotationally ambiguous" argument suggested. With only two lights in view,
+rotation is the weakest part of the pose solve — and a conduit run crosses the
+whole frame and is present in *every* frame. It is the missing constraint.
+
+Two things make it correct rather than merely convenient:
+
+* **Segments are projected onto the ceiling plane before their angle is taken.**
+  A pixel-space angle would be wrong: with a ~24° tilt, perspective gives one
+  straight conduit run different pixel angles depending on where it falls in
+  frame.
+* **Angles are averaged as doubled angles.** A line has no head or tail, so
+  orientations are mod 180°; averaging them directly would put the mean of 179°
+  and 1° at 90°, exactly wrong.
+
+Walls are rejected two ways: by incidence, and by depth — a pixel with a valid
+depth return much nearer than where its ray meets the ceiling plane has
+something solid in the way. Where depth is missing (most of the far half of the
+frame, past the 4.095 m cap) the test abstains rather than discarding good
+ceiling.
+
+Published on `~/orientation` as a `Vector3Stamped`: `x` = angle in the ceiling
+basis (rad, mod π), `y` = concentration 0–1 (how much the segments agree),
+`z` = surviving segment count. Measured live, stationary: **87.37°, sd 0.435°**,
+max deviation 1.72°, 8–16 segments a frame at 3.4 Hz.
+
 ## Verification (simulation)
 
 The map builder and the hand-eye solve have still not run against the live
@@ -366,12 +471,11 @@ convention error, which is the failure mode this geometry invites.
    Do this somewhere with **3+ lights in view at once**. The corridor used on
    2026-09-16 only ever showed 2, which is `min_lights` exactly and leaves the
    solve no redundancy.
-3. **Pipe/line detection in `ceiling_features`.** Not started, but measured as
-   viable on 2026-09-16 (0.54° orientation stability, even unlit). A regular
-   light grid is rotationally ambiguous, and pipes/slab seams are what break the
-   tie. Orientation only — never metric position (standoff mounting, see above).
-   **Gate lines against the ceiling plane**, or the walls will capture the
-   estimate; see the caveat under "Pipes look viable".
+3. ~~Pipe/line detection in `ceiling_features`.~~ **Done 2026-09-16** — see
+   "The line channel". Publishes `~/orientation`, measured at 0.435° sd. Not yet
+   *consumed* by anything: wiring it into the pose solve, so orientation comes
+   from the conduit rather than from two sparse points, is the obvious next win
+   and is what makes a 2-light ceiling workable.
 4. **The localizer.** It reuses the map builder's matching step almost verbatim
    — `icp()` against the stored landmarks — then publishes `map -> odom` instead
    of updating the map. The fusion question with AMCL/slam_toolbox (who owns
@@ -384,4 +488,4 @@ callback group per stream, or moving the fit to its own thread, would close it �
 but 4 Hz is already ample for a delivery robot, so this is not worth doing until
 something shows it needs doing.
 
-Uncommitted. Consider committing before the next session.
+Committed. The line channel is published but not yet consumed by anything.

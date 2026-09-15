@@ -263,6 +263,22 @@ class CeilingMapBuilder(Node):
         # Rotation summed over accepted pairs, below which the lever arm is
         # not believed and the URDF value is kept instead.
         self.declare_parameter('lever_excitation_rad', 1.0)
+        # Two sanity checks on the hand-eye result, because its failure mode is
+        # to return a confident wrong number rather than to fail.
+        #
+        # The residual is the solve's own fit to its own data. In simulation it
+        # lands at 4.8 mm; a live run on a ceiling showing only 2 landmarks --
+        # one of them a glow pool the detector should not have published --
+        # returned 90.7 mm and an azimuth 13 deg from the installed value.
+        #
+        # The lever arm is the stronger test, because it is the one quantity
+        # here that can be checked against a tape measure: the camera is bolted
+        # to the robot at the URDF offset and cannot be anywhere else. That same
+        # run claimed [+0.636 -0.288] m against a URDF [+0.2575 0.0000] — 0.48 m
+        # away, physically impossible. A solve that gets a measurable quantity
+        # that wrong is not to be trusted on the one you cannot measure.
+        self.declare_parameter('max_residual_mm', 25.0)
+        self.declare_parameter('max_lever_error_m', 0.15)
 
         self.declare_parameter('track_gate', 0.60)   # keyframe-to-keyframe ICP
         self.declare_parameter('assoc_gate', 0.30)   # observation -> map
@@ -285,6 +301,9 @@ class CeilingMapBuilder(Node):
         self.rot_tol = math.radians(float(g('rot_consistency_deg')))
         self.pair_rms_max = float(g('pair_rms_max'))
         self.lever_exc = float(g('lever_excitation_rad'))
+        self.max_resid_mm = float(g('max_residual_mm'))
+        self.max_lever_err = float(g('max_lever_error_m'))
+        self.solve_at = None     # pair count at which to (re)try the solve
         self.track_gate = float(g('track_gate'))
         self.assoc_gate = float(g('assoc_gate'))
         self.min_span = float(g('min_span'))
@@ -441,13 +460,44 @@ class CeilingMapBuilder(Node):
             self.get_logger().info(
                 f'  {len(self.pairs)}/{self.min_pairs} motion pairs '
                 f'(rotation {self.excitation:.1f} rad)')
-        if len(self.pairs) >= self.min_pairs:
+        if self.solve_at is None:
+            self.solve_at = self.min_pairs
+        if len(self.pairs) >= self.solve_at:
             self.lock_azimuth()
 
     def lock_azimuth(self):
         psi, t_x, resid = solve_hand_eye(self.pairs)
         urdf = np.array([float(v) for v in
                          self.get_parameter('camera_xy').value])
+
+        # Check before committing. A rejected solve keeps collecting rather
+        # than locking in a wrong mount transform, because everything after
+        # this point -- where each landmark is written, whether repeat
+        # sightings of one light land on top of each other -- is built on it.
+        resid_mm = resid * 1000.0
+        lever_err = float(np.linalg.norm(t_x - urdf))
+        bad = []
+        if resid_mm > self.max_resid_mm:
+            bad.append(f'residual {resid_mm:.1f} mm exceeds '
+                       f'{self.max_resid_mm:.0f} mm — the solve does not fit '
+                       f'its own data')
+        if (self.excitation >= self.lever_exc
+                and lever_err > self.max_lever_err):
+            bad.append(f'lever arm [{t_x[0]:+.3f} {t_x[1]:+.3f}] is '
+                       f'{lever_err:.2f} m from the URDF [{urdf[0]:+.3f} '
+                       f'{urdf[1]:+.3f}], but the camera is bolted there')
+        if bad:
+            self.solve_at = len(self.pairs) + 10
+            self.get_logger().error(
+                'rejecting the mount solve from %d pairs:\n  %s\n'
+                '  NOT locking an azimuth — retrying at %d pairs.\n'
+                '  Almost always this is the landmarks, not the driving: with '
+                'only 2-3 lights in view one bad detection has nothing to '
+                'outvote it. Check `ros2 topic echo '
+                '/ceiling_features/lights --no-arr` and the debug image.'
+                % (len(self.pairs), '\n  '.join(bad), self.solve_at))
+            return
+
         if self.excitation >= self.lever_exc:
             lever, self.lever_source = t_x, 'estimated'
         else:
