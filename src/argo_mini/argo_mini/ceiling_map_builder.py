@@ -146,6 +146,38 @@ def icp(src, dst, w, init, gate, min_span=0.5, iters=12, anneal=2.0):
     return out
 
 
+def solve_hand_eye_fixed_lever(pairs, t_x):
+    """Solve for psi alone, with the lever arm taken as known.
+
+    This is the well-conditioned half of the problem, and on a sparse ceiling it
+    is the one worth solving. `R(psi)·t_a = (R_b - I)·t_x + t_b` has a fully
+    known right-hand side once t_x is given, leaving two rows per pair linear in
+    (cos psi, sin psi) — one effective unknown, over-determined by every pair.
+
+    Letting t_x float instead costs more than it looks. Its columns are
+    `R_b - I`, whose magnitude is the per-pair rotation: on the drive that
+    prompted this, ~0.09 rad against |t_a| ~0.2 m for the angle columns. So the
+    lever arm is the weakly observed part, and least squares will happily spend
+    those two free parameters absorbing noise — which then leaks into psi, the
+    quantity actually wanted. Since the camera is bolted at a known offset,
+    handing the solver that fact removes the leak rather than adding an
+    assumption.
+    """
+    M, rhs = [], []
+    for A, B in pairs:
+        ax, ay = float(A[0]), float(A[1])
+        r = (rot(B[2]) - np.eye(2)) @ np.asarray(t_x, float) \
+            + np.asarray(B[:2], float)
+        M.append([ax, -ay]); rhs.append(float(r[0]))
+        M.append([ay, ax]);  rhs.append(float(r[1]))
+    M, rhs = np.asarray(M), np.asarray(rhs)
+    sol, *_ = np.linalg.lstsq(M, rhs, rcond=None)
+    psi = math.atan2(sol[1], sol[0])
+    unit = np.array([math.cos(psi), math.sin(psi)])
+    resid = float(np.sqrt(np.mean((M @ unit - rhs) ** 2)))
+    return psi, np.asarray(t_x, float), resid
+
+
 def solve_hand_eye(pairs):
     """Solve X·A = B·X for X = (R(psi), t_x) over 2D motion pairs.
 
@@ -284,6 +316,12 @@ class CeilingMapBuilder(Node):
         # the URDF offset is good to a couple of cm, so honest pairs land well
         # inside 60 mm; the bad ones measured here were 80-150 mm out.
         self.declare_parameter('max_translation_mismatch_m', 0.06)
+        # Let the solve estimate the lever arm instead of taking the bolted
+        # URDF value. Off by default: it is the weakly observed part of the
+        # problem and the two free parameters mostly absorb noise that then
+        # leaks into the azimuth. Worth turning on only on a dense ceiling
+        # driven with a lot of rotation, or to audit the URDF value itself.
+        self.declare_parameter('estimate_lever', False)
 
         self.declare_parameter('track_gate', 0.60)   # keyframe-to-keyframe ICP
         self.declare_parameter('assoc_gate', 0.30)   # observation -> map
@@ -309,6 +347,7 @@ class CeilingMapBuilder(Node):
         self.max_resid_mm = float(g('max_residual_mm'))
         self.max_lever_err = float(g('max_lever_error_m'))
         self.max_t_mismatch = float(g('max_translation_mismatch_m'))
+        self.estimate_lever = bool(self.get_parameter('estimate_lever').value)
         self.camera_xy = np.array([float(v) for v in
                                    self.get_parameter('camera_xy').value])
         self.rej_translation = 0
@@ -499,23 +538,50 @@ class CeilingMapBuilder(Node):
             self.lock_azimuth()
 
     def lock_azimuth(self):
-        psi, t_x, resid = solve_hand_eye(self.pairs)
         urdf = np.array([float(v) for v in
                          self.get_parameter('camera_xy').value])
+        # Both solves, always. The fixed-lever one is the answer, because it is
+        # the well-conditioned question; the free one is kept purely as a
+        # cross-check, since a lever arm that comes back far from where the
+        # camera is bolted is the clearest single sign that the pairs are bad.
+        free_psi, free_t, free_resid = solve_hand_eye(self.pairs)
+        if self.estimate_lever:
+            psi, t_x, resid = free_psi, free_t, free_resid
+        else:
+            psi, t_x, resid = solve_hand_eye_fixed_lever(self.pairs, urdf)
+            self.get_logger().info(
+                f'azimuth from the fixed-lever solve: {math.degrees(psi):+.2f} '
+                f'deg, residual {resid * 1000:.1f} mm  '
+                f'(free-lever cross-check: {math.degrees(free_psi):+.2f} deg, '
+                f'residual {free_resid * 1000:.1f} mm, lever '
+                f'[{free_t[0]:+.3f} {free_t[1]:+.3f}])')
 
         # Check before committing. A rejected solve keeps collecting rather
         # than locking in a wrong mount transform, because everything after
         # this point -- where each landmark is written, whether repeat
         # sightings of one light land on top of each other -- is built on it.
         resid_mm = resid * 1000.0
-        lever_err = float(np.linalg.norm(t_x - urdf))
+        lever_err = float(np.linalg.norm(free_t - urdf))
         bad = []
         if resid_mm > self.max_resid_mm:
             bad.append(f'residual {resid_mm:.1f} mm exceeds '
                        f'{self.max_resid_mm:.0f} mm — the solve does not fit '
                        f'its own data')
+        # The free-lever estimate is a warning, not a rejection. It is the
+        # weakly observed part of the problem — its columns scale with the
+        # per-pair rotation — so it drifts even on pairs good enough to give a
+        # sound azimuth. It is still worth hearing: the camera is bolted, so a
+        # large disagreement says the pairs are suspect even when the residual
+        # happens to look acceptable.
         if (self.excitation >= self.lever_exc
-                and lever_err > self.max_lever_err):
+                and lever_err > self.max_lever_err and not self.estimate_lever):
+            self.get_logger().warn(
+                f'free-lever cross-check is {lever_err:.2f} m from the URDF '
+                f'[{urdf[0]:+.3f} {urdf[1]:+.3f}] — the azimuth below uses the '
+                f'bolted value and may still be sound, but treat it with '
+                f'suspicion and check the landmarks')
+        elif (self.estimate_lever and self.excitation >= self.lever_exc
+              and lever_err > self.max_lever_err):
             bad.append(f'lever arm [{t_x[0]:+.3f} {t_x[1]:+.3f}] is '
                        f'{lever_err:.2f} m from the URDF [{urdf[0]:+.3f} '
                        f'{urdf[1]:+.3f}], but the camera is bolted there')
