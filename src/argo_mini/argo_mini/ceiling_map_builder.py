@@ -322,6 +322,10 @@ class CeilingMapBuilder(Node):
         # leaks into the azimuth. Worth turning on only on a dense ceiling
         # driven with a lot of rotation, or to audit the URDF value itself.
         self.declare_parameter('estimate_lever', False)
+        # Plant landmarks on the laser pose without waiting for the ceiling map
+        # to confirm it. Needed to bootstrap a map on a ceiling too sparse for
+        # the ceiling to vouch for anything — see `trusted` in insert().
+        self.declare_parameter('trust_laser_pose', False)
 
         self.declare_parameter('track_gate', 0.60)   # keyframe-to-keyframe ICP
         self.declare_parameter('assoc_gate', 0.30)   # observation -> map
@@ -348,6 +352,7 @@ class CeilingMapBuilder(Node):
         self.max_lever_err = float(g('max_lever_error_m'))
         self.max_t_mismatch = float(g('max_translation_mismatch_m'))
         self.estimate_lever = bool(self.get_parameter('estimate_lever').value)
+        self.trust_laser = bool(self.get_parameter('trust_laser_pose').value)
         self.camera_xy = np.array([float(v) for v in
                                    self.get_parameter('camera_xy').value])
         self.rej_translation = 0
@@ -675,7 +680,23 @@ class CeilingMapBuilder(Node):
         # Only extend the map from a pose the map itself agrees with. A pose
         # resting on the laser alone is exactly the drifting thing the ceiling
         # is meant to fix, and landmarks planted on it become ghosts.
-        trusted = len(known) == 0 or (matched >= 2 and rms < self.assoc_gate)
+        #
+        # That reasoning assumes the ceiling can confirm a pose, which needs two
+        # matched landmarks. This restaurant averages barely one light in view,
+        # so once the first landmark exists `trusted` is false forever and the
+        # map can never grow — measured, it stalled at 2 landmarks over 84
+        # keyframes while the robot drove past plenty of fixtures.
+        #
+        # There is a bootstrapping problem underneath: the ceiling map cannot
+        # vouch for a pose until it is dense enough, and it cannot become dense
+        # while it refuses to grow. trust_laser_pose breaks the cycle by
+        # planting landmarks on the laser pose alone. The map then inherits the
+        # laser map's accuracy, which is precisely what the ceiling was meant to
+        # improve on — so this is a first pass, not the finished article. Build
+        # once with it, then re-run with extend_existing against a map dense
+        # enough to refine against.
+        trusted = (self.trust_laser or len(known) == 0
+                   or (matched >= 2 and rms < self.assoc_gate))
         for p, wi in zip(obs, w):
             if len(known):
                 d = np.linalg.norm(known - p, axis=1)

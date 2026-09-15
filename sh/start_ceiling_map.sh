@@ -5,6 +5,9 @@
 #   sh/start_ceiling_map.sh                      # default map path
 #   sh/start_ceiling_map.sh ~/maps/my.json       # custom
 #   sh/start_ceiling_map.sh --extend             # add to an existing map
+#   sh/start_ceiling_map.sh --bootstrap          # sparse ceiling: plant
+#                                                # landmarks on the laser pose
+#                                                # without ceiling confirmation
 #
 # Run the nav stack first (sh/start_argo_nav.sh --map ...): the builder needs
 # map -> base_link from it, and the camera it starts.
@@ -16,10 +19,12 @@
 MAP_PATH="$HOME/maps/atsn_cafe.ceiling.json"
 AZIMUTH="92.361"
 EXTEND="false"
+BOOTSTRAP="false"
 
 for arg in "$@"; do
   case "$arg" in
-    --extend) EXTEND="true" ;;
+    --extend)    EXTEND="true" ;;
+    --bootstrap) BOOTSTRAP="true" ;;
     --az=*)   AZIMUTH="${arg#--az=}" ;;
     -*)       echo "[ceiling] unknown option: $arg"; exit 1 ;;
     *)        MAP_PATH="${arg/#\~/$HOME}" ;;
@@ -94,6 +99,7 @@ echo "  CEILING MAP"
 echo "  map:     $MAP_PATH"
 echo "  azimuth: $AZIMUTH deg"
 echo "  extend:  $EXTEND"
+echo "  bootstrap: $BOOTSTRAP"
 echo "========================================="
 echo "  Drive the restaurant. Revisit tables — a light needs 5 sightings"
 echo "  before it is written out. Watch for 'saved N landmarks'."
@@ -103,4 +109,6 @@ echo ""
 ros2 run argo_mini ceiling_map_builder --ros-args \
   -p map_path:="$MAP_PATH" \
   -p ceiling_azimuth_deg:="$AZIMUTH" \
-  -p extend_existing:="$EXTEND" 2>&1 | sed 's/^/[map] /'
+  -p extend_existing:="$EXTEND" \
+  -p trust_laser_pose:="$BOOTSTRAP" \
+  -p min_lights:=$([ "$BOOTSTRAP" = true ] && echo 1 || echo 2) 2>&1 | sed 's/^/[map] /'
