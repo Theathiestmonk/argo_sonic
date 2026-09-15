@@ -292,7 +292,7 @@ class Scan(Node):
               f'-p ceiling_azimuth_deg:={fbest[0]:.4f}')
         print(f'\n  then build the map with it:')
         print(f'    ros2 run argo_mini ceiling_map_builder --ros-args \\')
-        print(f'      -p map_path:=/abs/path/ceiling_map.json \\')
+        print(f'      -p map_path:=~/maps/ceiling_map.json \\')
         print(f'      -p ceiling_azimuth_deg:={fbest[0]:.4f}')
         print(f'{"="*62}')
 

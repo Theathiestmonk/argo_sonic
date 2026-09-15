@@ -34,7 +34,7 @@ the frame the waypoints live in.
 Usage:
     ros2 run argo_mini ceiling_map_builder
     ros2 run argo_mini ceiling_map_builder --ros-args \
-        -p map_path:=/abs/path/Atsn_cafe_map.ceiling.json
+        -p map_path:=~/maps/Atsn_cafe_map.ceiling.json
 
 Drive the robot around the room — mostly straight runs, with some turns, and
 revisit places — then Ctrl-C. The map is saved on the way out and every
@@ -396,6 +396,25 @@ class CeilingMapBuilder(Node):
                 f'{self.map_path} exists and will be overwritten on save; '
                 'pass -p extend_existing:=true to add to it instead')
 
+        # Prove the map can be written *before* the drive, not at the first
+        # save twenty seconds in. A path that cannot be created used to raise
+        # from the save timer, which killed the node and took the whole drive
+        # with it — and the most likely bad path is a placeholder copied out of
+        # the documentation, which is exactly what happened.
+        try:
+            d = os.path.dirname(self.map_path) or '.'
+            os.makedirs(d, exist_ok=True)
+            probe = self.map_path + '.probe'
+            with open(probe, 'w') as f:
+                f.write('')
+            os.remove(probe)
+        except OSError as e:
+            self.get_logger().error(
+                f'cannot write the map to {self.map_path}: {e}\n'
+                f'  Give map_path an absolute path in a directory you own, e.g.\n'
+                f'    -p map_path:={os.path.expanduser("~/maps/ceiling_map.json")}\n'
+                f'  Refusing to start rather than lose a drive to this later.')
+            raise SystemExit(1)
         self.get_logger().info(f'ceiling_map_builder up — map -> {self.map_path}')
         if self.X is None:
             self.get_logger().info(
@@ -741,11 +760,24 @@ class CeilingMapBuilder(Node):
                            'n': m.n,
                            'sigma_mm': round(m.sigma * 1000.0, 1)} for m in keep],
         }
-        os.makedirs(os.path.dirname(self.map_path) or '.', exist_ok=True)
-        tmp = self.map_path + '.tmp'
-        with open(tmp, 'w') as f:
-            json.dump(doc, f, indent=2)
-        os.replace(tmp, self.map_path)
+        # Never let a failed save kill the node. This runs from a timer, so an
+        # exception here propagates out of the executor and ends the run —
+        # throwing away a map that is still perfectly good in memory, over a
+        # problem that might well be transient (a full disk, an unplugged USB
+        # stick). Complain and carry on; the next save is twenty seconds away,
+        # and Ctrl-C will try once more.
+        try:
+            os.makedirs(os.path.dirname(self.map_path) or '.', exist_ok=True)
+            tmp = self.map_path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump(doc, f, indent=2)
+            os.replace(tmp, self.map_path)
+        except OSError as e:
+            self.get_logger().error(
+                f'could not save the map to {self.map_path}: {e} — '
+                f'{len(keep)} landmarks still held in memory, keep driving',
+                throttle_duration_sec=20.0)
+            return
         prov = len(self.marks) - len(keep)
         self.get_logger().info(
             f'saved {len(keep)} landmarks to {self.map_path}'

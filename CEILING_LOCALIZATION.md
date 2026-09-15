@@ -180,7 +180,7 @@ ros2 run argo_mini ceiling_calibrate
 
 # 3. azimuth + map, from a drive. Ctrl-C when done.
 ros2 run argo_mini ceiling_map_builder \
-    --ros-args -p map_path:=/abs/path/Atsn_cafe_map.ceiling.json
+    --ros-args -p map_path:=~/maps/Atsn_cafe_map.ceiling.json
 
 # 4. feed the printed azimuth back for the final mount TF
 ros2 run argo_mini ceiling_calibrate --ros-args -p ceiling_azimuth_deg:=<value>
