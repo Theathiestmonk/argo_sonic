@@ -21,13 +21,15 @@
         - nav2_pipeline_sequence_bt_node
         - nav2_recovery_node_bt_node
         - nav2_rate_controller_bt_node
-        # Recovery is a RoundRobin of "clear the local costmap" and "back up
-        # 10 cm" (see bt/navigate_to_pose.xml), so both of those node types
-        # have to be registered here: RoundRobin itself, and BackUp. Spin is
-        # still deliberately absent — the tree never references it.
+        # Recovery is "clear the local costmap and replan", nothing else, so
+        # ClearEntireCostmap is the only extra node type the tree needs.
+        # BackUp, Wait, Spin and RoundRobin are all deliberately unregistered:
+        # the tree references none of them, and BT node registration is the
+        # place that stays honest about that. If you add a node to
+        # bt/navigate_to_pose.xml, add its library here or bt_navigator
+        # fails to load the tree at ACTIVATE (not at configure), which looks
+        # like "nav came up but no goals work".
         - nav2_clear_costmap_service_bt_node
-        - nav2_round_robin_node_bt_node
-        - nav2_back_up_action_bt_node
 
   controller_server:
     ros__parameters:
@@ -316,14 +318,11 @@
       global_costmap_topic: global_costmap/costmap_raw
       footprint_topic: local_costmap/published_footprint
       cycle_frequency: 10.0
-      behavior_plugins: ["backup", "spin", "wait"]
-      backup:
-        plugin: "nav2_behaviors/BackUp"
-        # NOTE: backup_dist/backup_speed are NOT parameters of this plugin
-        # and never were — nav2_behaviors/BackUp takes both from the action
-        # goal. They are BT *input ports* (see back_up_action.hpp), so the
-        # 10 cm limit lives on the <BackUp> node in bt/navigate_to_pose.xml.
-        # The 0.5 m / 0.3 m/s that used to sit here were read by nothing.
+      # "backup" dropped: no tree references BackUp any more, so loading the
+      # plugin would only leave a /backup action server standing for nothing
+      # to call. exploration_nav2.yaml already runs behavior_plugins:
+      # ["wait"] alone for the same reason.
+      behavior_plugins: ["spin", "wait"]
       spin:
         plugin: "nav2_behaviors/Spin"
       wait:
