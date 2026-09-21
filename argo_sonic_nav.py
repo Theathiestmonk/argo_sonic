@@ -652,6 +652,19 @@ def lc_ntfields(node, env, model_path=None, attempts=2):
 def step_done(name):
     global step_idx
     step_idx += 1
+    # launch() sends every child's stdout AND stderr to DEVNULL, so a process
+    # that dies on startup says nothing anywhere — not in the TUI, not in
+    # /tmp/argo_nav_output.log — and this function would still report "Ready"
+    # and tick the progress bar. That is exactly how a step launching an
+    # executable that no longer existed ("No executable found") kept
+    # reporting Ready, and the stack came up announcing "All Systems Nominal"
+    # with that node missing. A process that has already exited by the time
+    # its own step completes has failed, so say so: "fail" is the one log
+    # level that reaches the UI through report_progress().
+    p = pids.get(name)
+    if p is not None and p.poll() is not None:
+        log(f"FAILED  >>  {name} exited on startup (rc={p.returncode})", "fail")
+        return
     log(f"Ready  >>  {name}", "ok")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -807,6 +820,19 @@ def main():
         "bt_navigator", "velocity_smoother", "scan_relay",
         "robot_state_publisher", "depth_safety_shield", "ekf_node",
         "ascamera_node", "pointcloud_restamper", "behavior_server", "safety_shield",
+        "patrol_manager",
+        # Both of these executables are gone, but a copy left running by an
+        # older launch keeps its ROS node in the graph forever — this list is
+        # the only thing that would ever reap it, and one mppi_reverse_controller
+        # survived here for a full day because the name was never listed.
+        # Deleting a node means adding it here, not just removing its launch.
+        "mppi_reverse_controller", "goal_approach_limiter",
+        # Same accumulation problem, different node: this script starts its own
+        # camera TF bridge every run but never reaped the previous one, so
+        # duplicates piled up across restarts all publishing the same static
+        # transform. start_nav_stepwise.sh's own pkill list already includes
+        # this name for the same reason.
+        "static_transform_publisher",
     ]:
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
@@ -992,10 +1018,20 @@ def main():
     launch("Safety Shield", "ros2 run argo_mini safety_shield", env)
     time.sleep(3); step_done("Safety Shield")
 
-    # ── 14.5 MPPI Reverse Controller ────────────────────────────────────────────
-    # Monitors BT Navigator and auto-enables reverse (-0.15) only during recovery attempts
-    launch("MPPI Reverse Controller", "ros2 run argo_mini mppi_reverse_controller", env)
-    time.sleep(1); step_done("MPPI Reverse Controller")
+    # ── 14.5 Patrol Manager ─────────────────────────────────────────────────────
+    # Runs the goal <-> home shuttle the dashboard's Patrol tool starts. The
+    # loop lives in this node, not in the browser, so a refreshed or closed
+    # tab cannot strand the robot mid-patrol.
+    #
+    # This slot used to launch mppi_reverse_controller, which has been deleted:
+    # it tried to enable MPPI reverse during recovery, but its trigger
+    # (last_clear_time) was only ever written by a hook nothing called, so it
+    # never fired once. Reversing during recovery is now the BT's BackUp node,
+    # through behavior_server. Nothing here noticed the executable had gone —
+    # launch() discards child output and step_done() reported "Ready" anyway,
+    # which is what the poll() check in step_done now catches.
+    launch("Patrol Manager", "ros2 run argo_mini patrol_manager", env)
+    time.sleep(1); step_done("Patrol Manager")
 
     # ── RViz (optional) ──────────────────────────────────────────────────────
     if not no_rviz:
