@@ -10,8 +10,8 @@ Three independent sensor sources with graduated forward-speed response:
   Lidar (LaserScan)  – /scan_corrected
     > LIDAR_SLOW_DIST (0.70 m) : full speed
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
-    < LIDAR_STOP_DIST (0.40 m) : hard stop (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST
-      comments below for the full 1.30/1.00 <-> 1.00/0.70 <-> 0.70/0.40 history)
+    < LIDAR_STOP_DIST (0.50 m) : hard stop (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST
+      comments below for the full 1.30/1.00 <-> 1.00/0.70 <-> 0.70/0.50 history)
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
     > DEPTH_SLOW_DIST (1.00 m) : full speed
@@ -19,13 +19,14 @@ Three independent sensor sources with graduated forward-speed response:
     < DEPTH_STOP_DIST (0.70 m) : hard stop
 
   Ultrasonic (Range x 4)  – graduated, same ramp shape as lidar/depth above
-    > US_FRONT_SLOW_DIST (0.25 m) : full speed forward
+    > US_FRONT_SLOW_DIST (0.45 m) : full speed forward
     US_FRONT_DIST .. US_FRONT_SLOW_DIST : forward speed scaled linearly 0→100%
-    < US_FRONT_DIST (0.10 m) : hard stop forward
-    > US_REAR_SLOW_DIST (0.25 m) : full speed reverse
+    < US_FRONT_DIST (0.30 m) : hard stop forward
+    > US_REAR_SLOW_DIST (0.45 m) : full speed reverse
     US_REAR_DIST .. US_REAR_SLOW_DIST : reverse speed scaled linearly 0→100%
-    < US_REAR_DIST (0.10 m) : hard stop reverse — this is the ONLY sensor
-      covering the rear at all (lidar/depth are both forward-only)
+    < US_REAR_DIST (0.30 m) : hard stop reverse — this is the ONLY sensor
+      covering the rear at all (lidar/depth are both forward-only), so it is
+      also the only thing gating the BT's BackUp recovery
 
 Gate:
     fwd_scale  = min(lidar_scale, depth_scale, us_front_scale)   ∈ [0.0, 1.0]
@@ -84,8 +85,19 @@ US_REAR_DIST     = 0.30    # m   – hard stop reverse
 # whole useful range is already close-in — smooths that out the same way
 # _scale_for()/DIST_FILTER_ALPHA already do for lidar/depth, instead of a
 # sudden full-speed-to-zero snap right at the stop distance.
-US_FRONT_SLOW_DIST = 0.25  # m   – begin speed reduction forward
-US_REAR_SLOW_DIST  = 0.25  # m   – begin speed reduction reverse
+#
+# 0.25 -> 0.45. These were written as 0.10 + 0.15 back when the hard stops
+# above were 0.10 m; the stops were later "raised to 0.30 m for increased
+# safety margin" and these were not raised with them, which left
+# SLOW < STOP. _vel_scale() needs slow > stop, so both ramps silently
+# collapsed back to the binary behaviour this block was added to remove:
+# every reading at or under 0.30 m returned 0.0 from the first branch and
+# everything above it returned 1.0, with nothing in between. Rear mattered
+# most — it's the only sensor covering that direction at all, and the BT's
+# BackUp recovery now actually reverses through it. _validate_zones() below
+# fails loudly if these ever invert again.
+US_FRONT_SLOW_DIST = 0.45  # m   – begin speed reduction forward
+US_REAR_SLOW_DIST  = 0.45  # m   – begin speed reduction reverse
 US_STALE_SECS    = 1.0     # s
 
 # ── Graduated-speed smoothing ─────────────────────────────────────────────────
@@ -126,6 +138,37 @@ SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" 
 # reported inaudible on real hardware; re-lower this if it turns out to be
 # genuinely disruptive rather than just quiet.
 ALERT_VOLUME = 0.85   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
+
+
+# Every (stop, slow) pair the gate below feeds to _vel_scale, in one place so
+# the check can't drift from the constants it's checking.
+_SPEED_ZONES = (
+    ("lidar",    LIDAR_STOP_DIST,    LIDAR_SLOW_DIST),
+    ("depth",    DEPTH_STOP_DIST,    DEPTH_SLOW_DIST),
+    ("us_front", US_FRONT_DIST,      US_FRONT_SLOW_DIST),
+    ("us_rear",  US_REAR_DIST,       US_REAR_SLOW_DIST),
+)
+
+
+def _validate_zones():
+    """A slow distance at or below its own stop distance isn't a tuning
+    choice, it's a typo that disables that sensor's ramp without disabling
+    the sensor — the graduated zone collapses to the binary stop this file
+    already went out of its way to replace, and nothing in the logs says so.
+    That happened once (see US_*_SLOW_DIST above) and went unnoticed because
+    the robot still stopped correctly; only the smooth approach was gone.
+    Raise at import rather than warn: these are module constants, so a bad
+    pair is a code change that should never reach a robot, and a shield that
+    quietly half-works is worse than one that refuses to start."""
+    bad = [f"{name}: slow={slow:.2f} must be > stop={stop:.2f}"
+           for name, stop, slow in _SPEED_ZONES if slow <= stop]
+    if bad:
+        raise ValueError(
+            "[SafetyShield] graduated speed zones are inverted — "
+            + "; ".join(bad))
+
+
+_validate_zones()
 
 
 def _vel_scale(dist: float, stop: float, slow: float) -> float:
@@ -265,8 +308,15 @@ class SafetyShield(Node):
             f"stop < {LIDAR_STOP_DIST:.2f} m | ±{LIDAR_WIDTH_HALF:.2f} m corridor\n"
             f"  depth : slow < {DEPTH_SLOW_DIST:.2f} m | "
             f"stop < {DEPTH_STOP_DIST:.2f} m | ±{DEPTH_WIDTH_HALF:.2f} m corridor\n"
-            f"  US fwd: stop < {US_FRONT_DIST:.2f} m (FL/FR)  "
-            f"rear: stop < {US_REAR_DIST:.2f} m (BL/BR)\n"
+            # Ultrasonic prints its slow distances too, same as lidar/depth
+            # above. It used not to, which is part of why the inverted
+            # SLOW/STOP pair went unnoticed for so long: the banner showed
+            # the stop distances working correctly and said nothing at all
+            # about the ramp that had silently collapsed.
+            f"  US fwd: slow < {US_FRONT_SLOW_DIST:.2f} m | "
+            f"stop < {US_FRONT_DIST:.2f} m (FL/FR)\n"
+            f"  US rear: slow < {US_REAR_SLOW_DIST:.2f} m | "
+            f"stop < {US_REAR_DIST:.2f} m (BL/BR)\n"
             f"  {INPUT_TOPIC} -> {OUTPUT_TOPIC}"
         )
 
