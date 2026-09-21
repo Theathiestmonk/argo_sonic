@@ -777,7 +777,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  {patrolActive ? '■ Stop Patrol' : patrolMode ? '✕ Cancel' : '🔁 Patrol'}
+                  {patrolActive ? 'Stop Patrol' : patrolMode ? 'Cancel' : 'Patrol'}
                 </button>
                 <button
                   onClick={() => connected && !patrolActive && setGoalMode(v => {
@@ -800,7 +800,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     opacity: (connected && !patrolActive) ? 1 : 0.5,
                   }}
                 >
-                  {goalMode ? '✕ Cancel' : '🎯 Set Goal'}
+                  {goalMode ? 'Cancel' : 'Set Goal'}
                 </button>
                 <button
                   onClick={() => connected && setPoseMode(v => {
@@ -821,7 +821,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  {poseMode ? '✕ Cancel' : '📍 Set Pose'}
+                  {poseMode ? 'Cancel' : 'Set Pose'}
                 </button>
               </div>
             )}
