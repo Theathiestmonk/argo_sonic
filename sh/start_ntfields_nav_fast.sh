@@ -81,7 +81,7 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
             robot_state_publisher depth_safety_shield safety_shield \
             ascamera_node pointcloud_restamper behavior_server \
             _ros2_daemon \
-            goal_approach_limiter patrol_manager; do
+            patrol_manager; do
   pkill -9 -f "$proc" 2>/dev/null || true
 done
 sleep 2
@@ -311,17 +311,6 @@ ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file "$NAV_CONFIG" \
 BT_PID=$!
 sleep 3
 if lc_node /bt_navigator 30 20; then
-
-# ── Goal approach limiter (/plan → /speed_limit) ────────────────────────
-# Halves controller_server's vx_max/wz_max over the last metre of the plan
-# so the robot eases into the goal instead of braking hard at
-# xy_goal_tolerance. Started after bt_navigator only so its log line lands
-# after the stack is up — it has no ordering dependency of its own, it just
-# subscribes /plan and publishes /speed_limit.
-echo "[argo] Starting goal_approach_limiter..."
-ros2 run argo_mini goal_approach_limiter &
-LIMITER_PID=$!
-sleep 2
   report_ready "Nav2 fully activated - ready for goals"
 else
   report_error "bt_navigator failed to activate - /navigate_to_pose is not available"

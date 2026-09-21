@@ -297,19 +297,6 @@ def generate_launch_description():
             }],
         ),
 
-        # Goal approach limiter  /plan ? /speed_limit ????????????????????????
-        # Halves controller_server's vx_max/wz_max over the last metre of the
-        # plan so the robot eases into the goal instead of braking hard at
-        # xy_goal_tolerance. MPPI has no approach-velocity parameter of its
-        # own; see goal_approach_limiter.py for why this goes through the
-        # /speed_limit interface rather than scaling /cmd_vel downstream.
-        Node(
-            package='argo_mini',
-            executable='goal_approach_limiter',
-            name='goal_approach_limiter',
-            output='screen',
-        ),
-
         # Patrol manager  /patrol/start|stop ? /patrol/status ?????????????????
         # Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
         # The loop lives here, not in the browser, so a refreshed or closed
@@ -352,14 +339,6 @@ def generate_launch_description():
                     prefix='bash -c "source /home/argo/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2/install/setup.bash && exec "$0"" --',
                 ),
             ],
-        ),
-
-        # ?? 15. MPPI Reverse Controller (enables -0.15 vx_min only during recovery)
-        Node(
-            package='argo_mini',
-            executable='mppi_reverse_controller',
-            name='mppi_reverse_controller',
-            output='screen',
         ),
 
         # ?? 16. RViz2 (optional) ?????????????????????????????????????????????

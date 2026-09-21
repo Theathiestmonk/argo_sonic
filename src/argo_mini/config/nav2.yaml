@@ -21,11 +21,13 @@
         - nav2_pipeline_sequence_bt_node
         - nav2_recovery_node_bt_node
         - nav2_rate_controller_bt_node
-        # Recovery is now "clear the local costmap and replan" only (see
-        # bt/navigate_to_pose.xml) — nav2_round_robin/back_up/spin_action_bt_node
-        # dropped since BackUp/Spin are no longer referenced anywhere in the
-        # tree. nav2_clear_costmap_service_bt_node registers ClearEntireCostmap.
+        # Recovery is a RoundRobin of "clear the local costmap" and "back up
+        # 10 cm" (see bt/navigate_to_pose.xml), so both of those node types
+        # have to be registered here: RoundRobin itself, and BackUp. Spin is
+        # still deliberately absent — the tree never references it.
         - nav2_clear_costmap_service_bt_node
+        - nav2_round_robin_node_bt_node
+        - nav2_back_up_action_bt_node
 
   controller_server:
     ros__parameters:
@@ -83,40 +85,37 @@
         vy_std: 0.2
         # Kept matched 1:1 with wz_max above
         wz_std: 0.4
-        # 0.40 -> 0.50. Still the same three-places-at-once change as the
-        # 0.30 -> 0.40 raise: MPPI vx_max (here), velocity_smoother
-        # max_velocity (below), and serial_bridge VMAX — miss one and it
-        # silently clamps the wheels back down. 0.50 m/s is ~58 RPM, right
-        # at the top of the 60 RPM the e-stop's 12 zero commands ramp down
-        # through, so this is the ceiling: do not raise it again without
-        # re-checking that ramp.
+        # Back down to 0.35 after trying 0.50. Speed is capped in three
+        # places and all three move together: MPPI vx_max (here),
+        # velocity_smoother max_velocity (below), and serial_bridge VMAX —
+        # miss one and it silently clamps the wheels back down.
         #
-        # This is the *base* constraint. goal_approach_limiter publishes on
-        # /speed_limit to halve it to 0.25 m/s inside the last metre (MPPI's
-        # Optimizer::setSpeedLimit rescales vx_max/wz_max off these base
-        # values live), so the number here is the cruise speed, not the
-        # arrival speed.
-        vx_max: 0.50
+        # There is no approach-speed scaling on top of this any more: the
+        # /speed_limit halving inside the last metre (goal_approach_limiter)
+        # was removed along with the 0.50 cruise it existed to tame. This is
+        # the speed everywhere, arrival included.
+        vx_max: 0.35
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
         # Increased to 0.4 for faster turns
         wz_max: 0.4
-        # Raised to 0.40 for faster acceleration
-        ax_max: 0.40
+        # 0.40 -> 0.25. This is the main jerk lever: MPPI plans the ramp
+        # itself, so softening it here makes the commanded velocity change
+        # gently instead of leaving velocity_smoother to clip a step it was
+        # never going to keep up with. Still well clear of what the progress
+        # checker needs — 0 to its 0.15 m/s average takes 0.6 s.
+        ax_max: 0.25
         ax_min: -0.15
         ay_min: 0.0
         ay_max: 0.0
         # Wheel-level (slip-relevant) tangential accel from rotating is
         # az_max * (WHEEL_BASE/2) = az_max * 0.205 (WHEEL_BASE=0.41,
-        # serial_bridge.py). This 0.73 rad/s² headroom figure was sized
-        # against ax_max's OLD 0.15 m/s² no-slip threshold (0.3 sits
-        # comfortably under that with real margin, while staying responsive
-        # enough for a service robot working close to tables/people) — now
-        # that ax_max is 0.30 (see above), this comparison is stale; az_max
-        # itself is untouched for now (only ax_max was asked for), but
-        # revisit this math if az_max ever changes too.
-        az_max: 0.3
+        # serial_bridge.py), so this is the rotational half of the same
+        # anti-jerk change as ax_max above. 0.3 -> 0.25 moves it down with
+        # ax_max rather than leaving turns snappier than straight-line
+        # accel, and lowering it only increases the slip margin.
+        az_max: 0.25
         # Raised from 1 - a second refinement pass per control cycle on top
         # of the larger batch_size above, for better-quality candidate
         # trajectories when working around an obstacle. Same GPU-headroom
@@ -247,16 +246,25 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.50, 0.0, 0.3]
+      max_velocity: [0.35, 0.0, 0.3]
       min_velocity: [-0.30, 0.0, -0.3]
-      # Matched to the MPPI controller's ax_max/az_max above — the smoother
-      # sits downstream and must never allow a sharper ramp than the
-      # controller was already tuned for, or its output would just get
-      # clamped there anyway. Linear (index 0) raised 0.15 -> 0.30 to match
-      # ax_max's own raise above — braking (max_decel) deliberately left
-      # alone, only acceleration is being tested faster here, not stopping.
-      max_accel: [0.30, 0.0, 0.3]
-      max_decel: [-0.15, 0.0, -0.3]
+      # Kept strictly under the MPPI controller's ax_max/az_max above — the
+      # smoother sits downstream and must never allow a sharper ramp than
+      # the controller was already tuned for, or its output would just get
+      # clamped there anyway. Both come down together for smoothness:
+      # accel 0.30 -> 0.20 linear and 0.3 -> 0.20 angular, against MPPI's
+      # own 0.25/0.25, so the smoother is the tighter of the two and
+      # actually rounds off whatever step the controller still emits.
+      #
+      # Linear braking (max_decel[0]) is deliberately NOT softened. It is
+      # what stops the robot at a goal, and at 0.35 m/s a gentler ramp
+      # would coast further than the 0.40 m xy_goal_tolerance. It is also
+      # not the emergency path — safety_shield sits AFTER this node
+      # (/cmd_vel_smoothed -> /cmd_vel), so a hard stop goes straight to
+      # the wheels without passing through max_decel at all. Angular
+      # braking does come down to match the angular accel.
+      max_accel: [0.20, 0.0, 0.20]
+      max_decel: [-0.15, 0.0, -0.20]
       odom_topic: /odom
       velocity_timeout: 1.0
 
@@ -270,8 +278,11 @@
       behavior_plugins: ["backup", "spin", "wait"]
       backup:
         plugin: "nav2_behaviors/BackUp"
-        backup_dist: 0.5
-        backup_speed: 0.3
+        # NOTE: backup_dist/backup_speed are NOT parameters of this plugin
+        # and never were — nav2_behaviors/BackUp takes both from the action
+        # goal. They are BT *input ports* (see back_up_action.hpp), so the
+        # 10 cm limit lives on the <BackUp> node in bt/navigate_to_pose.xml.
+        # The 0.5 m / 0.3 m/s that used to sit here were read by nothing.
       spin:
         plugin: "nav2_behaviors/Spin"
       wait:

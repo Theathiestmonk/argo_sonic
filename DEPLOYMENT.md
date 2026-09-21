@@ -190,17 +190,12 @@ ps -ef | grep -E "start_slam_ui|start_slam_explore_ui|start_argo_nav_ui" | grep 
 ```
 For `navigate` mode you should see `slam_toolbox`, `bt_navigator`,
 `behavior_server`, `planner_server`, `controller_server`,
-`velocity_smoother`, `depth_safety_shield`, `goal_approach_limiter`,
-`patrol_manager` — and **not** `frontier_explorer` (that only belongs to
-`auto` mode).
+`velocity_smoother`, `depth_safety_shield`, `patrol_manager` — and **not**
+`frontier_explorer` (that only belongs to `auto` mode).
 
-If `goal_approach_limiter` is missing the robot still navigates, it just
-arrives at full 0.50 m/s instead of easing in at 0.25 m/s over the last
-metre — worth checking first if arrivals suddenly feel abrupt again.
-
-`patrol_manager` is likewise non-fatal: without it the dashboard's Patrol
-button publishes to `/patrol/start` and nothing answers, so the map's
-patrol readout never appears. Everything else navigates normally.
+`patrol_manager` is non-fatal: without it the dashboard's Patrol button
+publishes to `/patrol/start` and nothing answers, so the map's patrol
+readout never appears. Everything else navigates normally.
 
 ## 8. Known gaps (intentionally out of scope so far)
 

@@ -23,10 +23,41 @@
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
 
-      <!-- Recovery: Clear costmap and replan with reverse enabled.
-           The mppi_reverse_controller continuously enables/disables reverse based on nav state.
-           Clearing the costmap gives the planner fresh obstacle data to route around. -->
-      <ClearEntireCostmap name="ClearLocalCostmap" service_name="local_costmap/clear_entirely_local_costmap"/>
+      <!-- Recovery. RoundRobin, not Sequence: each failure runs the NEXT
+           recovery rather than all of them every time, and it only reports
+           failure once every option has been tried. A Sequence would abort
+           the whole navigation the first time BackUp couldn't run (someone
+           standing behind the robot is enough), which is exactly the case
+           recovery exists to survive.
+
+           Clearing the costmap first is the cheap, motionless option: it
+           gives the planner fresh obstacle data to route around without
+           the robot moving at all. Backing up is the fallback for when
+           that isn't enough and the robot needs to physically unwedge.
+
+           backup_dist/backup_speed live HERE, not in nav2.yaml's
+           behavior_server block — nav2_behaviors/BackUp reads both from
+           the action goal, and it's this BT node that fills it in (see
+           back_up_action.hpp's InputPorts). 0.10 m is a deliberate nudge
+           clear, not a retreat: the rear is covered only by the two rear
+           ultrasonics (safety_shield.py), so a long blind reverse is the
+           one motion this robot has the least sensing for. 0.10 m/s over
+           10 cm is ~1 s of travel, well inside the BT node's default 10 s
+           time_allowance.
+
+           This replaces the mppi_reverse_controller experiment, which was
+           removed: it only ever set vx_min from _check_recovery_state(),
+           which keyed off last_clear_time, which was only written by
+           clear_costmap_hook() — and nothing ever called that. The flag
+           stayed 0.0 for the life of the process, so the node never
+           enabled reverse once. Reversing during recovery is what BackUp
+           already does properly, through behavior_server, with collision
+           checking (simulate_ahead_time) that a raw vx_min change has no
+           equivalent of. -->
+      <RoundRobin name="RecoveryActions">
+        <ClearEntireCostmap name="ClearLocalCostmap" service_name="local_costmap/clear_entirely_local_costmap"/>
+        <BackUp name="BackUpTenCm" backup_dist="0.10" backup_speed="0.10"/>
+      </RoundRobin>
 
     </RecoveryNode>
 

@@ -57,7 +57,7 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
             planner_server controller_server behavior_server \
             bt_navigator velocity_smoother scan_relay \
             robot_state_publisher safety_shield frontier_explorer \
-            goal_approach_limiter patrol_manager; do
+            patrol_manager; do
   pkill -9 -f "$proc" 2>/dev/null || true
 done
 sleep 5
@@ -245,17 +245,6 @@ ros2 run nav2_bt_navigator bt_navigator --ros-args \
 BT_PID=$!
 sleep 7
 lc_node /bt_navigator
-
-# ── Goal approach limiter (/plan → /speed_limit) ────────────────────────
-# Halves controller_server's vx_max/wz_max over the last metre of the plan
-# so the robot eases into the goal instead of braking hard at
-# xy_goal_tolerance. Started after bt_navigator only so its log line lands
-# after the stack is up — it has no ordering dependency of its own, it just
-# subscribes /plan and publishes /speed_limit.
-echo "[explore] Starting goal_approach_limiter..."
-ros2 run argo_mini goal_approach_limiter &
-LIMITER_PID=$!
-sleep 2
 
 # ── Patrol manager (/patrol/start|stop → /patrol/status) ──────────────
 # Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
