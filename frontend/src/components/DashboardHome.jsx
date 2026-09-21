@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHand
 import { ros } from '../ros'
 import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
-import CameraFeed from './CameraFeed'
 import TeleopPad from './TeleopPad'
 import TelemetryCard from './TelemetryCard'
 
@@ -774,13 +773,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 : "Not connected to Argo — the map can't load until the connection is back."}
             </div>
           )}
-        </div>
-
-        {/* ── Camera Feed ── */}
-        <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ width: 320, height: 320, overflow: 'hidden' }}>
-            <CameraFeed />
-          </div>
         </div>
 
       </aside>
