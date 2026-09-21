@@ -67,9 +67,32 @@
         movement_time_allowance: 2.0
       goal_checker:
         plugin: "nav2_controller::SimpleGoalChecker"
-        xy_goal_tolerance: 0.40
-        # Increased from 0.20 to reduce excessive turning at goal
-        yaw_goal_tolerance: 1.57
+        # 0.40 -> 0.50. Arrival is position-only (see yaw below), and half a
+        # robot length of slack is what keeps a forward-only base from having
+        # to thread a needle it has no reverse gear to correct for.
+        xy_goal_tolerance: 0.50
+        # 1.57 -> 3.15, i.e. "any heading". Deliberately above pi:
+        # SimpleGoalChecker::isGoalReached takes shortest_angular_distance,
+        # which is bounded to [-pi, pi], so any threshold > pi makes the yaw
+        # term unconditionally true and arrival depends on position alone.
+        #
+        # This is fixing a contradiction, not just loosening a number.
+        # GoalAngleCritic was removed from the critics list below precisely
+        # so the robot would stop rotating to meet a requested final heading
+        # — but this checker still DEMANDED that heading to within +-90 deg.
+        # Nothing was left to satisfy it. The robot would reach the goal
+        # position, sit outside the yaw window with no critic pulling it in,
+        # never register arrival, and keep orbiting the point: MPPI still
+        # minimising distance-to-goal, no reverse (vx_min: 0.0) to correct an
+        # overshoot, and the progress checker quiet throughout because the
+        # robot genuinely was moving. That showed up as patrol circling its
+        # goal forever and never completing a lap.
+        #
+        # If a caller ever does need a specific final heading, add a second
+        # entry to goal_checker_plugins and select it per-goal with
+        # FollowPath's goal_checker_id — do not re-tighten this one, or the
+        # orbiting comes straight back.
+        yaw_goal_tolerance: 3.15
         stateful: true
       FollowPath:
         plugin: "nav2_mppi_controller::MPPIController"
@@ -100,21 +123,32 @@
         vy_min: 0.0
         # Increased to 0.4 for faster turns
         wz_max: 0.4
-        # 0.40 -> 0.25. This is the main jerk lever: MPPI plans the ramp
-        # itself, so softening it here makes the commanded velocity change
-        # gently instead of leaving velocity_smoother to clip a step it was
-        # never going to keep up with. Still well clear of what the progress
-        # checker needs — 0 to its 0.15 m/s average takes 0.6 s.
+        # ####################################################################
+        # INERT ON THIS NAV2 VERSION. nav2_mppi_controller 1.1.20 (Humble)
+        # has NO acceleration constraints: models/constraints.hpp defines
+        # ControlConstraints as exactly {vx_max, vx_min, vy, wz}, and the
+        # strings ax_max / ax_min / az_max appear nowhere in the installed
+        # headers. `ros2 param list /controller_server` confirms it —
+        # FollowPath.vx_max and FollowPath.wz_max are declared, ax_max and
+        # az_max are "Parameter not set", because nothing ever declares them.
+        #
+        # So none of the five keys below do anything today, and none of the
+        # reasoning previously written here about no-slip thresholds or
+        # "MPPI plans its own ramp" was ever in effect. The ONLY thing
+        # shaping acceleration on this robot is velocity_smoother's
+        # max_accel/max_decel further down, which is measurable: a 0 -> 0.35
+        # step on /cmd_vel_raw comes out of /cmd_vel_smoothed as a 0.20 m/s^2
+        # ramp, exactly matching max_accel[0].
+        #
+        # Kept rather than deleted because they are harmless and become live
+        # on Nav2 1.3+/Jazzy, where MPPI did gain acceleration constraints.
+        # Do not tune them here expecting an effect on this robot — change
+        # velocity_smoother instead.
+        # ####################################################################
         ax_max: 0.25
         ax_min: -0.15
         ay_min: 0.0
         ay_max: 0.0
-        # Wheel-level (slip-relevant) tangential accel from rotating is
-        # az_max * (WHEEL_BASE/2) = az_max * 0.205 (WHEEL_BASE=0.41,
-        # serial_bridge.py), so this is the rotational half of the same
-        # anti-jerk change as ax_max above. 0.3 -> 0.25 moves it down with
-        # ax_max rather than leaving turns snappier than straight-line
-        # accel, and lowering it only increases the slip margin.
         az_max: 0.25
         # Raised from 1 - a second refinement pass per control cycle on top
         # of the larger batch_size above, for better-quality candidate
@@ -135,10 +169,17 @@
         # stuck-feeling moment has a better chance of resolving on its own
         # rather than needing a BackUp/Spin recovery.
         regenerate_noises: true
+        # Also inert on 1.1.20 — "sgf_order" is not in the installed headers.
         sgf_order: 2
         TrajectoryVisualizer:
           trajectory_step: 5
           time_step: 3
+        # Inert too: neither TrajectoryValidator nor
+        # DefaultOptimalTrajectoryValidator nor collision_lookahead_time
+        # exists in nav2_mppi_controller 1.1.20. On this version collision
+        # checking is CostCritic's job (see its consider_footprint and
+        # collision_cost below), which IS live. Left in place for a future
+        # Nav2 upgrade, same reasoning as the acceleration block above.
         TrajectoryValidator:
           plugin: "nav2_mppi_controller::DefaultOptimalTrajectoryValidator"
           collision_lookahead_time: 2.0
@@ -248,17 +289,17 @@
       feedback: "OPEN_LOOP"
       max_velocity: [0.35, 0.0, 0.3]
       min_velocity: [-0.30, 0.0, -0.3]
-      # Kept strictly under the MPPI controller's ax_max/az_max above — the
-      # smoother sits downstream and must never allow a sharper ramp than
-      # the controller was already tuned for, or its output would just get
-      # clamped there anyway. Both come down together for smoothness:
-      # accel 0.30 -> 0.20 linear and 0.3 -> 0.20 angular, against MPPI's
-      # own 0.25/0.25, so the smoother is the tighter of the two and
-      # actually rounds off whatever step the controller still emits.
+      # This is the ONLY acceleration limit in the whole pipeline. MPPI's
+      # ax_max/az_max above are inert on Nav2 1.1.20 (see the block there),
+      # so the controller emits whatever velocity step its optimiser likes
+      # and this node is what turns that into a ramp. Measured: a 0 -> 0.35
+      # step on /cmd_vel_raw leaves /cmd_vel_smoothed at 0.20 m/s^2, so
+      # these numbers are real in a way the controller's are not.
+      # Lowered 0.30 -> 0.20 linear and 0.3 -> 0.20 angular to cut jerk.
       #
       # Linear braking (max_decel[0]) is deliberately NOT softened. It is
       # what stops the robot at a goal, and at 0.35 m/s a gentler ramp
-      # would coast further than the 0.40 m xy_goal_tolerance. It is also
+      # would coast further than the 0.50 m xy_goal_tolerance. It is also
       # not the emergency path — safety_shield sits AFTER this node
       # (/cmd_vel_smoothed -> /cmd_vel), so a hard stop goes straight to
       # the wheels without passing through max_decel at all. Angular
