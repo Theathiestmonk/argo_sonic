@@ -4,7 +4,7 @@ Argo Sonic – NTFields Navigation Launcher
 Usage: python3 argo_sonic_nav.py [--no-cam] [--map /path/to/map]
 """
 
-import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math, select, json, yaml
+import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math, select, json, socket, yaml
 from datetime import datetime
 from pathlib import Path
 
@@ -339,6 +339,69 @@ def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
 
     log(f"FAILED to bring up {name} after {attempts} attempts", "fail")
     return None
+
+ROSBRIDGE_SERVICE = "argo-rosbridge.service"
+ROSBRIDGE_PORT    = 9090
+
+
+def _port_open(port, host="127.0.0.1", timeout=1.0):
+    try:
+        with socket.socket() as sk:
+            sk.settimeout(timeout)
+            return sk.connect_ex((host, port)) == 0
+    except OSError:
+        return False
+
+
+def restart_rosbridge():
+    """Restart rosbridge so it discovers the graph this run is about to build.
+
+    rosbridge is an always-on service, but the pkill sweep above destroys and
+    rebuilds the entire ROS graph underneath it on every launch. Its DDS
+    participant survives all of that, and eventually stops resolving: the
+    subscriptions are still accepted and still listed on the topics, but they
+    show up as _NODE_NAME_UNKNOWN_ and no data is ever delivered. From the
+    dashboard that looks like three separate bugs at once — no map, no Set
+    Goal, no Set Pose — because the map needs /map and the two buttons are
+    gated on /rosapi/action_servers, and a blind bridge fails all three.
+    Observed after ~6 hours of uptime across many restarts, with a fresh
+    `ros2 topic echo` on the same machine receiving the same topics fine.
+
+    A restarted bridge joins the fresh graph as a new participant, which is
+    what every other node in this script already does. The UI's websocket
+    drops for a few seconds here; App.jsx reconnects on its own 3 s retry,
+    and the stack takes minutes to come up anyway.
+
+    Needs root, because the unit runs as root. If that isn't available this
+    does NOT fail the launch — it logs at "fail", which is the one level
+    log() forwards to the dashboard via report_progress(), so the operator
+    gets told exactly what to run instead of chasing a phantom map bug.
+    """
+    if not _port_open(ROSBRIDGE_PORT):
+        # Nothing listening: either rosbridge isn't installed on this machine
+        # or it's already down and systemd will bring it back. Either way
+        # there's no stale participant to clear.
+        log("rosbridge not listening on 9090 - skipping restart", "warn")
+        return
+
+    r = subprocess.run(
+        ["sudo", "-n", "systemctl", "restart", ROSBRIDGE_SERVICE],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        log(f"Could not restart rosbridge (needs root) - if the dashboard "
+            f"shows no map and no Set Goal/Set Pose, run: "
+            f"sudo systemctl restart {ROSBRIDGE_SERVICE}", "fail")
+        return
+
+    # Confirm it actually came back rather than assuming the restart worked.
+    for _ in range(30):
+        if _port_open(ROSBRIDGE_PORT):
+            log("Rosbridge restarted onto the fresh ROS graph", "ok")
+            return
+        time.sleep(0.5)
+    log(f"Rosbridge did not come back on port {ROSBRIDGE_PORT} - the "
+        f"dashboard will not connect until it does", "fail")
+
 
 def runcmd(cmd, env, timeout=10):
     try:
@@ -836,6 +899,10 @@ def main():
     ]:
         subprocess.run(["pkill", "-9", "-f", proc], capture_output=True)
     time.sleep(3)
+
+    # Everything above just deleted the graph rosbridge was attached to.
+    log("Restarting rosbridge onto the fresh graph...", "sys")
+    restart_rosbridge()
 
     # serial_bridge holds /dev/esp32 exclusively (pyserial) and is the only
     # publisher of /wheel_odom. If one survives the pkill above (started
