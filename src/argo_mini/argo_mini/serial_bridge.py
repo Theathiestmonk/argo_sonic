@@ -20,7 +20,7 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 IMU_ALPHA = 0.95
 
 # Velocity limits
-VMAX   = 0.40    # m/s – cap wheel speed to match nav2 vx_max
+VMAX   = 0.50    # m/s – cap wheel speed to match nav2 vx_max
 
 
 class SerialBridge(Node):

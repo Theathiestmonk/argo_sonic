@@ -297,6 +297,19 @@ def generate_launch_description():
             }],
         ),
 
+        # Goal approach limiter  /plan ? /speed_limit ????????????????????????
+        # Halves controller_server's vx_max/wz_max over the last metre of the
+        # plan so the robot eases into the goal instead of braking hard at
+        # xy_goal_tolerance. MPPI has no approach-velocity parameter of its
+        # own; see goal_approach_limiter.py for why this goes through the
+        # /speed_limit interface rather than scaling /cmd_vel downstream.
+        Node(
+            package='argo_mini',
+            executable='goal_approach_limiter',
+            name='goal_approach_limiter',
+            output='screen',
+        ),
+
         # ?? 13. Camera static TF bridge ??????????????????????????????????????
         # HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_camera_link_0
         # Our URDF defines depth_camera_optical_frame at the same physical location.

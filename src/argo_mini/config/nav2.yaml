@@ -83,7 +83,20 @@
         vy_std: 0.2
         # Kept matched 1:1 with wz_max above
         wz_std: 0.4
-        vx_max: 0.40
+        # 0.40 -> 0.50. Still the same three-places-at-once change as the
+        # 0.30 -> 0.40 raise: MPPI vx_max (here), velocity_smoother
+        # max_velocity (below), and serial_bridge VMAX — miss one and it
+        # silently clamps the wheels back down. 0.50 m/s is ~58 RPM, right
+        # at the top of the 60 RPM the e-stop's 12 zero commands ramp down
+        # through, so this is the ceiling: do not raise it again without
+        # re-checking that ramp.
+        #
+        # This is the *base* constraint. goal_approach_limiter publishes on
+        # /speed_limit to halve it to 0.25 m/s inside the last metre (MPPI's
+        # Optimizer::setSpeedLimit rescales vx_max/wz_max off these base
+        # values live), so the number here is the cruise speed, not the
+        # arrival speed.
+        vx_max: 0.50
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
@@ -234,7 +247,7 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.40, 0.0, 0.3]
+      max_velocity: [0.50, 0.0, 0.3]
       min_velocity: [-0.30, 0.0, -0.3]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
