@@ -50,6 +50,12 @@ export default function App() {
   const [robotPose, setRobotPose] = useState(null)
   const [frontiers, setFrontiers] = useState([])
   const [plannedPath, setPlannedPath] = useState([])
+  // Mirror of patrol_manager.py's /patrol/status. The patrol loop itself
+  // runs on the robot, not here (see that node's docstring) — this is a
+  // read-only view of it, so a page refresh or a dropped websocket shows
+  // the real state again as soon as the next heartbeat lands rather than
+  // losing track of a patrol that is still very much running.
+  const [patrolStatus, setPatrolStatus] = useState(null)
   // Bottom-center telemetry card (DashboardHome) — speed/wheels from
   // serial_bridge.py, obstacle distances from safety_shield.py. Grouped
   // into two objects rather than ~8 separate useState hooks.
@@ -183,6 +189,16 @@ export default function App() {
       })
       subRefs.current.wheelSpeeds = t
     }
+    if (!subRefs.current.patrol) {
+      // JSON in a std_msgs/String, same shape dashboard.py already uses —
+      // avoids a custom .msg, which argo_mini (an ament_python package)
+      // can't generate without a whole separate interfaces package.
+      const t = ros.topic('/patrol/status', 'std_msgs/msg/String')
+      t?.subscribe(msg => {
+        try { setPatrolStatus(JSON.parse(msg.data)) } catch { /* ignore a malformed frame */ }
+      })
+      subRefs.current.patrol = t
+    }
     if (!subRefs.current.safetyLidar) {
       const t = ros.topic('/safety_shield/lidar_distance', 'std_msgs/msg/Float32', { throttle_rate: 200 })
       t?.subscribe(msg => setSensorDistances(d => ({ ...d, lidar: msg.data })))
@@ -309,6 +325,22 @@ export default function App() {
       arrivalWatch.current = { intervalId, timeoutId }
     }
   }, [showToast])
+
+  // Patrol start/stop. Unlike sendNavGoal above there's no arrival watcher
+  // here on purpose: patrol_manager.py advances its own laps off the real
+  // NavigateToPose result, so the browser has nothing to poll for and
+  // nothing to keep alive. These two just poke the node; everything the UI
+  // shows afterwards comes back on /patrol/status.
+  const startPatrol = useCallback((wx, wy, qz = 0, qw = 1) => {
+    ros.publish('/patrol/start', 'geometry_msgs/PoseStamped', {
+      header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
+      pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: qz, w: qw } },
+    })
+  }, [])
+
+  const stopPatrol = useCallback(() => {
+    ros.publish('/patrol/stop', 'std_msgs/Empty', {})
+  }, [])
 
   // The UI equivalent of RViz's "2D Pose Estimate" tool. There's no AMCL in
   // this stack at all — slam_toolbox's own localization mode (see
@@ -626,6 +658,9 @@ export default function App() {
             showToast={showToast}
             onNavigate={sendNavGoal}
             onSetInitialPose={sendInitialPose}
+            patrolStatus={patrolStatus}
+            onStartPatrol={startPatrol}
+            onStopPatrol={stopPatrol}
             mapData={mapData}
             costmapData={costmapData}
             robotPose={robotPose}

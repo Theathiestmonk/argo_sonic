@@ -81,7 +81,7 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
             robot_state_publisher depth_safety_shield safety_shield \
             ascamera_node pointcloud_restamper behavior_server \
             _ros2_daemon \
-            goal_approach_limiter; do
+            goal_approach_limiter patrol_manager; do
   pkill -9 -f "$proc" 2>/dev/null || true
 done
 sleep 2
@@ -326,6 +326,15 @@ sleep 2
 else
   report_error "bt_navigator failed to activate - /navigate_to_pose is not available"
 fi
+
+# ── Patrol manager (/patrol/start|stop → /patrol/status) ──────────────
+# Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
+# The loop lives here, not in the browser, so a refreshed or closed tab
+# cannot strand the robot mid-patrol.
+echo "[argo] Starting patrol_manager..."
+ros2 run argo_mini patrol_manager &
+PATROL_PID=$!
+sleep 2
 
 # ── 12. Depth camera (optional) ────────────────────────────────────────────
 CAM_PID=""

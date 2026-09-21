@@ -310,6 +310,17 @@ def generate_launch_description():
             output='screen',
         ),
 
+        # Patrol manager  /patrol/start|stop ? /patrol/status ?????????????????
+        # Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
+        # The loop lives here, not in the browser, so a refreshed or closed
+        # tab cannot strand the robot mid-patrol.
+        Node(
+            package='argo_mini',
+            executable='patrol_manager',
+            name='patrol_manager',
+            output='screen',
+        ),
+
         # ?? 13. Camera static TF bridge ??????????????????????????????????????
         # HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_camera_link_0
         # Our URDF defines depth_camera_optical_frame at the same physical location.

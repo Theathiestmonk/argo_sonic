@@ -38,7 +38,7 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
             map_server amcl planner_server controller_server \
             bt_navigator velocity_smoother scan_relay \
             robot_state_publisher depth_safety_shield ascamera_node \
-            goal_approach_limiter; do
+            goal_approach_limiter patrol_manager; do
   pkill -9 -f "$proc" 2>/dev/null || true
 done
 sleep 5
@@ -240,6 +240,15 @@ lc_node /bt_navigator
 echo "[argo] Starting goal_approach_limiter..."
 ros2 run argo_mini goal_approach_limiter &
 LIMITER_PID=$!
+sleep 2
+
+# ── Patrol manager (/patrol/start|stop → /patrol/status) ──────────────
+# Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
+# The loop lives here, not in the browser, so a refreshed or closed tab
+# cannot strand the robot mid-patrol.
+echo "[argo] Starting patrol_manager..."
+ros2 run argo_mini patrol_manager &
+PATROL_PID=$!
 sleep 2
 
 # ?? 12. Depth camera (optional) ???????????????????????????????????????????

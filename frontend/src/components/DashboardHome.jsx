@@ -47,6 +47,16 @@ const TASK_TO_ACTION = {
   'Room service': 'room_service',
 }
 
+// patrol_manager.py's state-machine leg names, in operator language. Keys
+// match that node's `leg` field exactly — "dwell" is the pause at each end
+// before turning around, not a stall.
+const PATROL_LEG_LABEL = {
+  to_goal: 'Heading out',
+  to_home: 'Returning home',
+  dwell:   'Turning around',
+  idle:    'Idle',
+}
+
 // Direct per-card buttons on a Saved Place — [task, button label].
 const TABLE_ACTIONS = [
   ['Take order',   'Take Order'],
@@ -54,10 +64,11 @@ const TABLE_ACTIONS = [
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, mapData, costmapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onAgentRunning }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onNavigate, onSetInitialPose, patrolStatus, onStartPatrol, onStopPatrol, mapData, costmapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onAgentRunning }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [goalMode, setGoalMode]     = useState(false)   // goal-set drag mode on the same map card — see onGoalSet below
+  const [patrolMode, setPatrolMode] = useState(false)   // patrol-set drag mode — picks the far end of a patrol, see onPatrolSet below
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
   // Blue goal marker on the map — set whenever a table action, "Navigate",
@@ -597,6 +608,41 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     addActivity(`(${wx.toFixed(1)}, ${wy.toFixed(1)})`, 'Navigate')
   }, [voiceStatus, navGotoStatus, onNavigate, showToast, addActivity])
 
+  // Whether a patrol is running right now, straight off patrol_manager.py's
+  // /patrol/status heartbeat rather than a local flag — so this survives a
+  // refresh and stays honest if the patrol stops itself after a failed leg.
+  const patrolActive = patrolStatus?.active === true
+
+  // "Patrol" on the Live Map card. Same click-drag mechanic as Set Goal, but
+  // instead of one trip it starts the shuttle: out to the clicked point,
+  // back to wherever Argo is standing right now, repeat until Stop Patrol.
+  // Only the start point is sent — the loop, the lap counting and the
+  // returning all live in patrol_manager.py on the robot, so closing this
+  // tab doesn't strand a patrol half-way. Gated on the same two busy checks
+  // as onGoalSet/goToDestination: a patrol would fight a table trip for
+  // navigate_to_pose, and it holds the action for far longer than one trip.
+  const onPatrolSet = useCallback(({ wx, wy, theta }) => {
+    if (voiceStatus.running) {
+      showToast('Sonic is busy with a table — wait for that session to finish', 'warn')
+      return
+    }
+    if (navGotoStatus.running) {
+      showToast('Argo is on a trip right now — wait for it to finish', 'warn')
+      return
+    }
+    setPatrolMode(false)
+    const qz = Math.sin(theta / 2), qw = Math.cos(theta / 2)
+    onStartPatrol?.(wx, wy, qz, qw)
+    showToast('Patrolling — Argo will shuttle until you stop it', 'ok')
+    addActivity(`(${wx.toFixed(1)}, ${wy.toFixed(1)})`, 'Patrol')
+  }, [voiceStatus, navGotoStatus, onStartPatrol, showToast, addActivity])
+
+  const stopPatrol = useCallback(() => {
+    onStopPatrol?.()
+    setPatrolMode(false)
+    showToast('Patrol stopped', 'warn')
+  }, [onStopPatrol, showToast])
+
   // Cancels whichever table's order-processing session is currently
   // running and frees that table's lock. Only one voice session runs at a
   // time system-wide, so /voice/stop always targets the right one — no
@@ -703,23 +749,55 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             </div>
             {navState === 'running' && navActionReady && (
               <div style={{ display: 'flex', gap: 8 }}>
+                {/* Once a patrol is running this is the only way to end it,
+                    so it replaces the tool toggle outright rather than
+                    sitting next to it — no hunting for a separate stop. */}
                 <button
-                  onClick={() => connected && setGoalMode(v => {
-                    const next = !v
-                    if (next) setPoseMode(false)   // mutually exclusive — same canvas drag mechanic
-                    return next
-                  })}
+                  onClick={() => {
+                    if (!connected) return
+                    if (patrolActive) { stopPatrol(); return }
+                    setPatrolMode(v => {
+                      const next = !v
+                      if (next) { setGoalMode(false); setPoseMode(false) }   // mutually exclusive — same canvas drag mechanic
+                      return next
+                    })
+                  }}
                   disabled={!connected}
                   title={!connected
+                    ? "Can't patrol — not connected to Argo"
+                    : patrolActive
+                      ? 'Stop the patrol and leave Argo where it is'
+                      : (patrolMode ? 'Cancel' : 'Click the far end of the patrol — Argo shuttles there and back until stopped')}
+                  style={{
+                    padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
+                    background: (patrolActive || patrolMode) ? 'rgba(255,65,65,0.12)' : 'rgba(185,140,245,0.12)',
+                    border: `1px solid ${(patrolActive || patrolMode) ? 'rgba(255,65,65,0.3)' : 'rgba(185,140,245,0.35)'}`,
+                    color: (patrolActive || patrolMode) ? 'var(--danger)' : '#b98cf5',
+                    cursor: connected ? 'pointer' : 'not-allowed',
+                    opacity: connected ? 1 : 0.5,
+                  }}
+                >
+                  {patrolActive ? '■ Stop Patrol' : patrolMode ? '✕ Cancel' : '🔁 Patrol'}
+                </button>
+                <button
+                  onClick={() => connected && !patrolActive && setGoalMode(v => {
+                    const next = !v
+                    if (next) { setPoseMode(false); setPatrolMode(false) }   // mutually exclusive — same canvas drag mechanic
+                    return next
+                  })}
+                  disabled={!connected || patrolActive}
+                  title={!connected
                     ? "Can't set a goal — not connected to Argo"
-                    : (goalMode ? 'Cancel' : "Click where Argo should go, drag to face a direction on arrival")}
+                    : patrolActive
+                      ? 'Argo is patrolling — stop the patrol first'
+                      : (goalMode ? 'Cancel' : "Click where Argo should go, drag to face a direction on arrival")}
                   style={{
                     padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
                     background: goalMode ? 'rgba(255,65,65,0.12)' : 'rgba(127,168,232,0.12)',
                     border: `1px solid ${goalMode ? 'rgba(255,65,65,0.3)' : 'rgba(127,168,232,0.3)'}`,
                     color: goalMode ? 'var(--danger)' : '#7fa8e8',
-                    cursor: connected ? 'pointer' : 'not-allowed',
-                    opacity: connected ? 1 : 0.5,
+                    cursor: (connected && !patrolActive) ? 'pointer' : 'not-allowed',
+                    opacity: (connected && !patrolActive) ? 1 : 0.5,
                   }}
                 >
                   {goalMode ? '✕ Cancel' : '🎯 Set Goal'}
@@ -727,7 +805,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 <button
                   onClick={() => connected && setPoseMode(v => {
                     const next = !v
-                    if (next) setGoalMode(false)   // mutually exclusive — same canvas drag mechanic
+                    if (next) { setGoalMode(false); setPatrolMode(false) }   // mutually exclusive — same canvas drag mechanic
                     return next
                   })}
                   disabled={!connected}
@@ -764,8 +842,37 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               }}
               goalSetMode={goalMode}
               onGoalSet={onGoalSet}
+              patrolSetMode={patrolMode}
+              onPatrolSet={onPatrolSet}
+              patrolRoute={patrolActive ? patrolStatus : null}
             />
           </div>
+          {/* Patrol readout — lap count and which leg is being driven, so a
+              shuttle that's been running for an hour is legible at a glance
+              instead of just "the robot is moving again". Error only shows
+              when patrol_manager gave up on a leg (see MAX_LEG_RETRIES). */}
+          {(patrolActive || patrolStatus?.error) && (
+            <div style={{
+              marginTop: 8, padding: '7px 10px', borderRadius: 9,
+              background: patrolStatus?.error ? 'rgba(255,65,65,0.10)' : 'rgba(185,140,245,0.10)',
+              border: `1px solid ${patrolStatus?.error ? 'rgba(255,65,65,0.28)' : 'rgba(185,140,245,0.28)'}`,
+              fontSize: 10.5, lineHeight: 1.5,
+              color: patrolStatus?.error ? 'var(--danger)' : '#b98cf5',
+              display: 'flex', justifyContent: 'space-between', gap: 10,
+            }}>
+              {patrolStatus?.error ? (
+                <span>{patrolStatus.error}</span>
+              ) : (
+                <>
+                  <span style={{ fontWeight: 700 }}>{PATROL_LEG_LABEL[patrolStatus?.leg] ?? 'Patrolling'}</span>
+                  <span style={{ opacity: 0.85 }}>
+                    {patrolStatus?.laps ?? 0} lap{(patrolStatus?.laps ?? 0) === 1 ? '' : 's'}
+                    {patrolStatus?.distance_remaining != null && ` · ${patrolStatus.distance_remaining.toFixed(1)} m to go`}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
           {!mapData && (
             <div style={{ fontSize: 10.5, color: connected ? 'var(--muted)' : 'var(--danger)', marginTop: 8, lineHeight: 1.5 }}>
               {connected

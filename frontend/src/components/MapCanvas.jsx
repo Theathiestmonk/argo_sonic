@@ -7,6 +7,10 @@ const UNK  = [26,  24,  21]
 const FREE = [232, 222, 199]
 const OCC  = [12,  10,  8]
 
+// Patrol violet — deliberately not the goal's blue or the planned path's
+// gold, so a running patrol is distinguishable from a one-shot trip.
+const PATROL = '#b98cf5'
+
 // Converts world (wx,wy) to canvas pixel given map info and canvas layout.
 function worldToCanvas(wx, wy, md, offX, offY, scale) {
   const col = (wx - md.origin.x) / md.resolution
@@ -29,8 +33,18 @@ export default function MapCanvas({
   // off when the other turns on) — this component doesn't enforce that
   // itself, just picks whichever's active for the shared drag mechanics.
   goalSetMode = false, onGoalSet,
+  // patrolSetMode is the third user of the same click-drag mechanic. It
+  // picks the far end of a patrol: the robot shuttles between wherever it
+  // is standing when patrol starts and the point chosen here, until it's
+  // stopped. Same mutual exclusion as the other two, enforced at the call
+  // site (DashboardHome.jsx), not here.
+  patrolSetMode = false, onPatrolSet,
+  // { home: {x,y}, goal: {x,y}, leg } while a patrol is running, so the
+  // route the robot is shuttling stays visible instead of the operator
+  // having to remember which point they clicked.
+  patrolRoute = null,
 }) {
-  const dragMode = poseEstimateMode || goalSetMode
+  const dragMode = poseEstimateMode || goalSetMode || patrolSetMode
   const canvasRef  = useRef(null)
   const offRef     = useRef(null)   // { img: ImageBitmap, md: mapData }
   const [drag, setDrag] = useState(null)   // { startWX, startWY, curWX, curWY } while dragging a pose estimate
@@ -181,6 +195,39 @@ export default function MapCanvas({
       ctx.restore()
     }
 
+    // Patrol route — home and goal joined by a dashed line, with the leg
+    // currently being driven drawn solid. Violet so it reads as its own
+    // thing next to the blue one-shot goal marker and the gold planned path.
+    if (patrolRoute?.home && patrolRoute?.goal) {
+      const [hx, hy] = toC(patrolRoute.home.x, patrolRoute.home.y)
+      const [gx2, gy2] = toC(patrolRoute.goal.x, patrolRoute.goal.y)
+      ctx.save()
+      ctx.strokeStyle = PATROL
+      ctx.lineWidth = 3
+      ctx.lineCap = 'round'
+      ctx.setLineDash(patrolRoute.leg === 'dwell' ? [2, 6] : [10, 7])
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(gx2, gy2); ctx.stroke()
+      ctx.setLineDash([])
+
+      // Home: a square, so it never reads as "another goal" at a glance.
+      ctx.fillStyle = 'rgba(185,140,245,0.22)'
+      ctx.fillRect(hx - 8, hy - 8, 16, 16)
+      ctx.lineWidth = 2
+      ctx.strokeRect(hx - 8, hy - 8, 16, 16)
+      ctx.fillStyle = PATROL
+      ctx.font = 'bold 10px Inter,sans-serif'
+      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
+      ctx.fillText('HOME', hx, hy - 11)
+
+      // Far end: a circle, matching the goal marker's shape vocabulary.
+      ctx.beginPath(); ctx.arc(gx2, gy2, 9, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(185,140,245,0.22)'; ctx.fill()
+      ctx.strokeStyle = PATROL; ctx.lineWidth = 2; ctx.stroke()
+      ctx.fillStyle = PATROL
+      ctx.fillText('PATROL', gx2, gy2 - 12)
+      ctx.restore()
+    }
+
     // Robot marker — a directional arrow (concave "chevron" tail, same
     // silhouette as RViz/Nav2's default pose arrow) so heading reads at a
     // glance instead of needing a separate indicator dot. Forward is -Y
@@ -226,7 +273,7 @@ export default function MapCanvas({
     // (matches the goalPose marker's own blue above) so the two read as
     // related-but-distinct tools rather than identical.
     if (drag) {
-      const color = goalSetMode ? '#7fa8e8' : '#3bf09b'
+      const color = patrolSetMode ? PATROL : goalSetMode ? '#7fa8e8' : '#3bf09b'
       const [sx, sy] = toC(drag.startWX, drag.startWY)
       const [cx, cy] = toC(drag.curWX, drag.curWY)
       ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round'
@@ -253,6 +300,12 @@ export default function MapCanvas({
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click where Argo should go, drag to face a direction on arrival', 12, H - 10)
+    }
+    if (patrolSetMode) {
+      ctx.fillStyle = 'rgba(185,140,245,0.75)'
+      ctx.font = '12px Inter,sans-serif'
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
+      ctx.fillText('Click the far end of the patrol — Argo shuttles there and back from where it is now', 12, H - 10)
     }
 
     ctx.restore()
@@ -304,10 +357,11 @@ export default function MapCanvas({
     // heading the robot already has instead of snapping it to a garbage
     // near-zero-length direction.
     const theta = Math.hypot(dx, dy) > 0.05 ? Math.atan2(dy, dx) : (robotPose?.theta ?? 0)
-    if (goalSetMode) onGoalSet?.({ wx: startWX, wy: startWY, theta })
+    if (patrolSetMode) onPatrolSet?.({ wx: startWX, wy: startWY, theta })
+    else if (goalSetMode) onGoalSet?.({ wx: startWX, wy: startWY, theta })
     else onPoseEstimate?.({ wx: startWX, wy: startWY, theta })
     setDrag(null)
-  }, [dragMode, goalSetMode, drag, onPoseEstimate, onGoalSet, robotPose])
+  }, [dragMode, goalSetMode, patrolSetMode, drag, onPoseEstimate, onGoalSet, onPatrolSet, robotPose])
 
   const ZOOM_MIN = 0.5, ZOOM_MAX = 4, ZOOM_STEP = 1.25
   const zoomIn  = useCallback(() => setZoom(z => Math.min(z * ZOOM_STEP, ZOOM_MAX)), [])
