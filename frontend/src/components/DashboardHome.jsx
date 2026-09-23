@@ -4,6 +4,8 @@ import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
 import TelemetryCard from './TelemetryCard'
+import Robot3DViewer from './Robot3DViewer'
+import CustomDropdown from './CustomDropdown'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
@@ -88,6 +90,25 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [showTranscript, setShowTranscript] = useState(false)
   const [transcript, setTranscript] = useState({ session_id: null, started_at: null, turns: [] })
   const transcriptBottomRef = useRef(null)
+
+  // Robot viewer states
+  const [shadowColor, setShadowColor] = useState(() => {
+    try {
+      return localStorage.getItem('shadowColor') || '#e2b35c'
+    } catch {
+      return '#e2b35c'
+    }
+  })
+  const [modelPath, setModelPath] = useState(() => {
+    try {
+      return localStorage.getItem('modelPath') || '/models/argo.glb'
+    } catch {
+      return '/models/argo.glb'
+    }
+  })
+  const [showRobotSettings, setShowRobotSettings] = useState(false)
+  const [availableModels, setAvailableModels] = useState([])
+  const [modelLoading, setModelLoading] = useState(false)
 
   useImperativeHandle(ref, () => ({
     toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
@@ -487,6 +508,62 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     return () => clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        console.log('[Dashboard] Fetching models from http://localhost:8888/api/models')
+        const response = await fetch('http://localhost:8888/api/models')
+        if (response.ok) {
+          const models = await response.json()
+          console.log('[Dashboard] Models loaded:', models)
+          setAvailableModels(models)
+          const savedModel = localStorage.getItem('modelPath')
+          if (savedModel && models.some(m => m.path === savedModel)) {
+            setModelPath(savedModel)
+          } else if (models.length > 0) {
+            setModelPath(models[0].path)
+          }
+        } else {
+          console.error('[Dashboard] API error:', response.status)
+          setAvailableModels([{ name: 'Argo', path: '/models/argo.glb' }])
+        }
+      } catch (err) {
+        console.error('[Dashboard] Could not fetch models:', err)
+        setAvailableModels([{ name: 'Argo', path: '/models/argo.glb' }])
+      }
+    }
+    fetchModels()
+  }, [])
+
+  // Save shadowColor to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('shadowColor', shadowColor)
+    } catch {
+      // localStorage unavailable
+    }
+  }, [shadowColor])
+
+  // Save modelPath to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('modelPath', modelPath)
+    } catch {
+      // localStorage unavailable
+    }
+  }, [modelPath])
+
+  // Close settings on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showRobotSettings && !e.target.closest('[data-robot-settings]')) {
+        setShowRobotSettings(false)
+      }
+    }
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [showRobotSettings])
+
   const entries = Object.entries(tables)
     .filter(([key]) => key !== '0')
     .sort((a, b) => Number(a[0]) - Number(b[0]))
@@ -707,7 +784,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   ]
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 0, animation: 'slideUp 0.35s ease' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr 320px', gap: 0, animation: 'slideUp 0.35s ease', height: '100vh' }}>
 
       {/* ── Left rail: Argo control ── */}
       <aside style={{ padding: '4px 20px 24px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1076,6 +1153,100 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         </section>
 
       </main>
+
+      {/* ── Right Sidebar: Robot 3D Viewer ── */}
+      <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 10px', borderLeft: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', background: 'rgba(0,0,0,0.1)' }}>
+        {/* Robot Viewer */}
+        <div style={{ position: 'relative' }}>
+          {modelLoading && (
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, borderRadius: 8 }}>
+              <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Loading...</div>
+              </div>
+            </div>
+          )}
+          <Robot3DViewer
+            shadowColor={shadowColor}
+            modelPath={modelPath}
+            onLoadStart={() => setModelLoading(true)}
+            onLoadEnd={() => setModelLoading(false)}
+          />
+
+          {/* Settings Gear Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowRobotSettings(!showRobotSettings)
+            }}
+            style={{
+              position: 'absolute', top: 8, right: 8,
+              width: 32, height: 32, borderRadius: '50%',
+              background: 'rgba(100,100,120,0.2)', border: '1px solid rgba(150,150,170,0.3)',
+              color: 'rgba(200,200,220,0.7)', cursor: 'pointer', fontSize: 18,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 10, backdropFilter: 'blur(8px)'
+            }}
+          >
+            ⚙
+          </button>
+
+          {/* Settings Dropdown */}
+          {showRobotSettings && (
+            <div data-robot-settings style={{
+              position: 'absolute', top: 45, left: 8,
+              background: 'rgba(20,20,30,0.4)', border: '1px solid rgba(226,179,92,0.2)',
+              borderRadius: 12, padding: 12, minWidth: 170,
+              zIndex: 20, backdropFilter: 'blur(20px)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+            }}>
+              {/* Model Selector */}
+              <CustomDropdown
+                label="Robot Model"
+                value={modelPath}
+                onChange={setModelPath}
+                options={availableModels.length > 0
+                  ? availableModels.map(model => ({ value: model.path, label: model.name }))
+                  : [{ value: '/models/argo.glb', label: 'Argo' }]
+                }
+              />
+            </div>
+          )}
+        </div>
+
+        {/* SONIC Status Card */}
+        <div className="glass-card" style={{ padding: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9 }}>
+            <div style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid var(--gold-bright)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--gold-bright)' }}>
+                <circle cx="12" cy="12" r="1"/><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"/><path d="M12 7v5"/>
+              </svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em' }}>SONIC</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>Idle</div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 13 }}>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Location</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{curPos}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Battery</div>
+              <div style={{ fontWeight: 600, color: 'var(--ok)', fontSize: 13 }}>—</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Payload</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>—</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Status</div>
+              <div style={{ fontWeight: 600, color: 'var(--ok)', fontSize: 13 }}>{curStatus} ✓</div>
+            </div>
+          </div>
+        </div>
+      </aside>
 
       <RadialNav pages={radialPages} activePage="overview" />
 
