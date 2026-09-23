@@ -789,8 +789,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       {/* ── Left rail: Argo control ── */}
       <aside style={{ padding: '4px 20px 24px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 20, fontWeight: 800, letterSpacing: '-0.5px', marginBottom: 4 }}>{greeting}</h2>
-          <p style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 16 }}>Here's what's happening right now.</p>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 20, fontWeight: 800, letterSpacing: '-0.5px', marginBottom: 4 }}>{greeting} ☀️</h2>
+          <p style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 16 }}>Here's what's happening in your restaurant.</p>
         </div>
 
         <div>
