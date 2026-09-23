@@ -12,3 +12,17 @@ venv/
 .venv/
 *.log
 node_modules/
+
+# Build artifacts
+frontend/dist/
+frontend/public/models/*.glb
+frontend/public/models/*.gltf
+
+# 3D Model files
+*.glb
+*.gltf
+
+# Screenshots
+*.jpeg
+*.jpg
+*.png
