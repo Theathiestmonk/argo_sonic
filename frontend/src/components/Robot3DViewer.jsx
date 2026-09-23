@@ -3,6 +3,13 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 export default function Robot3DViewer({ shadowColor = '#e2b35c', modelPath = '/models/argo.glb', onLoadStart, onLoadEnd }) {
+  const hexToRgba = (hex, alpha = 0.4) => {
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    return `rgba(${r},${g},${b},${alpha})`
+  }
+  const shadowFilter = `drop-shadow(0 8px 16px ${hexToRgba(shadowColor)})`
   const containerRef = useRef(null)
   const sceneRef = useRef(null)
   const cameraRef = useRef(null)
@@ -165,7 +172,8 @@ export default function Robot3DViewer({ shadowColor = '#e2b35c', modelPath = '/m
       ref={containerRef}
       style={{
         width: '100%',
-        height: '400px',
+        height: '100%',
+        filter: shadowFilter,
       }}
     />
   )
