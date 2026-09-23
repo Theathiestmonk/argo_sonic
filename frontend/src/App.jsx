@@ -6,6 +6,57 @@ import TablesPanel         from './components/TablesPanel'
 import SettingsPanel       from './components/SettingsPanel'
 import DashboardHome       from './components/DashboardHome'
 
+// Golden theme styling
+if (typeof document !== 'undefined') {
+  const style = document.createElement('style')
+  style.textContent = `
+    /* Dropdown golden styling */
+    select {
+      color-scheme: dark;
+    }
+    select option {
+      background-color: #2a2a3e;
+      color: #e2b35c;
+    }
+    select option:checked {
+      background: #e2b35c;
+      color: #1a1a2e;
+    }
+
+    /* Range slider golden styling */
+    input[type="range"] {
+      accent-color: #e2b35c;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      background: #e2b35c;
+    }
+    input[type="range"]::-moz-range-thumb {
+      background: #e2b35c;
+    }
+
+    /* Hide scrollbars completely while keeping scroll functionality */
+    ::-webkit-scrollbar {
+      display: none !important;
+      width: 0 !important;
+      height: 0 !important;
+    }
+    ::-webkit-scrollbar-track {
+      display: none !important;
+    }
+    ::-webkit-scrollbar-thumb {
+      display: none !important;
+    }
+    html, body, main, div, section, aside {
+      scrollbar-width: none !important;
+      -ms-overflow-style: none !important;
+    }
+    * {
+      -ms-overflow-style: none !important;
+    }
+  `
+  document.head.appendChild(style)
+}
+
 const STEPS = [
   { label: 'Choose Space',  short: 'Space' },
   { label: 'Map the Area',  short: 'Map'   },

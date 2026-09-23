@@ -1542,6 +1542,26 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/battery':
             self._json(dict(_latest_bms_data))
 
+        elif self.path == '/api/models':
+            try:
+                import glob
+                models_dir = os.path.join(os.path.dirname(__file__), '../frontend/public/models')
+                models_dir = os.path.abspath(models_dir)
+                if not os.path.exists(models_dir):
+                    print(f'[launcher] WARNING: models dir does not exist: {models_dir}')
+                    self._json([], 500)
+                    return
+                glb_files = glob.glob(os.path.join(models_dir, '*.glb')) + glob.glob(os.path.join(models_dir, '*.gltf'))
+                models = [
+                    {'name': os.path.splitext(os.path.basename(f))[0].title(), 'path': f'/models/{os.path.basename(f)}'}
+                    for f in sorted(glb_files)
+                ]
+                print(f'[launcher] models dir: {models_dir}, found: {len(models)} files: {[m["name"] for m in models]}')
+                self._json(models)
+            except Exception as e:
+                print(f'[launcher] ERROR fetching models: {e}')
+                self._json({'error': str(e)}, 500)
+
         else:
             self._json({'error': 'not found'}, 404)
 
