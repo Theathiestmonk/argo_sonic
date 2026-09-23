@@ -56,7 +56,8 @@ echo "[explore] Killing previous processes..."
 for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
             planner_server controller_server behavior_server \
             bt_navigator velocity_smoother scan_relay \
-            robot_state_publisher safety_shield frontier_explorer; do
+            robot_state_publisher safety_shield frontier_explorer \
+            patrol_manager; do
   pkill -9 -f "$proc" 2>/dev/null || true
 done
 sleep 5
@@ -244,6 +245,15 @@ ros2 run nav2_bt_navigator bt_navigator --ros-args \
 BT_PID=$!
 sleep 7
 lc_node /bt_navigator
+
+# ── Patrol manager (/patrol/start|stop → /patrol/status) ──────────────
+# Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
+# The loop lives here, not in the browser, so a refreshed or closed tab
+# cannot strand the robot mid-patrol.
+echo "[explore] Starting patrol_manager..."
+ros2 run argo_mini patrol_manager &
+PATROL_PID=$!
+sleep 2
 
 # ── 13. Frontier explorer ─────────────────────────────────────────────────────
 wait_for_action "/navigate_to_pose" 30 || {

@@ -73,7 +73,8 @@ for proc in slam_toolbox serial_bridge rplidar_composition rviz2 \
             bt_navigator velocity_smoother scan_relay \
             robot_state_publisher depth_safety_shield ascamera_node \
             ntfields_trainer ntfields_navigator ntfields_social_shield \
-            depth_stop; do
+            depth_stop \
+            patrol_manager; do
   pkill -9 -f "$proc" 2>/dev/null || true
 done
 sleep 5
@@ -339,7 +340,15 @@ ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file $NAV_CONFIG \
 BT_PID=$!
 sleep 7
 lc_node /bt_navigator
-report_ready "Nav2 fully activated - ready for goals"
+
+# ── Patrol manager (/patrol/start|stop → /patrol/status) ──────────────
+# Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
+# The loop lives here, not in the browser, so a refreshed or closed tab
+# cannot strand the robot mid-patrol.
+echo "[argo] Starting patrol_manager..."
+ros2 run argo_mini patrol_manager &
+PATROL_PID=$!
+sleep 2
 
 # Everything from here on is plain echo, not report() — these later steps
 # (camera, velocity-smoother re-check, social shield, trainer, navigator,

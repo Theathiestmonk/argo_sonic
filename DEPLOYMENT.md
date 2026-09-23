@@ -190,8 +190,12 @@ ps -ef | grep -E "start_slam_ui|start_slam_explore_ui|start_argo_nav_ui" | grep 
 ```
 For `navigate` mode you should see `slam_toolbox`, `bt_navigator`,
 `behavior_server`, `planner_server`, `controller_server`,
-`velocity_smoother`, `depth_safety_shield` — and **not** `frontier_explorer`
-(that only belongs to `auto` mode).
+`velocity_smoother`, `depth_safety_shield`, `patrol_manager` — and **not**
+`frontier_explorer` (that only belongs to `auto` mode).
+
+`patrol_manager` is non-fatal: without it the dashboard's Patrol button
+publishes to `/patrol/start` and nothing answers, so the map's patrol
+readout never appears. Everything else navigates normally.
 
 ## 8. Known gaps (intentionally out of scope so far)
 

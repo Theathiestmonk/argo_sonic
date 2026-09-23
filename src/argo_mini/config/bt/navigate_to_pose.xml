@@ -23,9 +23,26 @@
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
 
-      <!-- Recovery: Clear costmap and replan with reverse enabled.
-           The mppi_reverse_controller continuously enables/disables reverse based on nav state.
-           Clearing the costmap gives the planner fresh obstacle data to route around. -->
+      <!-- Recovery: clear the local costmap and replan. That is the whole
+           of it. No BackUp, no Wait, no Spin — recovery neither moves the
+           robot nor stalls it, it just hands the planner fresh obstacle
+           data and lets the PipelineSequence above try again immediately.
+
+           BackUp was tried here and removed: it caused more trouble than it
+           fixed, and reverse is the direction this base senses worst — two
+           rear ultrasonics, no lidar, no depth. explore_navigate_to_pose.xml
+           had already reached the same conclusion on its own ("No <BackUp>
+           — always fails near frontier walls; causes positional jitter").
+           Before that, mppi_reverse_controller tried to enable MPPI reverse
+           during recovery and never worked at all, because the flag meant
+           to trigger it was only written by a hook nothing ever called.
+           Reversing during recovery has now been tried twice and dropped
+           twice: treat a third attempt with suspicion.
+
+           A Wait was briefly here too and was dropped as well — a recovery
+           that pauses is a recovery that does nothing while the goal clock
+           runs. Replanning against a cleared costmap is both faster and the
+           only step that actually changes the situation. -->
       <ClearEntireCostmap name="ClearLocalCostmap" service_name="local_costmap/clear_entirely_local_costmap"/>
 
     </RecoveryNode>

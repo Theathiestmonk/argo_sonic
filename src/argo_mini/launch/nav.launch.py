@@ -297,6 +297,17 @@ def generate_launch_description():
             }],
         ),
 
+        # Patrol manager  /patrol/start|stop ? /patrol/status ?????????????????
+        # Runs the goal <-> home shuttle the dashboard's Patrol tool starts.
+        # The loop lives here, not in the browser, so a refreshed or closed
+        # tab cannot strand the robot mid-patrol.
+        Node(
+            package='argo_mini',
+            executable='patrol_manager',
+            name='patrol_manager',
+            output='screen',
+        ),
+
         # ?? 13. Camera static TF bridge ??????????????????????????????????????
         # HP60C SDK publishes depth0/points with frame_id: ascamera_hp60c_camera_link_0
         # Our URDF defines depth_camera_optical_frame at the same physical location.
@@ -328,14 +339,6 @@ def generate_launch_description():
                     prefix='bash -c "source /home/argo/EaiCameraSdk_v1.2.28.20241015/demo/linux_ros/ros2/install/setup.bash && exec "$0"" --',
                 ),
             ],
-        ),
-
-        # ?? 15. MPPI Reverse Controller (enables -0.15 vx_min only during recovery)
-        Node(
-            package='argo_mini',
-            executable='mppi_reverse_controller',
-            name='mppi_reverse_controller',
-            output='screen',
         ),
 
         # ?? 16. RViz2 (optional) ?????????????????????????????????????????????
