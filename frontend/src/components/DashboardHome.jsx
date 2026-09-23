@@ -784,7 +784,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   ]
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr 320px', gap: 0, animation: 'slideUp 0.35s ease', height: '100vh' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr 380px', gap: 0, animation: 'slideUp 0.35s ease', height: '100vh' }}>
 
       {/* ── Left rail: Argo control ── */}
       <aside style={{ padding: '4px 20px 24px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
