@@ -80,36 +80,6 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# ── Step 3b: let the nav launcher restart rosbridge without a password ───────
-# argo_sonic_nav.py restarts rosbridge at the start of every nav launch. It has
-# to: that launch pkills and rebuilds the entire ROS graph, and a rosbridge that
-# outlives the graph it discovered eventually goes blind — it still accepts
-# websocket subscriptions and still appears on the topics, but as
-# _NODE_NAME_UNKNOWN_, and no data is ever delivered. In the dashboard that
-# reads as three unrelated faults at once: no map, no Set Goal, no Set Pose
-# (the map needs /map; both buttons are gated on /rosapi/action_servers).
-#
-# The unit is root-owned, so the nav user needs this one grant. Deliberately
-# narrow: one verb, one unit, no wildcards.
-echo "[install] Granting $WHOAMI permission to restart rosbridge..."
-SYSTEMCTL="$(command -v systemctl)"
-SUDOERS_TMP="$(mktemp)"
-printf '%s\n' \
-  "# Installed by argo_sonic/sh/install-services.sh — see Step 3b there." \
-  "$WHOAMI ALL=(root) NOPASSWD: $SYSTEMCTL restart argo-rosbridge.service" \
-  > "$SUDOERS_TMP"
-# Validate BEFORE installing. A malformed file in /etc/sudoers.d breaks sudo for
-# every command on the machine, which on a robot with no attached keyboard is a
-# genuinely bad day — so it is never written unless visudo accepts it first.
-if sudo visudo -cf "$SUDOERS_TMP" > /dev/null 2>&1; then
-    sudo install -m 0440 -o root -g root "$SUDOERS_TMP" /etc/sudoers.d/argo-rosbridge
-    echo "[install] /etc/sudoers.d/argo-rosbridge installed ✓"
-else
-    echo "[install] WARNING: generated sudoers snippet failed validation — not installed."
-    echo "[install]          Nav still runs; it will ask you to restart rosbridge by hand."
-fi
-rm -f "$SUDOERS_TMP"
-
 # ── Step 4: argo-launcher.service ────────────────────────────────────────────
 echo "[install] Creating argo-launcher.service..."
 sudo tee /etc/systemd/system/argo-launcher.service > /dev/null <<EOF
