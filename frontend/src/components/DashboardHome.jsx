@@ -896,56 +896,46 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         </div>
 
-        {/* Map Selector */}
+        {/* Map Selector Dropdown */}
         <div style={{ padding: 12, background: 'rgba(255,255,255,0.02)', borderRadius: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em', marginBottom: 10 }}>Select Map</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            Select Map
+            {navReady && selectedMap && <span title="Locked - running on this map">🔒</span>}
+          </div>
+          <select
+            value={selectedMap}
+            onChange={(e) => {
+              if (!navReady) {
+                localStorage.setItem('argo_selected_map', e.target.value)
+                window.location.reload()
+              }
+            }}
+            disabled={navReady}
+            title={navReady ? 'Locked - stop nav to switch maps' : 'Select a map to load'}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              borderRadius: 8,
+              fontSize: 11,
+              fontWeight: 600,
+              background: 'rgba(255,255,255,0.05)',
+              border: `1px solid ${navReady ? 'rgba(147,112,219,0.4)' : 'rgba(255,255,255,0.1)'}`,
+              color: navReady ? '#b98cf5' : '#ffffff',
+              cursor: navReady ? 'not-allowed' : 'pointer',
+              opacity: navReady ? 0.6 : 1,
+              transition: 'all 0.2s',
+            }}
+          >
             {availableMaps.length === 0 ? (
-              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', padding: '8px 0' }}>No maps available</div>
+              <option>No maps available</option>
             ) : (
               availableMaps.map(map => (
-                <button
-                  key={map}
-                  onClick={() => {
-                    if (!navReady) {
-                      localStorage.setItem('argo_selected_map', map)
-                      window.location.reload()
-                    }
-                  }}
-                  disabled={navReady && selectedMap === map}
-                  title={navReady && selectedMap === map ? 'Locked - running on this map' : 'Click to load map'}
-                  style={{
-                    padding: '9px 12px',
-                    borderRadius: 8,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    background: selectedMap === map
-                      ? navReady ? 'rgba(147,112,219,0.2)' : 'rgba(59,240,155,0.15)'
-                      : 'rgba(255,255,255,0.03)',
-                    border: `1px solid ${selectedMap === map
-                      ? navReady ? 'rgba(147,112,219,0.4)' : 'rgba(59,240,155,0.3)'
-                      : 'rgba(255,255,255,0.08)'}`,
-                    color: selectedMap === map
-                      ? navReady ? '#b98cf5' : '#3bf09b'
-                      : 'var(--muted)',
-                    cursor: navReady && selectedMap === map ? 'not-allowed' : 'pointer',
-                    opacity: navReady && selectedMap === map ? 0.6 : 1,
-                    transition: 'all 0.2s',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <span>{map}</span>
-                  {selectedMap === map && (
-                    <span style={{ fontSize: 10, color: 'inherit' }}>
-                      {navReady ? '🔒' : '✓'}
-                    </span>
-                  )}
-                </button>
+                <option key={map} value={map}>
+                  {map}
+                </option>
               ))
             )}
-          </div>
+          </select>
         </div>
 
         {/* Free Roam Panel */}
