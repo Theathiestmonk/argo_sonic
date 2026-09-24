@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { ros } from '../ros'
 
+// Track navigation status via /nav/goto/status polls
+const pollNavStatus = async (launcherUrl) => {
+  try {
+    const response = await fetch(`${launcherUrl}/nav/goto/status`)
+    return await response.json()
+  } catch {
+    return { running: false, phase: null }
+  }
+}
+
 // Generate random goal coordinates in free space within the map
 function generateRandomGoal(mapData, robotPose, minDistFromRobot = 0.5) {
   if (!mapData || !robotPose) return null
@@ -103,45 +113,33 @@ export default function FreeRoamPanel({
   const navStatusPollRef = useRef(null)
   const currentGoalRef = useRef(null)
 
-  // Poll navigation status
+  // Check if robot has arrived at current goal via pose tracking
   useEffect(() => {
-    if (!roamActive || roamPaused) return
+    if (!roamActive || roamPaused || navigationStatus !== 'navigating' || !currentGoalRef.current || !robotPose) return
 
-    const pollNavStatus = async () => {
-      try {
-        const response = await fetch(`${launcherUrl}/nav/goto/status`)
-        const status = await response.json()
+    const checkArrival = () => {
+      const goal = currentGoalRef.current
+      if (!goal) return
 
-        setNavigationStatus(status.running ? 'navigating' : 'idle')
+      const dist = Math.hypot(robotPose.x - goal.x, robotPose.y - goal.y)
+      const ARRIVAL_RADIUS = 0.5 // 50cm arrival threshold
 
-        // If navigation finished, try to generate next goal
-        if (!status.running && currentGoalRef.current) {
-          // Navigation completed (success or failure)
-          const wasSuccess = status.phase === 'done'
-          if (wasSuccess) {
-            setRoamStats(prev => ({
-              ...prev,
-              goalsReached: prev.goalsReached + 1,
-            }))
-            showToast('Goal reached! Finding next destination...', 'ok')
-          } else if (status.phase === 'failed') {
-            setRoamStats(prev => ({
-              ...prev,
-              goalsFailed: prev.goalsFailed + 1,
-            }))
-            showToast('Goal unreachable, finding alternative...', 'info')
-          }
-          currentGoalRef.current = null
-          setCurrentGoal(null)
-        }
-      } catch (err) {
-        console.error('Failed to poll nav status:', err)
+      if (dist <= ARRIVAL_RADIUS) {
+        // Goal reached!
+        setRoamStats(prev => ({
+          ...prev,
+          goalsReached: prev.goalsReached + 1,
+        }))
+        showToast('Goal reached! Finding next destination...', 'ok')
+        currentGoalRef.current = null
+        setCurrentGoal(null)
+        setNavigationStatus('idle')
       }
     }
 
-    navStatusPollRef.current = setInterval(pollNavStatus, 1000)
-    return () => clearInterval(navStatusPollRef.current)
-  }, [roamActive, roamPaused, launcherUrl, showToast])
+    const intervalId = setInterval(checkArrival, 500)
+    return () => clearInterval(intervalId)
+  }, [roamActive, roamPaused, navigationStatus, robotPose, showToast])
 
   // Generate and send next goal
   useEffect(() => {
@@ -167,26 +165,26 @@ export default function FreeRoamPanel({
         return
       }
 
-      // Send navigation goal
+      // Send navigation goal via ROS topic (direct goal publishing)
       try {
-        const mapToUse = mapName || 'office_map'
-        const response = await fetch(`${launcherUrl}/nav/goto`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            destination: `roam_${Math.random().toString(36).substr(2, 9)}`,
-            map: mapToUse,
-          }),
+        if (!ros.isConnected()) {
+          showToast('Not connected to ROS', 'danger')
+          return
+        }
+
+        // Publish goal directly to /goal_pose topic (same as Navigate button)
+        ros.publish('/goal_pose', 'geometry_msgs/PoseStamped', {
+          header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
+          pose: {
+            position: { x: nextGoal.x, y: nextGoal.y, z: 0 },
+            orientation: { x: 0, y: 0, z: 0, w: 1 },
+          },
         })
 
-        const data = await response.json()
-        if (data.ok) {
-          setCurrentGoal(nextGoal)
-          currentGoalRef.current = nextGoal
-          setNavigationStatus('navigating')
-        } else {
-          showToast(`Navigation error: ${data.error}`, 'danger')
-        }
+        setCurrentGoal(nextGoal)
+        currentGoalRef.current = nextGoal
+        setNavigationStatus('navigating')
+        showToast(`Navigating to (${nextGoal.x.toFixed(1)}, ${nextGoal.y.toFixed(1)})`, 'ok')
       } catch (err) {
         showToast('Failed to send navigation goal', 'danger')
         console.error('Navigation error:', err)
