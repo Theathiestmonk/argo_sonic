@@ -685,6 +685,7 @@ export default function App() {
             sensorDistances={sensorDistances}
             onOpenSettings={() => setShowSettings(true)}
             onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
+            onFreeRoam={() => { setView('wizard'); setStep(1) }}
             onNavInitializing={setNavInitializing}
             onNavReady={setNavReady}
             onNavPoseSet={setNavPoseSet}
