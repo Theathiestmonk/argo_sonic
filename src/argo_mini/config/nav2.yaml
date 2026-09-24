@@ -83,7 +83,7 @@
         vy_std: 0.2
         # Kept matched 1:1 with wz_max above
         wz_std: 0.4
-        vx_max: 0.30
+        vx_max: 0.45
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
@@ -131,10 +131,7 @@
           plugin: "nav2_mppi_controller::DefaultOptimalTrajectoryValidator"
           collision_lookahead_time: 2.0
           consider_footprint: false
-        # GoalAngleCritic removed - "rotate at goal" behavior; the robot no
-        # longer needs to face the goal's requested final orientation, only
-        # reach its position (see yaw_goal_tolerance above).
-        critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+        critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
         ConstraintCritic:
           enabled: true
           cost_power: 1
@@ -144,6 +141,11 @@
           cost_power: 1
           cost_weight: 12.0
           threshold_to_consider: 1.4
+        GoalAngleCritic:
+          enabled: true
+          cost_power: 1
+          cost_weight: 3.0
+          threshold_to_consider: 0.4
         PreferForwardCritic:
           enabled: true
           cost_power: 1
@@ -234,8 +236,8 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.30, 0.0, 0.3]
-      min_velocity: [-0.30, 0.0, -0.3]
+      max_velocity: [0.45, 0.0, 0.3]
+      min_velocity: [-0.45, 0.0, -0.3]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
