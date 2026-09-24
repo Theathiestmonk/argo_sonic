@@ -83,7 +83,7 @@
         vy_std: 0.2
         # Kept matched 1:1 with wz_max above
         wz_std: 0.4
-        vx_max: 0.45
+        vx_max: 0.38
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
@@ -236,8 +236,8 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.45, 0.0, 0.3]
-      min_velocity: [-0.45, 0.0, -0.3]
+      max_velocity: [0.38, 0.0, 0.3]
+      min_velocity: [-0.38, 0.0, -0.3]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
