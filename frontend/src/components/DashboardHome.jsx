@@ -891,47 +891,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         )}
 
-        {/* SONIC Info + Status Card */}
-        <div className="glass-card" style={{ padding: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9 }}>
-            <div style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid var(--gold-bright)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--gold-bright)' }}>
-                <circle cx="12" cy="12" r="1"/><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"/><path d="M12 7v5"/>
-              </svg>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em' }}>SONIC</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>Idle</div>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 13 }}>
-            <div>
-              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Location</div>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Home</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Battery</div>
-              <div style={{ fontWeight: 600, color: 'var(--ok)', fontSize: 13 }}>70% - 4h</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Payload</div>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>0 / 20 kg</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.02em', marginBottom: 3 }}>Status</div>
-              <div style={{ fontWeight: 600, color: 'var(--ok)', fontSize: 13 }}>Normal ✓</div>
-            </div>
-          </div>
-        </div>
-
-
-        {/* View Details Button */}
-        <button style={{ padding: '9px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700, background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.25)', color: 'var(--gold-bright)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, marginTop: 12 }}>
-          View Robot Details
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ color: 'var(--gold-bright)' }}>
-            <path d="m9 18 6-6-6-6"/>
-          </svg>
-        </button>
       </aside>
 
       </div>
