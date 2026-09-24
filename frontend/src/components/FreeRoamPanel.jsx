@@ -11,6 +11,35 @@ const pollNavStatus = async (launcherUrl) => {
   }
 }
 
+// Calculate map boundaries from occupancy grid
+function getMapBoundaries(mapData) {
+  if (!mapData) return null
+
+  const { width, height, resolution, origin, data } = mapData
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+
+  // Scan through occupancy grid to find actual explored/mapped area
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const idx = row * width + col
+      const val = data[idx]
+
+      // Include both free space (0-25) and obstacles (>25), exclude unknown (-1)
+      if (val >= 0) {
+        const wx = origin.x + col * resolution
+        const wy = origin.y + (height - 1 - row) * resolution
+
+        minX = Math.min(minX, wx)
+        maxX = Math.max(maxX, wx)
+        minY = Math.min(minY, wy)
+        maxY = Math.max(maxY, wy)
+      }
+    }
+  }
+
+  return minX < Infinity ? { minX, maxX, minY, maxY } : null
+}
+
 // Generate random goal coordinates in free space within the map
 function generateRandomGoal(mapData, robotPose, minDistFromRobot = 0.5) {
   if (!mapData || !robotPose) return null
@@ -18,21 +47,32 @@ function generateRandomGoal(mapData, robotPose, minDistFromRobot = 0.5) {
   const { width, height, resolution, origin, data } = mapData
   const { x: rx, y: ry } = robotPose
 
+  // Get actual map boundaries
+  const bounds = getMapBoundaries(mapData)
+  if (!bounds) return null
+
+  // Add small margin to stay away from map edges
+  const margin = resolution * 2
+  const { minX, maxX, minY, maxY } = bounds
+
   // Try up to 100 times to find a valid goal location
   for (let attempt = 0; attempt < 100; attempt++) {
-    // Random position in map range
-    const col = Math.floor(Math.random() * width)
-    const row = Math.floor(Math.random() * height)
+    // Random position within actual map bounds
+    const wx = minX + margin + Math.random() * (maxX - minX - 2 * margin)
+    const wy = minY + margin + Math.random() * (maxY - minY - 2 * margin)
 
-    // Convert to world coordinates
-    const wx = origin.x + col * resolution
-    const wy = origin.y + (height - 1 - row) * resolution
+    // Convert to grid coordinates
+    const col = Math.floor((wx - origin.x) / resolution)
+    const row = Math.floor((origin.y + (height - 1) * resolution - wy) / resolution)
 
-    // Check if this position is in free space (value < 25) and not too close to current pose
+    // Bounds check
+    if (col < 0 || col >= width || row < 0 || row >= height) continue
+
+    // Check if this position is in free space (value < 25)
     const mapIdx = row * width + col
-    const isFree = data[mapIdx] < 25
+    const isFree = data[mapIdx] >= 0 && data[mapIdx] < 25
 
-    // Check distance from robot
+    // Check distance from robot (avoid too-close goals)
     const dist = Math.sqrt((wx - rx) ** 2 + (wy - ry) ** 2)
     const distValid = dist >= minDistFromRobot
 
@@ -52,31 +92,32 @@ function findFrontierGoals(mapData, robotPose, count = 3) {
   const goals = []
   const visited = new Set()
 
-  // Find frontier cells (free space adjacent to unknown/unexplored)
+  // Find frontier cells (free space adjacent to unknown/unexplored/obstacles)
   for (let row = 1; row < height - 1; row++) {
     for (let col = 1; col < width - 1; col++) {
       const idx = row * width + col
       const cellVal = data[idx]
 
-      // Current cell is free space
-      if (cellVal >= 25 && cellVal !== -1) continue
+      // Current cell must be free space (0-24)
+      if (cellVal < 0 || cellVal >= 25) continue
 
-      // Check 8 neighbors
-      let hasOccupiedNeighbor = false
+      // Check 8 neighbors for obstacles or unknown
+      let isFrontier = false
       for (let dr = -1; dr <= 1; dr++) {
         for (let dc = -1; dc <= 1; dc++) {
           if (dr === 0 && dc === 0) continue
           const nIdx = (row + dr) * width + (col + dc)
           const nVal = data[nIdx]
-          if (nVal > 25 || nVal === -1) {
-            hasOccupiedNeighbor = true
+          // Frontier if neighbor is unknown (-1) or obstacle (>25)
+          if (nVal === -1 || nVal > 25) {
+            isFrontier = true
             break
           }
         }
-        if (hasOccupiedNeighbor) break
+        if (isFrontier) break
       }
 
-      if (hasOccupiedNeighbor) {
+      if (isFrontier) {
         const key = `${row},${col}`
         if (!visited.has(key)) {
           visited.add(key)
