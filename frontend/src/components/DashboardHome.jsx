@@ -662,12 +662,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: goalSetMode ? 'rgba(127,168,232,0.2)' : 'rgba(127,168,232,0.08)',
                     border: `1px solid ${goalSetMode ? 'rgba(127,168,232,0.6)' : 'rgba(127,168,232,0.3)'}`,
-                    color: goalSetMode ? '#7fa8e8' : 'rgba(127,168,232,0.6)',
+                    color: '#ffffff',
                     cursor: connected ? 'pointer' : 'not-allowed',
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  🎯 Goal
+                  Goal
                 </button>
 
                 {/* Patrol Mode */}
@@ -679,12 +679,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: patrolSetMode ? 'rgba(185,140,245,0.2)' : 'rgba(185,140,245,0.08)',
                     border: `1px solid ${patrolSetMode ? 'rgba(185,140,245,0.6)' : 'rgba(185,140,245,0.3)'}`,
-                    color: patrolSetMode ? '#b98cf5' : 'rgba(185,140,245,0.6)',
+                    color: '#ffffff',
                     cursor: connected ? 'pointer' : 'not-allowed',
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  🔄 Patrol
+                  Patrol
                 </button>
 
                 {/* Stop Patrol */}
@@ -701,12 +701,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: 'rgba(240,59,59,0.08)',
                     border: '1px solid rgba(240,59,59,0.3)',
-                    color: 'rgba(240,59,59,0.6)',
+                    color: '#ffffff',
                     cursor: connected ? 'pointer' : 'not-allowed',
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  ⏹ Stop Patrol
+                  Stop Patrol
                 </button>
 
                 {/* Free Roam */}
@@ -723,12 +723,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: freeRoamActive ? 'rgba(147,112,219,0.2)' : 'rgba(147,112,219,0.08)',
                     border: `1px solid ${freeRoamActive ? 'rgba(147,112,219,0.6)' : 'rgba(147,112,219,0.3)'}`,
-                    color: freeRoamActive ? '#b98cf5' : 'rgba(147,112,219,0.6)',
+                    color: '#ffffff',
                     cursor: connected ? 'pointer' : 'not-allowed',
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  🌀 Free Roam
+                  Free Roam
                 </button>
 
                 {/* Pose Mode */}
@@ -742,12 +742,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: poseMode ? 'rgba(59,240,155,0.2)' : 'rgba(59,240,155,0.08)',
                     border: `1px solid ${poseMode ? 'rgba(59,240,155,0.6)' : 'rgba(59,240,155,0.3)'}`,
-                    color: poseMode ? '#3bf09b' : 'rgba(59,240,155,0.6)',
+                    color: '#ffffff',
                     cursor: connected ? 'pointer' : 'not-allowed',
                     opacity: connected ? 1 : 0.5,
                   }}
                 >
-                  {poseMode ? '✕ Pose' : '📍 Pose'}
+                  {poseMode ? 'Cancel Pose' : 'Pose'}
                 </button>
               </div>
           </div>
