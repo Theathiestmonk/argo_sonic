@@ -85,6 +85,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [showRobotSettings, setShowRobotSettings] = useState(false)
   const [freeRoamActive, setFreeRoamActive] = useState(false)
   const [freeRoamStats, setFreeRoamStats] = useState({ goalsReached: 0, goalsFailed: 0 })
+  const [availableMaps, setAvailableMaps] = useState([])
 
   // Save shadowColor to localStorage
   useEffect(() => {
@@ -94,6 +95,24 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       // localStorage unavailable
     }
   }, [shadowColor])
+
+  // Fetch available maps from launcher
+  useEffect(() => {
+    let cancelled = false
+    const loadMaps = async () => {
+      try {
+        const response = await fetch(`${launcherUrl}/maps`)
+        if (!cancelled) {
+          const data = await response.json()
+          setAvailableMaps(data.maps || [])
+        }
+      } catch (err) {
+        console.error('Failed to load maps:', err)
+      }
+    }
+    loadMaps()
+    return () => { cancelled = true }
+  }, [launcherUrl])
 
   useImperativeHandle(ref, () => ({
     toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
@@ -873,6 +892,58 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                   />
                 </div>
               </div>
+            )}
+          </div>
+        </div>
+
+        {/* Map Selector */}
+        <div style={{ padding: 12, background: 'rgba(255,255,255,0.02)', borderRadius: 10 }}>
+          <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em', marginBottom: 10 }}>Select Map</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {availableMaps.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', padding: '8px 0' }}>No maps available</div>
+            ) : (
+              availableMaps.map(map => (
+                <button
+                  key={map}
+                  onClick={() => {
+                    if (!navReady) {
+                      localStorage.setItem('argo_selected_map', map)
+                      window.location.reload()
+                    }
+                  }}
+                  disabled={navReady && selectedMap === map}
+                  title={navReady && selectedMap === map ? 'Locked - running on this map' : 'Click to load map'}
+                  style={{
+                    padding: '9px 12px',
+                    borderRadius: 8,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background: selectedMap === map
+                      ? navReady ? 'rgba(147,112,219,0.2)' : 'rgba(59,240,155,0.15)'
+                      : 'rgba(255,255,255,0.03)',
+                    border: `1px solid ${selectedMap === map
+                      ? navReady ? 'rgba(147,112,219,0.4)' : 'rgba(59,240,155,0.3)'
+                      : 'rgba(255,255,255,0.08)'}`,
+                    color: selectedMap === map
+                      ? navReady ? '#b98cf5' : '#3bf09b'
+                      : 'var(--muted)',
+                    cursor: navReady && selectedMap === map ? 'not-allowed' : 'pointer',
+                    opacity: navReady && selectedMap === map ? 0.6 : 1,
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span>{map}</span>
+                  {selectedMap === map && (
+                    <span style={{ fontSize: 10, color: 'inherit' }}>
+                      {navReady ? '🔒' : '✓'}
+                    </span>
+                  )}
+                </button>
+              ))
             )}
           </div>
         </div>
