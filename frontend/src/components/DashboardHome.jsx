@@ -5,6 +5,7 @@ import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
 import TelemetryCard from './TelemetryCard'
 import Robot3DViewer from './Robot3DViewer'
+import FreeRoamPanel from './FreeRoamPanel'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
@@ -82,6 +83,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   })
   const [modelLoading, setModelLoading] = useState(false)
   const [showRobotSettings, setShowRobotSettings] = useState(false)
+  const [freeRoamActive, setFreeRoamActive] = useState(false)
+  const [freeRoamStats, setFreeRoamStats] = useState({ goalsReached: 0, goalsFailed: 0 })
 
   // Save shadowColor to localStorage
   useEffect(() => {
@@ -709,18 +712,18 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 {/* Free Roam */}
                 <button
                   onClick={() => {
-                    if (connected && onFreeRoam) {
-                      onFreeRoam()
-                      showToast?.('Navigating to Free Roam mode…', 'ok')
+                    if (connected) {
+                      setFreeRoamActive(v => !v)
+                      showToast?.(freeRoamActive ? 'Free Roam closed' : 'Free Roam panel opened', 'ok')
                     }
                   }}
                   disabled={!connected}
-                  title="Start autonomous free roam exploration"
+                  title={freeRoamActive ? 'Close Free Roam' : 'Start autonomous free roam exploration'}
                   style={{
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                    background: 'rgba(147,112,219,0.08)',
-                    border: '1px solid rgba(147,112,219,0.3)',
-                    color: 'rgba(147,112,219,0.6)',
+                    background: freeRoamActive ? 'rgba(147,112,219,0.2)' : 'rgba(147,112,219,0.08)',
+                    border: `1px solid ${freeRoamActive ? 'rgba(147,112,219,0.6)' : 'rgba(147,112,219,0.3)'}`,
+                    color: freeRoamActive ? '#b98cf5' : 'rgba(147,112,219,0.6)',
                     cursor: connected ? 'pointer' : 'not-allowed',
                     opacity: connected ? 1 : 0.5,
                   }}
@@ -873,6 +876,20 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             )}
           </div>
         </div>
+
+        {/* Free Roam Panel */}
+        {freeRoamActive && (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <FreeRoamPanel
+              mapData={mapData}
+              robotPose={robotPose}
+              connected={connected}
+              showToast={showToast}
+              launcherUrl={launcherUrl}
+              mapName={selectedMap}
+            />
+          </div>
+        )}
 
         {/* SONIC Info + Status Card */}
         <div className="glass-card" style={{ padding: 10 }}>

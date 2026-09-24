@@ -228,20 +228,24 @@ export default function FreeRoamPanel({
 
   return (
     <div style={{
-      padding: 18,
+      padding: 14,
       background: 'rgba(147,112,219,0.05)',
       border: '1px solid rgba(147,112,219,0.2)',
-      borderRadius: 14,
+      borderRadius: 12,
       display: 'flex',
       flexDirection: 'column',
-      gap: 12,
+      gap: 10,
+      flex: 1,
+      minHeight: 0,
+      overflow: 'auto',
     }}>
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        gap: 8,
       }}>
-        <div className="label-xs">Free Roam Mode</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Free Roam</div>
         <span style={{
           fontSize: 10,
           fontWeight: 700,
@@ -257,14 +261,14 @@ export default function FreeRoamPanel({
 
       {/* Mode selector */}
       {!roamActive && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 2 }}>
           <button
             onClick={() => setExplorationMode('random')}
             style={{
               flex: 1,
-              padding: '10px 12px',
-              borderRadius: 10,
-              fontSize: 12,
+              padding: '8px 10px',
+              borderRadius: 8,
+              fontSize: 10,
               fontWeight: 600,
               background: explorationMode === 'random' ? 'rgba(147,112,219,0.15)' : 'rgba(255,255,255,0.03)',
               border: `1px solid ${explorationMode === 'random' ? 'rgba(147,112,219,0.3)' : 'rgba(255,255,255,0.08)'}`,
@@ -279,9 +283,9 @@ export default function FreeRoamPanel({
             onClick={() => setExplorationMode('frontier')}
             style={{
               flex: 1,
-              padding: '10px 12px',
-              borderRadius: 10,
-              fontSize: 12,
+              padding: '8px 10px',
+              borderRadius: 8,
+              fontSize: 10,
               fontWeight: 600,
               background: explorationMode === 'frontier' ? 'rgba(147,112,219,0.15)' : 'rgba(255,255,255,0.03)',
               border: `1px solid ${explorationMode === 'frontier' ? 'rgba(147,112,219,0.3)' : 'rgba(255,255,255,0.08)'}`,
@@ -352,16 +356,16 @@ export default function FreeRoamPanel({
       )}
 
       {/* Controls */}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 6, marginTop: 'auto' }}>
         {!roamActive ? (
           <button
             onClick={startRoam}
             disabled={!connected}
             style={{
               flex: 1,
-              padding: '11px 12px',
-              borderRadius: 10,
-              fontSize: 12,
+              padding: '9px 10px',
+              borderRadius: 8,
+              fontSize: 11,
               fontWeight: 700,
               background: connected ? 'rgba(147,112,219,0.15)' : 'rgba(255,255,255,0.03)',
               border: `1px solid ${connected ? 'rgba(147,112,219,0.3)' : 'rgba(255,255,255,0.08)'}`,
@@ -379,9 +383,9 @@ export default function FreeRoamPanel({
                 onClick={pauseRoam}
                 style={{
                   flex: 1,
-                  padding: '11px 12px',
-                  borderRadius: 10,
-                  fontSize: 12,
+                  padding: '9px 10px',
+                  borderRadius: 8,
+                  fontSize: 11,
                   fontWeight: 700,
                   background: 'rgba(226,179,92,0.1)',
                   border: '1px solid rgba(226,179,92,0.25)',
@@ -397,9 +401,9 @@ export default function FreeRoamPanel({
                 onClick={resumeRoam}
                 style={{
                   flex: 1,
-                  padding: '11px 12px',
-                  borderRadius: 10,
-                  fontSize: 12,
+                  padding: '9px 10px',
+                  borderRadius: 8,
+                  fontSize: 11,
                   fontWeight: 700,
                   background: 'rgba(59,240,155,0.1)',
                   border: '1px solid rgba(59,240,155,0.25)',
@@ -414,9 +418,9 @@ export default function FreeRoamPanel({
             <button
               onClick={stopRoam}
               style={{
-                padding: '11px 16px',
-                borderRadius: 10,
-                fontSize: 12,
+                padding: '9px 12px',
+                borderRadius: 8,
+                fontSize: 11,
                 fontWeight: 700,
                 background: 'rgba(255,94,94,0.1)',
                 border: '1px solid rgba(255,94,94,0.25)',
