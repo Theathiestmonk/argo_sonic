@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from 'react'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
+import FreeRoamPanel from './FreeRoamPanel'
 import { ros } from '../ros'
 
 // ── Segmented mode toggle ─────────────────────────────────────────────────────
-function ModeToggle({ mode, onAuto, onManual, disabled }) {
+function ModeToggle({ mode, onAuto, onManual, onFreeRoam, disabled }) {
   const opts = [
-    { id: 'auto',   label: 'Auto Explore', active: mode === 'auto',   gold: true,  onClick: onAuto   },
-    { id: 'manual', label: "I'll Drive",   active: mode === 'manual', gold: false, onClick: onManual },
+    { id: 'auto',   label: 'Auto Explore', active: mode === 'auto',   gold: true,  onClick: onAuto      },
+    { id: 'freeRoam', label: 'Free Roam',  active: mode === 'freeRoam', gold: false, onClick: onFreeRoam },
+    { id: 'manual', label: "I'll Drive",   active: mode === 'manual', gold: false, onClick: onManual    },
   ]
   return (
     <div style={{
@@ -121,10 +123,12 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
   const startStack = async () => {
     if (!mode) return
     setStackState('starting')
-    showToast(
-      mode === 'manual' ? 'Starting SLAM mapping — please wait…' : 'Starting Argo stack — please wait…',
-      'info',
-    )
+    const toastMsg = mode === 'manual'
+      ? 'Starting SLAM mapping — please wait…'
+      : mode === 'freeRoam'
+        ? 'Starting Free Roam — please wait…'
+        : 'Starting Argo stack — please wait…'
+    showToast(toastMsg, 'info')
     try {
       await fetch(`${launcherUrl}/start`, {
         method: 'POST',
@@ -169,10 +173,17 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     setMode('manual')
   }
 
+  const selectFreeRoam = () => {
+    if (stackState === 'running' || stackState === 'starting') return
+    setMode('freeRoam')
+  }
+
   useEffect(() => {
     if (stackState === 'running' && mode === 'auto') {
       pauseTopicRef.current?.publish({ data: false })
       showToast('Argo is now exploring automatically', 'ok')
+    } else if (stackState === 'running' && mode === 'freeRoam') {
+      showToast('Free Roam mode ready — start roaming when you\'re ready', 'ok')
     } else if (stackState === 'running' && mode === 'manual') {
       showToast('Manual mode — use controls to drive', 'info')
     }
@@ -252,16 +263,21 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
             <div className="label-xs">How should Argo map?</div>
             {connected && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 10px', borderRadius: 99, background: 'rgba(59,240,155,0.1)', border: '1px solid rgba(59,240,155,0.25)', color: 'var(--ok)' }}>Connected</span>}
           </div>
-          <ModeToggle mode={mode} onAuto={selectAuto} onManual={selectManual} disabled={stackState === 'running' || isStarting} />
+          <ModeToggle mode={mode} onAuto={selectAuto} onManual={selectManual} onFreeRoam={selectFreeRoam} disabled={stackState === 'running' || isStarting} />
           {stackState === 'running' && (
             <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
               <strong style={{ color: '#fff' }}>Stop stack</strong> below to choose a different mode.
             </p>
           )}
           {stackState !== 'running' && !isStarting && !mode && (
-            <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
-              Choose how Argo should map your space, then start the stack below.
-            </p>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.65 }}>
+              <p style={{ marginBottom: 8 }}>Choose how Argo should map your space, then start the stack below:</p>
+              <ul style={{ paddingLeft: 16, margin: 0 }}>
+                <li style={{ marginBottom: 4 }}><strong>Auto Explore</strong> — Frontier-based autonomous exploration</li>
+                <li style={{ marginBottom: 4 }}><strong>Free Roam</strong> — Random wandering with obstacle avoidance</li>
+                <li><strong>I'll Drive</strong> — Manual control</li>
+              </ul>
+            </div>
           )}
         </div>
 
@@ -276,7 +292,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gold-bright)' }}>Starting up…</div>
                   <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
-                    {mode === 'manual' ? 'SLAM and sensors are launching' : 'SLAM, Nav2 and sensors are launching'}
+                    {mode === 'manual' ? 'SLAM and sensors are launching' : mode === 'freeRoam' ? 'SLAM, Nav2, sensors and free roam are launching' : 'SLAM, Nav2 and sensors are launching'}
                   </div>
                 </div>
               </div>
@@ -339,8 +355,22 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
             </div>
 
             <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14, lineHeight: 1.65 }}>
-              Argo will scan every corner on its own. Switch to <strong style={{ color: '#fff' }}>I'll Drive</strong> to take over at any time.
+              Argo will scan every corner on its own. Switch to <strong style={{ color: '#fff' }}>I'll Drive</strong> or <strong style={{ color: '#fff' }}>Free Roam</strong> to take over at any time.
             </p>
+          </div>
+        )}
+
+        {/* Free Roam Mode */}
+        {stackState === 'running' && mode === 'freeRoam' && (
+          <div className="glass-card" style={{ padding: 24, animation: 'slideUp 0.2s ease' }}>
+            <FreeRoamPanel
+              mapData={mapData}
+              robotPose={robotPose}
+              connected={connected}
+              showToast={showToast}
+              launcherUrl={launcherUrl}
+              mapName="default_map"
+            />
           </div>
         )}
 
