@@ -169,12 +169,13 @@ export default function FreeRoamPanel({
 
       // Send navigation goal
       try {
+        const mapToUse = mapName || 'office_map'
         const response = await fetch(`${launcherUrl}/nav/goto`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            destination: `FreeRoam (${nextGoal.x.toFixed(2)}, ${nextGoal.y.toFixed(2)})`,
-            map: mapName || 'default',
+            destination: `roam_${Math.random().toString(36).substr(2, 9)}`,
+            map: mapToUse,
           }),
         })
 

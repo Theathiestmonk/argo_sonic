@@ -886,7 +886,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               connected={connected}
               showToast={showToast}
               launcherUrl={launcherUrl}
-              mapName={selectedMap}
+              mapName={selectedMap || 'office_map'}
             />
           </div>
         )}
