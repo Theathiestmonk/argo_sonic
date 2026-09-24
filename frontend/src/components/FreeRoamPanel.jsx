@@ -149,10 +149,13 @@ export default function FreeRoamPanel({
   const [navigationStatus, setNavigationStatus] = useState('idle')
   const [roamStats, setRoamStats] = useState({ goalsReached: 0, goalsFailed: 0, totalDistance: 0 })
   const [explorationMode, setExplorationMode] = useState('random') // 'random' or 'frontier'
+  const [waitingForRecovery, setWaitingForRecovery] = useState(false)
 
   const roamIntervalRef = useRef(null)
-  const navStatusPollRef = useRef(null)
   const currentGoalRef = useRef(null)
+  const goalStartTimeRef = useRef(null)
+  const GOAL_TIMEOUT_MS = 45000 // 45 seconds to reach each goal
+  const RECOVERY_WAIT_MS = 5000  // 5 second wait after failure
 
   // Check if robot has arrived at current goal via pose tracking
   useEffect(() => {
@@ -162,8 +165,11 @@ export default function FreeRoamPanel({
       const goal = currentGoalRef.current
       if (!goal) return
 
-      const dist = Math.hypot(robotPose.x - goal.x, robotPose.y - goal.y)
+      const now = Date.now()
+      const elapsedMs = now - goalStartTimeRef.current
       const ARRIVAL_RADIUS = 0.5 // 50cm arrival threshold
+
+      const dist = Math.hypot(robotPose.x - goal.x, robotPose.y - goal.y)
 
       if (dist <= ARRIVAL_RADIUS) {
         // Goal reached!
@@ -171,10 +177,28 @@ export default function FreeRoamPanel({
           ...prev,
           goalsReached: prev.goalsReached + 1,
         }))
-        showToast('Goal reached! Finding next destination...', 'ok')
+        showToast('✓ Goal reached! Finding next destination...', 'ok')
         currentGoalRef.current = null
+        goalStartTimeRef.current = null
         setCurrentGoal(null)
         setNavigationStatus('idle')
+      } else if (elapsedMs > GOAL_TIMEOUT_MS) {
+        // Goal timeout - unreachable, wait before trying new one
+        showToast(`✗ Goal unreachable after ${(GOAL_TIMEOUT_MS / 1000).toFixed(0)}s - waiting 5s before retry...`, 'warn')
+        setRoamStats(prev => ({
+          ...prev,
+          goalsFailed: prev.goalsFailed + 1,
+        }))
+        currentGoalRef.current = null
+        goalStartTimeRef.current = null
+        setCurrentGoal(null)
+        setNavigationStatus('idle')
+        setWaitingForRecovery(true)
+
+        // Wait 5 seconds before trying next goal
+        setTimeout(() => {
+          setWaitingForRecovery(false)
+        }, RECOVERY_WAIT_MS)
       }
     }
 
@@ -184,7 +208,7 @@ export default function FreeRoamPanel({
 
   // Generate and send next goal
   useEffect(() => {
-    if (!roamActive || roamPaused || navigationStatus === 'navigating' || !mapData || !robotPose) return
+    if (!roamActive || roamPaused || navigationStatus === 'navigating' || !mapData || !robotPose || waitingForRecovery) return
 
     const generateAndNavigate = async () => {
       let nextGoal = null
@@ -224,8 +248,9 @@ export default function FreeRoamPanel({
 
         setCurrentGoal(nextGoal)
         currentGoalRef.current = nextGoal
+        goalStartTimeRef.current = Date.now()
         setNavigationStatus('navigating')
-        showToast(`Navigating to (${nextGoal.x.toFixed(1)}, ${nextGoal.y.toFixed(1)})`, 'ok')
+        showToast(`→ Navigating to (${nextGoal.x.toFixed(1)}, ${nextGoal.y.toFixed(1)})`, 'ok')
       } catch (err) {
         showToast('Failed to send navigation goal', 'danger')
         console.error('Navigation error:', err)
@@ -234,7 +259,7 @@ export default function FreeRoamPanel({
 
     roamIntervalRef.current = setTimeout(generateAndNavigate, 500)
     return () => clearTimeout(roamIntervalRef.current)
-  }, [roamActive, roamPaused, navigationStatus, mapData, robotPose, explorationMode, launcherUrl, mapName, showToast])
+  }, [roamActive, roamPaused, navigationStatus, mapData, robotPose, explorationMode, launcherUrl, mapName, showToast, waitingForRecovery])
 
   const startRoam = () => {
     if (!connected) {
@@ -368,7 +393,25 @@ export default function FreeRoamPanel({
           fontSize: 12,
           color: 'var(--muted)',
         }}>
-          {navigationStatus === 'navigating' && currentGoal && (
+          {waitingForRecovery && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--gold-bright)' }}>
+              <div style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                border: '2px solid var(--gold-bright)',
+                borderTopColor: 'transparent',
+                animation: 'spin-slow 1s linear infinite',
+              }} />
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600 }}>Recovering...</div>
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>
+                  Waiting 5 seconds
+                </div>
+              </div>
+            </div>
+          )}
+          {navigationStatus === 'navigating' && currentGoal && !waitingForRecovery && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{
                 width: 10,
@@ -386,7 +429,7 @@ export default function FreeRoamPanel({
               </div>
             </div>
           )}
-          {navigationStatus === 'idle' && roamActive && !roamPaused && (
+          {navigationStatus === 'idle' && roamActive && !roamPaused && !waitingForRecovery && (
             <div>Searching for next destination...</div>
           )}
           {roamPaused && (
