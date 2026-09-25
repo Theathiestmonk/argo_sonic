@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Battery Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', 'Helvetica Neue', sans-serif;
+            background: #0a0a0f;
+            color: #ffffff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .battery-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(20, 20, 30, 0.6);
+            backdrop-filter: blur(10px);
+            padding: 16px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(226, 179, 92, 0.2);
+            font-size: 14px;
+            z-index: 10;
+            min-width: 140px;
+        }
+
+        .battery-level {
+            font-size: 24px;
+            font-weight: 700;
+            color: #3bf09b;
+            margin-bottom: 4px;
+        }
+
+        .battery-status {
+            font-size: 12px;
+            color: rgba(200, 200, 220, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+<body>
+    <div class="battery-overlay">
+        <div class="battery-level" id="batteryPercent">68%</div>
+        <div class="battery-status" id="batteryStatus">Idle</div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@r128/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ============================================
+        // SCENE SETUP
+        // ============================================
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0f);
+        scene.fog = new THREE.Fog(0x0a0a0f, 50, 100);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFShadowShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        document.body.appendChild(renderer.domElement);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(3, 2, 5);
+        camera.lookAt(0, 0, 0);
+
+        // ============================================
+        // LIGHTING
+        // ============================================
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        keyLight.position.set(5, 8, 5);
+        keyLight.castShadow = true;
+        keyLight.shadow.mapSize.width = 2048;
+        keyLight.shadow.mapSize.height = 2048;
+        keyLight.shadow.camera.far = 30;
+        keyLight.shadow.camera.left = -15;
+        keyLight.shadow.camera.right = 15;
+        keyLight.shadow.camera.top = 15;
+        keyLight.shadow.camera.bottom = -15;
+        keyLight.shadow.bias = -0.0001;
+        scene.add(keyLight);
+
+        const rimLight = new THREE.DirectionalLight(0x88ccff, 0.4);
+        rimLight.position.set(-5, 3, -5);
+        scene.add(rimLight);
+
+        const fillLight = new THREE.PointLight(0xffffff, 0.3);
+        fillLight.position.set(-3, 1, 2);
+        scene.add(fillLight);
+
+        // ============================================
+        // FLOOR & SHADOWS
+        // ============================================
+        const floorGeometry = new THREE.PlaneGeometry(20, 20);
+        const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.3 });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // ============================================
+        // BATTERY GROUP & STATE
+        // ============================================
+        const batteryGroup = new THREE.Group();
+        batteryGroup.castShadow = true;
+        batteryGroup.receiveShadow = true;
+        scene.add(batteryGroup);
+
+        let batteryLevel = 68;
+        let isCharging = false;
+        let animationTime = 0;
+
+        // ============================================
+        // MATERIALS
+        // ============================================
+
+        // Glass shell material
+        const glassMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0x1a1a2e,
+            metalness: 0.1,
+            roughness: 0.15,
+            transmission: 0.7,
+            thickness: 0.5,
+            clearcoat: 0.3,
+            clearcoatRoughness: 0.2,
+            ior: 1.5,
+            side: THREE.FrontSide
+        });
+
+        // Metallic caps material
+        const metalMaterial = new THREE.MeshStandardMaterial({
+            color: 0xc0c0c0,
+            metalness: 0.9,
+            roughness: 0.2,
+            envMapIntensity: 1.0
+        });
+
+        // ============================================
+        // CREATE BATTERY BODY
+        // ============================================
+        function createBatteryBody() {
+            const bodyGeometry = new THREE.CylinderGeometry(0.6, 0.6, 3, 32, 16);
+            const body = new THREE.Mesh(bodyGeometry, glassMaterial);
+            body.castShadow = true;
+            body.receiveShadow = true;
+            return body;
+        }
+
+        // ============================================
+        // CREATE BATTERY CAPS
+        // ============================================
+        function createBatteryCaps() {
+            const capsGroup = new THREE.Group();
+
+            // Top cap
+            const topCapGeometry = new THREE.CylinderGeometry(0.62, 0.6, 0.3, 32);
+            const topCap = new THREE.Mesh(topCapGeometry, metalMaterial);
+            topCap.position.y = 1.65;
+            topCap.castShadow = true;
+            topCap.receiveShadow = true;
+            capsGroup.add(topCap);
+
+            // Top terminal (positive)
+            const terminalGeometry = new THREE.CylinderGeometry(0.12, 0.15, 0.2, 24);
+            const terminal = new THREE.Mesh(terminalGeometry, metalMaterial);
+            terminal.position.y = 1.85;
+            terminal.castShadow = true;
+            terminal.receiveShadow = true;
+            capsGroup.add(terminal);
+
+            // Bottom cap
+            const bottomCapGeometry = new THREE.CylinderGeometry(0.62, 0.6, 0.25, 32);
+            const bottomCap = new THREE.Mesh(bottomCapGeometry, metalMaterial);
+            bottomCap.position.y = -1.65;
+            bottomCap.castShadow = true;
+            bottomCap.receiveShadow = true;
+            capsGroup.add(bottomCap);
+
+            return capsGroup;
+        }
+
+        // ============================================
+        // CREATE ENERGY FILL
+        // ============================================
+        let energyBody = null;
+        let energySurface = null;
+
+        function createEnergy() {
+            const energyGroup = new THREE.Group();
+
+            // Calculate height based on battery level
+            const maxHeight = 2.8;
+            const fillHeight = (batteryLevel / 100) * maxHeight;
+            const startY = -1.4 + (fillHeight / 2);
+
+            // Energy body
+            const energyGeometry = new THREE.CylinderGeometry(0.55, 0.55, fillHeight, 32, 8);
+
+            // Color based on battery level
+            let energyColor = getEnergyColor(batteryLevel);
+
+            const energyMaterial = new THREE.MeshStandardMaterial({
+                color: energyColor,
+                metalness: 0.0,
+                roughness: 0.3,
+                emissive: energyColor,
+                emissiveIntensity: 0.6,
+                transparent: true,
+                opacity: 0.85
+            });
+
+            energyBody = new THREE.Mesh(energyGeometry, energyMaterial);
+            energyBody.position.y = startY;
+            energyBody.castShadow = true;
+            energyBody.receiveShadow = true;
+            energyGroup.add(energyBody);
+
+            // Energy surface (top)
+            const surfaceGeometry = new THREE.CylinderGeometry(0.55, 0.55, 0.1, 32, 4);
+            const surfaceMaterial = new THREE.MeshStandardMaterial({
+                color: energyColor,
+                metalness: 0.0,
+                roughness: 0.2,
+                emissive: energyColor,
+                emissiveIntensity: 0.8
+            });
+
+            energySurface = new THREE.Mesh(surfaceGeometry, surfaceMaterial);
+            energySurface.position.y = startY + fillHeight / 2 + 0.05;
+            energySurface.castShadow = true;
+            energySurface.receiveShadow = true;
+            energyGroup.add(energySurface);
+
+            return energyGroup;
+        }
+
+        // ============================================
+        // GET ENERGY COLOR
+        // ============================================
+        function getEnergyColor(level) {
+            let color;
+            if (level <= 20) {
+                // Deep red/orange-red
+                color = new THREE.Color(0xff4500);
+            } else if (level <= 40) {
+                // Orange
+                color = new THREE.Color().lerpColors(
+                    new THREE.Color(0xff6b1a),
+                    new THREE.Color(0xffa500),
+                    (level - 20) / 20
+                );
+            } else if (level <= 65) {
+                // Yellow/lime
+                color = new THREE.Color().lerpColors(
+                    new THREE.Color(0xffd700),
+                    new THREE.Color(0x7fff00),
+                    (level - 40) / 25
+                );
+            } else {
+                // Green/cyan-green
+                color = new THREE.Color().lerpColors(
+                    new THREE.Color(0x3bf09b),
+                    new THREE.Color(0x00ff88),
+                    (level - 65) / 35
+                );
+            }
+            return color;
+        }
+
+        // ============================================
+        // CREATE PARTICLES
+        // ============================================
+        let particles = [];
+
+        function createParticles() {
+            const particleGroup = new THREE.Group();
+            const particleCount = 30;
+            const maxHeight = 2.8;
+            const fillHeight = (batteryLevel / 100) * maxHeight;
+            const startY = -1.4;
+            const endY = startY + fillHeight;
+
+            for (let i = 0; i < particleCount; i++) {
+                const particleGeometry = new THREE.SphereGeometry(0.02, 8, 8);
+                const energyColor = getEnergyColor(batteryLevel);
+                const particleMaterial = new THREE.MeshStandardMaterial({
+                    color: energyColor,
+                    emissive: energyColor,
+                    emissiveIntensity: 0.8,
+                    metalness: 0.2,
+                    roughness: 0.4
+                });
+
+                const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+                particle.position.set(
+                    (Math.random() - 0.5) * 0.8,
+                    startY + Math.random() * fillHeight,
+                    (Math.random() - 0.5) * 0.8
+                );
+
+                particle.userData = {
+                    velocity: new THREE.Vector3(
+                        (Math.random() - 0.5) * 0.2,
+                        Math.random() * 0.3 + 0.1,
+                        (Math.random() - 0.5) * 0.2
+                    ),
+                    life: Math.random() * Math.PI * 2,
+                    maxHeight: endY - 0.1
+                };
+
+                particleGroup.add(particle);
+                particles.push(particle);
+            }
+
+            return particleGroup;
+        }
+
+        // ============================================
+        // INITIALIZE BATTERY
+        // ============================================
+        const batteryBody = createBatteryBody();
+        const batteryCaps = createBatteryCaps();
+        const energyGroup = createEnergy();
+        const particleGroup = createParticles();
+
+        batteryGroup.add(batteryBody);
+        batteryGroup.add(batteryCaps);
+        batteryGroup.add(energyGroup);
+        batteryGroup.add(particleGroup);
+
+        // ============================================
+        // SET BATTERY LEVEL
+        // ============================================
+        function setBatteryLevel(newLevel) {
+            batteryLevel = Math.max(0, Math.min(100, newLevel));
+
+            // Update display
+            document.getElementById('batteryPercent').textContent = Math.round(batteryLevel) + '%';
+
+            // Recreate energy
+            batteryGroup.remove(energyGroup);
+            batteryGroup.remove(particleGroup);
+
+            const newEnergyGroup = createEnergy();
+            const newParticleGroup = createParticles();
+
+            batteryGroup.add(newEnergyGroup);
+            batteryGroup.add(newParticleGroup);
+        }
+
+        // ============================================
+        // SET CHARGING
+        // ============================================
+        function setCharging(charging) {
+            isCharging = charging;
+            document.getElementById('batteryStatus').textContent = charging ? 'Charging' : 'Idle';
+        }
+
+        // ============================================
+        // ANIMATE PARTICLES
+        // ============================================
+        function animateParticles(time) {
+            const maxHeight = 2.8;
+            const fillHeight = (batteryLevel / 100) * maxHeight;
+            const startY = -1.4;
+            const endY = startY + fillHeight;
+
+            particles.forEach((particle) => {
+                if (isCharging) {
+                    particle.position.add(
+                        particle.userData.velocity.clone().multiplyScalar(0.016)
+                    );
+
+                    if (particle.position.y > particle.userData.maxHeight) {
+                        particle.position.y = startY;
+                        particle.position.x = (Math.random() - 0.5) * 0.8;
+                        particle.position.z = (Math.random() - 0.5) * 0.8;
+                    }
+                } else {
+                    // Idle gentle movement
+                    particle.position.y = startY + fillHeight * 0.5 +
+                        Math.sin(time * 0.5 + particle.userData.life) * 0.1;
+                }
+            });
+        }
+
+        // ============================================
+        // ANIMATE ENERGY SURFACE
+        // ============================================
+        function animateEnergySurface(time) {
+            if (energySurface && energyBody) {
+                const maxHeight = 2.8;
+                const fillHeight = (batteryLevel / 100) * maxHeight;
+                const startY = -1.4 + (fillHeight / 2);
+
+                if (isCharging) {
+                    energySurface.scale.x = 1 + Math.sin(time * 2) * 0.02;
+                    energySurface.scale.z = 1 + Math.sin(time * 2) * 0.02;
+                    energySurface.position.y = startY + fillHeight / 2 + 0.05 +
+                        Math.sin(time * 1.5) * 0.03;
+                } else {
+                    energySurface.scale.x = 1;
+                    energySurface.scale.z = 1;
+                    energySurface.position.y = startY + fillHeight / 2 + 0.05;
+                }
+            }
+        }
+
+        // ============================================
+        // ANIMATION LOOP
+        // ============================================
+        function animate() {
+            requestAnimationFrame(animate);
+            animationTime += 0.016;
+
+            // Idle animation
+            batteryGroup.position.y = Math.sin(animationTime * 0.8) * 0.03;
+            batteryGroup.rotation.z = Math.cos(animationTime * 0.6) * 0.01;
+
+            // Particle animation
+            animateParticles(animationTime);
+
+            // Energy surface animation
+            animateEnergySurface(animationTime);
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // ============================================
+        // RESIZE HANDLING
+        // ============================================
+        window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        });
+
+        // ============================================
+        // EXPOSE GLOBAL API
+        // ============================================
+        window.setBatteryLevel = setBatteryLevel;
+        window.setCharging = setCharging;
+
+        // Initialize
+        document.getElementById('batteryPercent').textContent = batteryLevel + '%';
+        document.getElementById('batteryStatus').textContent = 'Idle';
+
+        // ============================================
+        // LISTEN FOR PARENT MESSAGES
+        // ============================================
+        window.addEventListener('message', (event) => {
+            if (event.data.type === 'UPDATE_BATTERY') {
+                const { level, charging } = event.data.payload;
+                setBatteryLevel(level);
+                setCharging(charging);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -683,6 +683,7 @@ export default function App() {
             plannedPath={plannedPath}
             driveTelemetry={driveTelemetry}
             sensorDistances={sensorDistances}
+            battery={battery}
             onOpenSettings={() => setShowSettings(true)}
             onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
             onFreeRoam={() => { setView('wizard'); setStep(1) }}

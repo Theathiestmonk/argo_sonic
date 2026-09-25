@@ -4,8 +4,9 @@ import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
 import TelemetryCard from './TelemetryCard'
-import Robot3DViewer from './Robot3DViewer'
+import CylindricalBattery from './CylindricalBattery'
 import FreeRoamPanel from './FreeRoamPanel'
+import Map3DViewer from './Map3DViewer'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
@@ -18,6 +19,15 @@ import FreeRoamPanel from './FreeRoamPanel'
 // '$'-prefixed formatting TablesPanel.jsx uses for the same reason — no
 // shared access to menu-data.js's currency/tax settings here.
 const money = (n) => '$' + Number(n || 0).toFixed(2)
+
+// Get battery color based on level
+const getColor = (percent) => {
+  if (percent <= 20) return { bg: '#ff3333', glow: '#ff3333' }
+  if (percent <= 40) return { bg: '#ff8c00', glow: '#ff8c00' }
+  if (percent <= 60) return { bg: '#ffd700', glow: '#ffd700' }
+  if (percent <= 80) return { bg: '#90ee90', glow: '#90ee90' }
+  return { bg: '#3bf09b', glow: '#3bf09b' }
+}
 
 // A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
 // waypoints/<map>.json file — it has NO guaranteed relationship to the
@@ -50,8 +60,11 @@ const TABLE_ACTIONS = [
   ['Billing',      'Send Bill'],
 ]
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
   const [tables, setTables]         = useState({})
+  const [view3d, setView3d] = useState(() => {
+    try { return localStorage.getItem('argo_map_view3d') === '1' } catch { return false }
+  })
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [goalSetMode, setGoalSetMode] = useState(false)
   const [patrolSetMode, setPatrolSetMode] = useState(false)
@@ -74,27 +87,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [transcript, setTranscript] = useState({ session_id: null, started_at: null, turns: [] })
   const [selectedTable, setSelectedTable] = useState(null)  // {key, name, x, y} when a table is clicked on map
   const transcriptBottomRef = useRef(null)
-  const [shadowColor, setShadowColor] = useState(() => {
-    try {
-      return localStorage.getItem('shadowColor') || '#e2b35c'
-    } catch {
-      return '#e2b35c'
-    }
-  })
   const [modelLoading, setModelLoading] = useState(false)
-  const [showRobotSettings, setShowRobotSettings] = useState(false)
   const [freeRoamActive, setFreeRoamActive] = useState(false)
   const [freeRoamStats, setFreeRoamStats] = useState({ goalsReached: 0, goalsFailed: 0 })
   const [availableMaps, setAvailableMaps] = useState([])
-
-  // Save shadowColor to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('shadowColor', shadowColor)
-    } catch {
-      // localStorage unavailable
-    }
-  }, [shadowColor])
 
   // Fetch available maps from launcher
   useEffect(() => {
@@ -121,17 +117,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     estop: estop,
     setPoseMode: setPoseMode,
   }))
-
-  // Close settings on outside click
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (showRobotSettings && !e.target.closest('[data-robot-settings]')) {
-        setShowRobotSettings(false)
-      }
-    }
-    document.addEventListener('click', handleClickOutside)
-    return () => document.removeEventListener('click', handleClickOutside)
-  }, [showRobotSettings])
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
   // the robot; picking a map here only decides which waypoints.json to read.
@@ -618,6 +603,18 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       .catch(() => showToast('Could not reach launcher to resume motors', 'danger'))
   }
 
+  // Shared by the 2D canvas and the 3D viewer.
+  const tableMarkerList = Object.entries(tables)
+    .filter(([key]) => key !== '0')
+    .map(([key, t]) => ({ key, name: t.name || `Table ${key}`, x: t.x, y: t.y }))
+  // Goal/Patrol/Pose are click-on-the-2D-canvas tools.
+  const canvasTools = connected && !view3d
+  const chooseView = (to3d) => {
+    if (to3d) { setGoalSetMode(false); setPatrolSetMode(false); setPoseMode(false) }
+    setView3d(to3d)
+    try { localStorage.setItem('argo_map_view3d', to3d ? '1' : '0') } catch { /* private mode */ }
+  }
+
   const radialPages = [
     { id: 'overview', label: 'Overview', action: () => document.getElementById('dash-overview')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg> },
@@ -670,20 +667,37 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         {/* Live Map */}
         <section id="dash-activity" style={{ height: 'calc(100vh - 140px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 12px 8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 14, fontWeight: 700 }}>Location Map</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 14, fontWeight: 700 }}>Location Map</div>
+              <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.16)' }}>
+                {[['2D', false], ['3D', true]].map(([label, to3d]) => (
+                  <button
+                    key={label}
+                    onClick={() => chooseView(to3d)}
+                    title={to3d ? 'View the map as a 3D building' : 'Flat map with click-to-set tools'}
+                    style={{
+                      padding: '5px 11px', fontSize: 12, fontWeight: 700, color: '#fff', cursor: 'pointer', border: 'none',
+                      background: view3d === to3d ? 'rgba(226,179,92,0.32)' : 'rgba(255,255,255,0.05)',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: 8 }}>
               {/* Goal Mode */}
               <button
-                onClick={() => connected && setGoalSetMode(v => !v)}
-                  disabled={!connected}
-                  title={goalSetMode ? 'Cancel goal setting' : 'Click on map to set goal'}
+                onClick={() => canvasTools && setGoalSetMode(v => !v)}
+                  disabled={!canvasTools}
+                  title={view3d ? 'Switch to the 2D map to set a goal' : goalSetMode ? 'Cancel goal setting' : 'Click on map to set goal'}
                   style={{
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: goalSetMode ? 'rgba(127,168,232,0.2)' : 'rgba(127,168,232,0.08)',
                     border: `1px solid ${goalSetMode ? 'rgba(127,168,232,0.6)' : 'rgba(127,168,232,0.3)'}`,
                     color: '#ffffff',
-                    cursor: connected ? 'pointer' : 'not-allowed',
-                    opacity: connected ? 1 : 0.5,
+                    cursor: canvasTools ? 'pointer' : 'not-allowed',
+                    opacity: canvasTools ? 1 : 0.5,
                   }}
                 >
                   Goal
@@ -691,16 +705,16 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
                 {/* Patrol Mode */}
                 <button
-                  onClick={() => connected && setPatrolSetMode(v => !v)}
-                  disabled={!connected}
-                  title={patrolSetMode ? 'Cancel patrol setting' : 'Set patrol route'}
+                  onClick={() => canvasTools && setPatrolSetMode(v => !v)}
+                  disabled={!canvasTools}
+                  title={view3d ? 'Switch to the 2D map to set a patrol' : patrolSetMode ? 'Cancel patrol setting' : 'Set patrol route'}
                   style={{
                     padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
                     background: patrolSetMode ? 'rgba(185,140,245,0.2)' : 'rgba(185,140,245,0.08)',
                     border: `1px solid ${patrolSetMode ? 'rgba(185,140,245,0.6)' : 'rgba(185,140,245,0.3)'}`,
                     color: '#ffffff',
-                    cursor: connected ? 'pointer' : 'not-allowed',
-                    opacity: connected ? 1 : 0.5,
+                    cursor: canvasTools ? 'pointer' : 'not-allowed',
+                    opacity: canvasTools ? 1 : 0.5,
                   }}
                 >
                   Patrol
@@ -752,9 +766,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
                 {/* Pose Mode */}
                 <button
-                  onClick={() => connected && setPoseMode(v => !v)}
-                  disabled={!connected}
-                  title={!connected
+                  onClick={() => canvasTools && setPoseMode(v => !v)}
+                  disabled={!canvasTools}
+                  title={view3d ? 'Switch to the 2D map to set a pose' : !connected
                     ? "Can't set pose — not connected to Argo"
                     : (poseMode ? 'Cancel' : "Click where Argo is standing, then drag toward where it's facing")}
                   style={{
@@ -762,8 +776,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     background: poseMode ? 'rgba(59,240,155,0.2)' : 'rgba(59,240,155,0.08)',
                     border: `1px solid ${poseMode ? 'rgba(59,240,155,0.6)' : 'rgba(59,240,155,0.3)'}`,
                     color: '#ffffff',
-                    cursor: connected ? 'pointer' : 'not-allowed',
-                    opacity: connected ? 1 : 0.5,
+                    cursor: canvasTools ? 'pointer' : 'not-allowed',
+                    opacity: canvasTools ? 1 : 0.5,
                   }}
                 >
                   {poseMode ? 'Cancel Pose' : 'Pose'}
@@ -771,6 +785,17 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               </div>
           </div>
           <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+            {view3d ? (
+              <Map3DViewer
+                launcherUrl={launcherUrl}
+                mapName={selectedMap}
+                robotPose={robotPose}
+                goalPose={goalMarker}
+                plannedPath={plannedPath}
+                markers={tableMarkerList}
+                showToast={showToast}
+              />
+            ) : (
             <MapCanvas
               mapData={mapData}
               robotPose={robotPose}
@@ -807,16 +832,10 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 showToast?.('Patrol route set', 'ok')
               }}
               // Table markers for integrated display
-              tableMarkers={Object.entries(tables)
-                .filter(([key]) => key !== '0')
-                .map(([key, t]) => ({
-                  key,
-                  name: t.name || `Table ${key}`,
-                  x: t.x,
-                  y: t.y,
-                }))}
+              tableMarkers={tableMarkerList}
               onTableMarkerClick={(table) => setSelectedTable(table)}
             />
+            )}
           </div>
           {!mapData && (
             <div style={{ fontSize: 11, color: connected ? 'var(--muted)' : 'var(--danger)', padding: '12px', textAlign: 'center', lineHeight: 1.5 }}>
@@ -829,71 +848,70 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
       </main>
 
-      {/* ── Right Sidebar: Robot 3D Viewer (30%) ── */}
+      {/* ── Right Sidebar: Robot + Battery (30%) ── */}
       <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 10px', borderLeft: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', background: 'rgba(0,0,0,0.1)' }}>
-        {/* Robot Viewer - with Dropdown Settings */}
-        <div style={{ position: 'relative' }}>
-          {modelLoading && (
-            <div style={{
-              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-              background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              zIndex: 15, borderRadius: 8
-            }}>
-              <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
-                <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Loading...</div>
+
+        {/* Robot Preview & Battery in Single Row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr auto', gap: 16, alignItems: 'stretch', background: 'rgba(255,255,255,0.02)', borderRadius: 10, padding: '16px', border: '1px solid rgba(255,255,255,0.06)' }}>
+
+          {/* Robot Image (left) - Larger */}
+          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', width: '100%', height: '280px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modelLoading ? 'rgba(0,0,0,0.5)' : 'transparent', borderRadius: 12, transition: 'background 0.2s', border: '1px solid rgba(255,255,255,0.05)' }}>
+              {modelLoading ? (
+                <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
+                  <div style={{ fontSize: 11, fontWeight: 600 }}>Loading...</div>
+                </div>
+              ) : (
+                <img
+                  src="/models/argo.png"
+                  alt="Argo Robot"
+                  onLoad={() => setModelLoading(false)}
+                  onError={() => setModelLoading(false)}
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))' }}
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Cylindrical Battery (right) with Percentage Below */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+            <CylindricalBattery battery={battery} />
+
+            {/* Percentage Display Below Battery */}
+            <div
+              style={{
+                textAlign: 'center',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 8,
+                padding: '8px 12px',
+                minWidth: '100px',
+                animation: battery.charging ? 'pulse-percentage 2s ease-in-out infinite' : 'none'
+              }}
+            >
+              <div style={{ fontSize: '24px', fontWeight: 900, color: getColor(battery.battery_percent || 0).glow, textShadow: `0 0 8px ${getColor(battery.battery_percent || 0).glow}60` }}>
+                {Math.round(battery.battery_percent || 0)}%
+              </div>
+              <div style={{ fontSize: '9px', color: 'rgba(200,200,220,0.5)', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>
+                {battery.charging ? '🔌 Charging' : '🔋 Idle'}
               </div>
             </div>
-          )}
-          <div style={{ position: 'relative', width: '100%', height: '400px' }}>
-            <Robot3DViewer
-              shadowColor={shadowColor}
-              modelPath="/models/White.glb"
-              onLoadStart={() => setModelLoading(true)}
-              onLoadEnd={() => setModelLoading(false)}
-            />
 
-            {/* Settings Gear Button */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowRobotSettings(!showRobotSettings)
-              }}
-              style={{
-                position: 'absolute', top: 8, right: 8,
-                width: 32, height: 32, borderRadius: '50%',
-                background: 'rgba(100,100,120,0.2)', border: '1px solid rgba(150,150,170,0.3)',
-                color: 'rgba(200,200,220,0.7)', cursor: 'pointer', fontSize: 18,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                zIndex: 10, backdropFilter: 'blur(8px)'
-              }}
-              title="Adjust shadow color"
-            >
-              ⚙
-            </button>
-
-            {/* Shadow Color Picker */}
-            {showRobotSettings && (
-              <div data-robot-settings style={{
-                position: 'absolute', top: 45, left: 8,
-                background: 'rgba(20,20,30,0.4)', border: '1px solid rgba(226,179,92,0.2)',
-                borderRadius: 12, padding: 14, minWidth: 150,
-                zIndex: 20, backdropFilter: 'blur(20px)',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
-              }}>
-                <div>
-                  <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, marginBottom: 8 }}>Shadow Color</div>
-                  <input
-                    type="color"
-                    value={shadowColor}
-                    onChange={(e) => setShadowColor(e.target.value)}
-                    style={{ width: '100%', height: 36, borderRadius: 6, border: '1px solid rgba(226,179,92,0.4)', cursor: 'pointer' }}
-                    title="Click to change drop-shadow color"
-                  />
-                </div>
-              </div>
-            )}
+            <style>{`
+              @keyframes pulse-percentage {
+                0%, 100% {
+                  opacity: 1;
+                  transform: scale(1);
+                }
+                50% {
+                  opacity: 0.8;
+                  transform: scale(1.05);
+                }
+              }
+            `}</style>
           </div>
+
         </div>
 
         {/* Map Selector Dropdown */}

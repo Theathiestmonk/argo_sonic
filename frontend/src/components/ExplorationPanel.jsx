@@ -230,6 +230,13 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
               .then(r => r.json())
               .then(d => { if (!d.ok && d.error !== 'ntfields_train_busy') showToast('Could not start NTFields training', 'danger') })
               .catch(() => showToast('Could not reach launcher to start NTFields training', 'danger'))
+
+            // Also build the 3D wall model the dashboard's 3D map view shows. Best-effort:
+            // a missing converter (503) or a build already running (409) must never disturb
+            // the save flow, so only the "not set up" case is worth mentioning.
+            fetch(`${launcherUrl}/maps/${encodeURIComponent(mapName)}/model/build`, { method: 'POST' })
+              .then(r => { if (r.status === 503) showToast('3D model skipped — converter not set up on the robot', 'info') })
+              .catch(() => {})
           },
           () => {
             setSaving(false)

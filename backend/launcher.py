@@ -37,6 +37,20 @@ Endpoints (CORS-open so the browser can call them directly):
                                        parsed from <name>.yaml — lets the frontend
                                        place waypoints on the map image correctly
     GET  /maps/<name>/preview      →  raw bytes of <name>.pgm
+    GET  /maps/<name>/model        →  {"available": bool, "exists": bool, "mtime": float|null,
+                                       "stale": bool, "building": bool, "phase": str|null,
+                                       "phase_text": str|null}  status of the 3D wall model
+                                       (MAP3D_DIR/<name>.glb, built by map_to_3d.py).
+                                       "available" is false when no Python with the converter's
+                                       dependencies was found (see _map3d_python()); "stale"
+                                       means the map was re-saved after the model was built.
+    GET  /maps/<name>/model.glb    →  raw GLB bytes (glTF Y-up, metres, map frame — a robot at
+                                       map (x, y, theta) sits at three.js (x, 0, -y), rotY = theta)
+    POST /maps/<name>/model/build  →  build/rebuild that model in a background thread. Called
+                                       automatically after a map is saved (ExplorationPanel.jsx's
+                                       saveMap()) and by the 3D viewer's "Generate" button.
+                                       404 unknown map; 409 (map3d_busy) if a build is running;
+                                       503 (map3d_unavailable) without a converter Python.
     GET  /waypoints/<map_name>     →  JSON content of waypoints/<map_name>.json
                                        (empty {} if that map has no waypoints yet)
     POST /waypoints/<map_name>     →  body is the full waypoints dict; overwrites
@@ -303,6 +317,9 @@ NAV_BRIDGE_SCRIPT = os.path.join(SONIC_DIR, 'nav_bridge.py')
 # mode already use — a model is looked up by map name at <dir>/<map>.pt.
 NTFIELDS_TRAIN_SCRIPT = os.path.join(_ROOT, 'src', 'argo_mini', 'argo_mini', 'ntfields_offline_train.py')
 NTFIELDS_MODELS_DIR = os.path.expanduser('~/ntfields_models')
+# 3D wall models (GET /maps/<name>/model.glb) — generated from the saved map by map_to_3d.py.
+MAP3D_SCRIPT = os.path.join(_ROOT, 'map_to_3d.py')
+MAP3D_DIR    = os.path.join(MAPS_DIR, '3d')
 
 # Menu + orders now live in Postgres (see sonic/*.sql, sonic/seed_db.py)
 # instead of src/argo_mini/menu/menu.json + src/argo_mini/orders/*.json —
@@ -1064,6 +1081,67 @@ def _ntfields_train_worker(map_name):
             'phase_text': f'NTFields model ready for "{map_name}"' if ok else f'Training failed for "{map_name}"',
         }
 
+def _map3d_python():
+    """Interpreter for map_to_3d.py, or None. It needs opencv/shapely>=2.1/trimesh/matplotlib
+    (requirements-map3d.txt), which the main venv deliberately doesn't carry — so look for a
+    dedicated env: $MAP3D_PYTHON, then <repo>/venv-map3d, then ~/.venvs/map3d."""
+    candidates = [
+        os.environ.get('MAP3D_PYTHON', ''),
+        os.path.join(_ROOT, 'venv-map3d', 'bin', 'python'),
+        os.path.expanduser('~/.venvs/map3d/bin/python'),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+# Same shape as the NTFields job above: one CPU-only subprocess at a time, unrelated to
+# Nav2/serial/the mic, so it only excludes a second build (_map3d_lock), nothing else.
+_map3d_lock = threading.Lock()
+_map3d_status = {'running': False, 'map': None, 'phase': None, 'phase_text': None}
+
+
+def _map3d_paths(map_name):
+    return os.path.join(MAP3D_DIR, f'{map_name}.glb')
+
+
+def _map3d_worker(map_name, python):
+    global _map3d_status
+    with _map3d_lock:
+        _map3d_status = {'running': True, 'map': map_name, 'phase': 'building',
+                         'phase_text': f'Building 3D model for "{map_name}"…'}
+    os.makedirs(MAP3D_DIR, exist_ok=True)
+    map_yaml = os.path.join(MAPS_DIR, f'{map_name}.yaml')
+    # Build under a temp name, then rename — the viewer must never fetch a half-written GLB.
+    tmp_base = os.path.join(MAP3D_DIR, f'{map_name}.building')
+    cmd = [python, MAP3D_SCRIPT, '--map', map_yaml, '--output', tmp_base + '.glb',
+           '--formats', 'glb', '--no-preview']
+    ok = False
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        ok = result.returncode == 0 and os.path.isfile(tmp_base + '.glb')
+        if ok:
+            os.replace(tmp_base + '.glb', _map3d_paths(map_name))
+        else:
+            print(f'[launcher] 3D model build failed for {map_name!r}: {(result.stdout + result.stderr)[-1000:]}')
+    except subprocess.TimeoutExpired:
+        print(f'[launcher] 3D model build for {map_name!r} timed out after 10 min')
+    except OSError as e:
+        print(f'[launcher] 3D model build for {map_name!r} could not run: {e}')
+    for leftover in (tmp_base + '.glb', tmp_base + '_meta.json'):
+        try:
+            os.remove(leftover)
+        except OSError:
+            pass
+    with _map3d_lock:
+        _map3d_status = {
+            'running': False, 'map': map_name,
+            'phase': 'done' if ok else 'failed',
+            'phase_text': f'3D model ready for "{map_name}"' if ok else f'3D model build failed for "{map_name}"',
+        }
+
+
 # Same list argo_sonic_nav.py's own main() pkills defensively before ITS
 # startup (to clear stragglers from a previous unclean exit) — duplicated
 # here rather than imported since that file is a standalone script, not a
@@ -1468,6 +1546,46 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/octet-stream')
             self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self._write(data)
+
+        elif len(parts) == 3 and parts[0] == 'maps' and parts[2] == 'model':
+            name = _safe_name(parts[1])
+            if not name:
+                self._json({'error': 'invalid map name'}, 400)
+                return
+            glb = _map3d_paths(name)
+            exists = os.path.isfile(glb)
+            mtime = os.path.getmtime(glb) if exists else None
+            src_mtimes = [os.path.getmtime(p) for p in
+                          (os.path.join(MAPS_DIR, f'{name}.yaml'), os.path.join(MAPS_DIR, f'{name}.pgm'))
+                          if os.path.isfile(p)]
+            with _map3d_lock:
+                job = dict(_map3d_status)
+            building = job['running'] and job['map'] == name
+            self._json({
+                'available': _map3d_python() is not None and os.path.isfile(MAP3D_SCRIPT),
+                'exists': exists,
+                'mtime': mtime,
+                'stale': bool(exists and src_mtimes and max(src_mtimes) > mtime),
+                'building': building,
+                'phase': job['phase'] if job['map'] == name else None,
+                'phase_text': job['phase_text'] if job['map'] == name else None,
+            })
+
+        elif len(parts) == 3 and parts[0] == 'maps' and parts[2] == 'model.glb':
+            name = _safe_name(parts[1])
+            glb = _map3d_paths(name) if name else None
+            if not glb or not os.path.isfile(glb):
+                self._json({'error': 'not found'}, 404)
+                return
+            with open(glb, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'model/gltf-binary')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self._write(data)
@@ -1978,6 +2096,27 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=_ntfields_train_worker, args=(map_name,), daemon=True).start()
             print(f'[launcher] /ntfields/train -> {map_name!r}')
             self._json({'ok': True, 'status': 'started', 'map': map_name})
+
+        elif self.path.startswith('/maps/') and self.path.endswith('/model/build'):
+            name = _safe_name(self.path.split('/')[2])
+            if not name:
+                self._json({'ok': False, 'error': 'invalid map name'}, 400)
+                return
+            if not os.path.isfile(os.path.join(MAPS_DIR, f'{name}.yaml')):
+                self._json({'ok': False, 'error': f'no saved map named {name!r}'}, 404)
+                return
+            python = _map3d_python()
+            if python is None or not os.path.isfile(MAP3D_SCRIPT):
+                self._json({'ok': False, 'error': 'map3d_unavailable'}, 503)
+                return
+            with _map3d_lock:
+                if _map3d_status['running']:
+                    self._json({'ok': False, 'error': 'map3d_busy',
+                                'active': {'map': _map3d_status['map']}}, 409)
+                    return
+                threading.Thread(target=_map3d_worker, args=(name, python), daemon=True).start()
+            print(f'[launcher] /maps/{name}/model/build')
+            self._json({'ok': True, 'status': 'started', 'map': name})
 
         elif self.path == '/estop':
             with _serial_lock:

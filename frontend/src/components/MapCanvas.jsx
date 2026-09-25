@@ -1,11 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 
-// Warm black/gold occupancy-grid palette (matches the app's dashboard
-// tokens — see dashboard/src/globals.css --bg/--gold) instead of a neutral
-// greyscale, tuned dark to sit naturally inside the app's dark theme.
-const UNK  = [26,  24,  21]
-const FREE = [232, 222, 199]
-const OCC  = [12,  10,  8]
+// Inverted palette: black free space, white walls
+const UNK  = [20,  20,  20]
+const FREE = [20,  20,  20]
+const OCC  = [240, 240, 240]
 
 // Patrol violet — deliberately not the goal's blue or the planned path's
 // gold, so a running patrol is distinguishable from a one-shot trip.
@@ -18,36 +16,150 @@ function worldToCanvas(wx, wy, md, offX, offY, scale) {
   return [offX + col * scale, offY + row * scale]
 }
 
+// Render 3D extrusions for all edges in the occupancy grid
+function renderPseudo3DWalls(ctx, mapImg, md, offX, offY, scale, W, H) {
+  if (!mapImg || scale < 1) return
+
+  ctx.save()
+
+  const wallHeight = Math.min(scale * 0.4, 15)
+  const tiltAngle = 0.35
+
+  // Create a temporary canvas to read pixel data safely
+  const tempCanvas = document.createElement('canvas')
+  tempCanvas.width = md.width
+  tempCanvas.height = md.height
+  const tempCtx = tempCanvas.getContext('2d')
+
+  // Draw the map image at 1:1 scale to read pixel data
+  tempCtx.drawImage(mapImg, 0, 0, md.width, md.height)
+
+  try {
+    const imgData = tempCtx.getImageData(0, 0, md.width, md.height)
+    const data = imgData.data
+
+    // First pass: draw side faces
+    for (let row = 0; row < md.height - 1; row++) {
+      for (let col = 0; col < md.width - 1; col++) {
+        const idx = (row * md.width + col) * 4
+        const idxBelow = ((row + 1) * md.width + col) * 4
+        const idxRight = (row * md.width + col + 1) * 4
+
+        const brightness = data[idx]
+        const brightBelow = data[idxBelow]
+        const brightRight = data[idxRight]
+
+        const px = offX + col * scale
+        const py = offY + row * scale
+
+        // Horizontal edges (side faces)
+        if (Math.abs(brightness - brightBelow) > 30) {
+          const y = py
+          const x1 = px
+          const x2 = px + scale
+
+          const isDarkToLight = brightness > brightBelow
+          ctx.fillStyle = isDarkToLight ? 'rgba(220,220,220,0.45)' : 'rgba(200,200,200,0.55)'
+          ctx.strokeStyle = 'rgba(255,255,255,0.6)'
+          ctx.lineWidth = 0.8
+
+          ctx.beginPath()
+          ctx.moveTo(x1, y)
+          ctx.lineTo(x2, y)
+          ctx.lineTo(x2 + wallHeight * Math.sin(tiltAngle), y - wallHeight * Math.cos(tiltAngle))
+          ctx.lineTo(x1 + wallHeight * Math.sin(tiltAngle), y - wallHeight * Math.cos(tiltAngle))
+          ctx.closePath()
+          ctx.fill()
+          ctx.stroke()
+        }
+
+        // Vertical edges (side faces)
+        if (Math.abs(brightness - brightRight) > 30) {
+          const x = px + scale
+          const y1 = py
+          const y2 = py + scale
+
+          const isDarkToLight = brightness > brightRight
+          ctx.fillStyle = isDarkToLight ? 'rgba(210,210,210,0.5)' : 'rgba(190,190,190,0.6)'
+          ctx.strokeStyle = 'rgba(255,255,255,0.65)'
+          ctx.lineWidth = 0.8
+
+          ctx.beginPath()
+          ctx.moveTo(x, y1)
+          ctx.lineTo(x, y2)
+          ctx.lineTo(x + wallHeight * Math.sin(tiltAngle), y2 - wallHeight * Math.cos(tiltAngle))
+          ctx.lineTo(x + wallHeight * Math.sin(tiltAngle), y1 - wallHeight * Math.cos(tiltAngle))
+          ctx.closePath()
+          ctx.fill()
+          ctx.stroke()
+        }
+      }
+    }
+
+    // Second pass: draw top faces to fill gaps and create solid structure
+    for (let row = 0; row < md.height - 1; row++) {
+      for (let col = 0; col < md.width - 1; col++) {
+        const idx = (row * md.width + col) * 4
+        const idxBelow = ((row + 1) * md.width + col) * 4
+        const idxRight = (row * md.width + col + 1) * 4
+        const idxDiag = ((row + 1) * md.width + col + 1) * 4
+
+        const brightness = data[idx]
+        const brightBelow = data[idxBelow]
+        const brightRight = data[idxRight]
+        const brightDiag = data[idxDiag]
+
+        const px = offX + col * scale
+        const py = offY + row * scale
+
+        // Draw top face for this cell if it has edges
+        const hasHEdge = Math.abs(brightness - brightBelow) > 30
+        const hasVEdge = Math.abs(brightness - brightRight) > 30
+
+        if (hasHEdge || hasVEdge) {
+          const topLeft = [px + wallHeight * Math.sin(tiltAngle), py - wallHeight * Math.cos(tiltAngle)]
+          const topRight = [px + scale + wallHeight * Math.sin(tiltAngle), py - wallHeight * Math.cos(tiltAngle)]
+          const topRightB = [px + scale + wallHeight * Math.sin(tiltAngle), py + scale - wallHeight * Math.cos(tiltAngle)]
+          const topLeftB = [px + wallHeight * Math.sin(tiltAngle), py + scale - wallHeight * Math.cos(tiltAngle)]
+
+          ctx.fillStyle = 'rgba(240,240,240,0.35)'
+          ctx.strokeStyle = 'rgba(255,255,255,0.4)'
+          ctx.lineWidth = 0.5
+
+          ctx.beginPath()
+          ctx.moveTo(topLeft[0], topLeft[1])
+          ctx.lineTo(topRight[0], topRight[1])
+          ctx.lineTo(topRightB[0], topRightB[1])
+          ctx.lineTo(topLeftB[0], topLeftB[1])
+          ctx.closePath()
+          ctx.fill()
+          ctx.stroke()
+        }
+      }
+    }
+  } catch (e) {
+    console.log('Wall rendering: could not access image data (expected on remote images)')
+  }
+
+  ctx.restore()
+}
+
 export default function MapCanvas({
   mapData, costmapData, robotPose, goalPose, plannedPath = [], labels = [], frontiers = [], clickable = false, onMapClick,
-  // poseEstimateMode mirrors RViz's "2D Pose Estimate" tool — click-drag
-  // instead of a plain click, since a pose needs a heading too, not just a
-  // position. Mutually exclusive with `clickable`'s plain-click "add table"
-  // behavior (see handleClick/handleMouseDown below).
   poseEstimateMode = false, onPoseEstimate,
-  // goalSetMode mirrors RViz's OTHER click-drag tool, "2D Nav Goal" — same
-  // click-for-position-drag-for-heading mechanic as poseEstimateMode (so it
-  // shares that mode's handleMouseDown/Move/Up below), but drives the robot
-  // there instead of just telling localization where it already is. The two
-  // are mutually exclusive at the call site (DashboardHome.jsx toggles one
-  // off when the other turns on) — this component doesn't enforce that
-  // itself, just picks whichever's active for the shared drag mechanics.
   goalSetMode = false, onGoalSet,
-  // patrolSetMode is the third user of the same click-drag mechanic. It
-  // picks the far end of a patrol: the robot shuttles between wherever it
-  // is standing when patrol starts and the point chosen here, until it's
-  // stopped. Same mutual exclusion as the other two, enforced at the call
-  // site (DashboardHome.jsx), not here.
   patrolSetMode = false, onPatrolSet,
-  // { home: {x,y}, goal: {x,y}, leg } while a patrol is running, so the
-  // route the robot is shuttling stays visible instead of the operator
-  // having to remember which point they clicked.
   patrolRoute = null,
+  tableMarkers = [], // Array of {key, name, x, y} for table locations
+  onTableMarkerClick, // Callback when a table marker is clicked
+  driveTelemetry = {}, // { speed, wheels: {l,r} }
+  sensorDistances = {}, // { lidar, depth }
 }) {
   const dragMode = poseEstimateMode || goalSetMode || patrolSetMode
   const canvasRef  = useRef(null)
   const offRef     = useRef(null)   // { img: ImageBitmap, md: mapData }
   const [drag, setDrag] = useState(null)   // { startWX, startWY, curWX, curWY } while dragging a pose estimate
+  const [hoveredTableKey, setHoveredTableKey] = useState(null)   // Track which table is being hovered
   const [zoom, setZoom] = useState(1)   // multiplier on top of the fit-to-container base scale
   const [maximized, setMaximized] = useState(false)
 
@@ -67,16 +179,51 @@ export default function MapCanvas({
     return () => window.removeEventListener('keydown', onKey)
   }, [maximized])
 
+  // Very conservative isolated-cell filter: only remove completely isolated speckles
+  // (a cell surrounded by all opposite state). This preserves walls, corners, and geometry.
+  const filterIsolatedCells = (grid, width, height) => {
+    const filtered = new Uint8Array(grid)
+    for (let i = 1; i < height - 1; i++) {
+      for (let j = 1; j < width - 1; j++) {
+        const idx = i * width + j
+        const val = grid[idx]
+        const isOccupied = val > 25
+
+        // Count 3x3 neighbors with opposite state
+        let oppositeCount = 0
+        for (let di = -1; di <= 1; di++) {
+          for (let dj = -1; dj <= 1; dj++) {
+            if (di === 0 && dj === 0) continue
+            const nIdx = (i + di) * width + (j + dj)
+            const nVal = grid[nIdx]
+            const nIsOccupied = nVal > 25
+            if (nIsOccupied !== isOccupied) oppositeCount++
+          }
+        }
+
+        // Only remove if ALL 8 neighbors are opposite (completely isolated speckle)
+        if (oppositeCount === 8) {
+          filtered[idx] = isOccupied ? 0 : 50
+        }
+      }
+    }
+    return filtered
+  }
+
   // Rebuild the offscreen bitmap whenever the map data changes.
   useEffect(() => {
     if (!mapData) return
     const { width, height, data } = mapData
+
+    // Apply very conservative filter: only remove completely isolated cells
+    const cleaned = filterIsolatedCells(data, width, height)
+
     const imgData = new ImageData(width, height)
 
     for (let row = 0; row < height; row++) {
       const canvasRow = height - 1 - row   // flip: ROS row-0 = bottom
       for (let col = 0; col < width; col++) {
-        const val = data[row * width + col]
+        const val = cleaned[row * width + col]
         const px  = (canvasRow * width + col) * 4
         const c   = val === -1 ? UNK : val <= 25 ? FREE : OCC
         imgData.data[px]     = c[0]
@@ -152,7 +299,13 @@ export default function MapCanvas({
     // than letting it spill over the rounded corners/buttons.
     ctx.save()
     ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip()
+
+    // Draw map without interpolation (cleaned occupancy grid)
+    ctx.imageSmoothingEnabled = false
     ctx.drawImage(bmp, offX, offY, drawW, drawH)
+
+    // Render 3D wall extrusions (disabled for clean straight lines)
+    // renderPseudo3DWalls(ctx, bmp, md, offX, offY, scale, W, H)
 
     const toC = (wx, wy) => worldToCanvas(wx, wy, md, offX, offY, scale)
 
@@ -236,7 +389,7 @@ export default function MapCanvas({
       const [px, py] = toC(robotPose.x, robotPose.y)
       ctx.save()
       ctx.translate(px, py)
-      ctx.rotate(-robotPose.theta)
+      ctx.rotate(-robotPose.theta + Math.PI / 2)
       ctx.fillStyle = '#800000'
       ctx.strokeStyle = '#dedede'
       ctx.lineWidth = 1.5
@@ -263,6 +416,41 @@ export default function MapCanvas({
       ctx.strokeStyle = '#7fa8e8'; ctx.lineWidth = 2; ctx.stroke()
       ctx.beginPath(); ctx.arc(gx, gy, 3, 0, Math.PI * 2)
       ctx.fillStyle = '#7fa8e8'; ctx.fill()
+      ctx.restore()
+    }
+
+    // Table/Location markers — golden numbered circles for saved waypoints
+    if (tableMarkers && tableMarkers.length > 0) {
+      ctx.save()
+      tableMarkers.forEach(table => {
+        const [tx, ty] = toC(table.x, table.y)
+        const isHovered = hoveredTableKey === table.key
+        const radius = isHovered ? 16 : 12
+        const glowRadius = isHovered ? 20 : 14
+
+        // Glow effect when hovered
+        if (isHovered) {
+          ctx.fillStyle = 'rgba(226,179,92,0.15)'
+          ctx.beginPath(); ctx.arc(tx, ty, glowRadius, 0, Math.PI * 2)
+          ctx.fill()
+        }
+
+        // Main circle marker - yellow
+        ctx.fillStyle = 'rgba(255,215,0,0.5)'
+        ctx.strokeStyle = isHovered ? '#FFD700' : 'rgba(255,215,0,0.9)'
+        ctx.lineWidth = isHovered ? 3 : 2
+        ctx.beginPath(); ctx.arc(tx, ty, radius, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
+
+        // Table number text - inside circle only
+        ctx.fillStyle = '#ffffff'
+        ctx.font = isHovered ? 'bold 14px Inter,sans-serif' : 'bold 12px Inter,sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        const tableNum = table.name.replace('Table ', '').replace('table ', '')
+        ctx.fillText(tableNum, tx, ty)
+      })
       ctx.restore()
     }
 
@@ -341,13 +529,75 @@ export default function MapCanvas({
     if (!dragMode || !offRef.current) return
     const { wx, wy } = eventToWorld(e)
     setDrag({ startWX: wx, startWY: wy, curWX: wx, curWY: wy })
-  }, [dragMode, eventToWorld])
+  }, [dragMode, eventToWorld, goalSetMode, patrolSetMode, poseEstimateMode])
+
+  // Get table marker at position (for click and hover detection)
+  const getTableAtPosition = useCallback((e) => {
+    if (!offRef.current || !tableMarkers || tableMarkers.length === 0) {
+      console.log('[getTableAtPosition] No data available')
+      return null
+    }
+
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    const { md } = offRef.current
+    const W = canvas.width, H = canvas.height
+    const scale = Math.min(W / md.width, H / md.height) * zoom
+    const offX = (W - md.width * scale) / 2
+    const offY = (H - md.height * scale) / 2
+
+    const cssScaleX = canvas.width / rect.width
+    const cssScaleY = canvas.height / rect.height
+    const cx = (e.clientX - rect.left) * cssScaleX
+    const cy = (e.clientY - rect.top) * cssScaleY
+
+    console.log('[getTableAtPosition] Click at canvas:', {cx, cy}, 'scale:', scale.toFixed(2), 'offset:', {offX, offY})
+    console.log('[getTableAtPosition] Canvas size:', W, 'x', H, 'rect:', rect.width, 'x', rect.height)
+
+    const distances = []
+    for (const table of tableMarkers) {
+      const col = (table.x - md.origin.x) / md.resolution
+      const row = md.height - 1 - (table.y - md.origin.y) / md.resolution
+      const tx = offX + col * scale
+      const ty = offY + row * scale
+
+      const dist = Math.sqrt((cx - tx) ** 2 + (cy - ty) ** 2)
+      distances.push({ name: table.name, dist: dist.toFixed(1), tx, ty })
+      console.log(`[getTableAtPosition] ${table.name}: screen (${tx.toFixed(0)}, ${ty.toFixed(0)}) dist: ${dist.toFixed(1)}px`)
+      if (dist < 30) return table  // Increased threshold from 20 to 30
+    }
+    console.log('[getTableAtPosition] Min distance:', Math.min(...distances.map(d => parseFloat(d.dist))))
+    return null
+  }, [tableMarkers, zoom])
 
   const handleMouseMove = useCallback(e => {
-    if (!dragMode || !drag || !offRef.current) return
-    const { wx, wy } = eventToWorld(e)
-    setDrag(d => d && { ...d, curWX: wx, curWY: wy })
-  }, [dragMode, drag, eventToWorld])
+    // Handle drag
+    if (dragMode && drag && offRef.current) {
+      const { wx, wy } = eventToWorld(e)
+      setDrag(d => d && { ...d, curWX: wx, curWY: wy })
+    }
+
+    // Detect hover over table markers
+    const table = getTableAtPosition(e)
+    setHoveredTableKey(table ? table.key : null)
+  }, [dragMode, drag, eventToWorld, getTableAtPosition])
+
+  // Detect clicks on table markers
+  const handleCanvasClick = useCallback(e => {
+    console.log('[MapCanvas] Click event, tableMarkers:', tableMarkers?.length)
+    // Check if clicked on a table marker first
+    const table = getTableAtPosition(e)
+    console.log('[MapCanvas] getTableAtPosition returned:', table)
+    if (table) {
+      console.log('[MapCanvas] Calling onTableMarkerClick')
+      onTableMarkerClick?.(table)
+      return
+    }
+
+    // Otherwise handle regular map click
+    if (dragMode || !clickable || !onMapClick) return
+    onMapClick(eventToWorld(e))
+  }, [clickable, onMapClick, dragMode, eventToWorld, getTableAtPosition, onTableMarkerClick, tableMarkers])
 
   const handleMouseUp = useCallback(() => {
     if (!dragMode || !drag) return
@@ -379,22 +629,17 @@ export default function MapCanvas({
       ref={canvasRef}
       width={canvasW}
       height={canvasH}
-      onClick={handleClick}
+      onClick={handleCanvasClick}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={() => dragMode && setDrag(null)}
+      onMouseLeave={() => { dragMode && setDrag(null); setHoveredTableKey(null) }}
       style={{
         width: '100%', height: '100%',
         borderRadius: 16,
         cursor: (clickable || dragMode) ? 'crosshair' : 'default',
-        // Matches the map's own UNK (unexplored-area) gray above, rather
-        // than a near-black that fought for contrast against it — the
-        // letterboxed area around a non-square map, and anywhere the map
-        // hasn't fit the canvas exactly, now reads as "no map here" the
-        // same way unexplored cells inside the map already do, leaving
-        // the actual (light) map surface as the only thing that pops.
-        background: `rgb(${UNK.join(',')})`,
+        // Match the FREE (empty space) color for visual consistency
+        background: `rgb(${FREE.join(',')})`,
         display: 'block',
       }}
     />
@@ -417,6 +662,62 @@ export default function MapCanvas({
     >
       {maximized ? '⤡' : '⤢'}
     </button>
+  )
+
+  const fmtDist = (v) => {
+    if (v == null) return '—'
+    if (!Number.isFinite(v)) return 'Clear'
+    return `${v.toFixed(2)}m`
+  }
+  const distColor = (v) => {
+    if (v == null || !Number.isFinite(v)) return 'rgba(255,255,255,0.9)'
+    if (v < 0.4) return '#ff4141'
+    if (v < 0.8) return '#e2b35c'
+    return 'rgba(59,240,155,0.9)'
+  }
+
+  const telemetryBar = (
+    <div className="glass-card" style={{
+      position: 'absolute', top: 12, left: 12, right: 52,
+      padding: '12px 16px', maxWidth: 'calc(100% - 64px)', overflowX: 'auto',
+      display: 'flex', gap: 20, alignItems: 'stretch',
+    }}>
+      <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Speed</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: 'rgba(59,240,155,0.9)' }}>{(driveTelemetry?.speed || 0).toFixed(2)} m/s</div>
+        </div>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>L Wheel</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: 'rgba(185,140,245,0.9)' }}>{(driveTelemetry?.wheels?.l || 0).toFixed(1)} rad/s</div>
+        </div>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>R Wheel</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: 'rgba(185,140,245,0.9)' }}>{(driveTelemetry?.wheels?.r || 0).toFixed(1)} rad/s</div>
+        </div>
+      </div>
+
+      <div style={{ width: 1, background: 'var(--border-glass)' }} />
+
+      <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Lidar</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: distColor(sensorDistances?.lidar) }}>{fmtDist(sensorDistances?.lidar)}</div>
+        </div>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Depth</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: distColor(sensorDistances?.depth) }}>{fmtDist(sensorDistances?.depth)}</div>
+        </div>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>US FL</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: distColor(sensorDistances?.usFrontLeft) }}>{fmtDist(sensorDistances?.usFrontLeft)}</div>
+        </div>
+        <div style={{ minWidth: 85 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>US FR</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: distColor(sensorDistances?.usFrontRight) }}>{fmtDist(sensorDistances?.usFrontRight)}</div>
+        </div>
+      </div>
+    </div>
   )
 
   if (maximized) {
@@ -444,6 +745,7 @@ export default function MapCanvas({
         >
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             {canvasEl}
+            {telemetryBar}
             {zoomButtons}
             {maximizeBtn}
           </div>
@@ -455,6 +757,7 @@ export default function MapCanvas({
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       {canvasEl}
+      {telemetryBar}
       {zoomButtons}
       {maximizeBtn}
     </div>

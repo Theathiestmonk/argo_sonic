@@ -37,6 +37,15 @@ class RosConnection {
     return new ROSLIB.Service({ ros: this.ros, name, serviceType })
   }
 
+  actionClient(serverName, actionName) {
+    if (!this.ros) return null
+    return new ROSLIB.ActionClient({ ros: this.ros, serverName, actionName })
+  }
+
+  goal(actionClient, goalMessage) {
+    return new ROSLIB.Goal({ actionClient, goalMessage })
+  }
+
   publish(name, messageType, msg) {
     const t = this.topic(name, messageType)
     t?.publish(msg)

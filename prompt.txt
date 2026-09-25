@@ -1,0 +1,412 @@
+Create a realistic 3D animated battery component using THREE.JS.
+
+IMPORTANT:
+- Do NOT use any GLB, GLTF, OBJ, FBX, image, video, or external 3D model.
+- Build the entire battery procedurally using Three.js geometry and materials.
+- Everything must be contained in ONE self-contained HTML file.
+- Use Three.js from a CDN.
+- The result must run by simply opening the HTML file in a browser.
+- Do not create a React app.
+- Do not use React Three Fiber.
+- Use pure HTML + CSS + JavaScript + Three.js.
+
+GOAL:
+Create a premium realistic 3D battery visualization suitable for a modern robotics/AMR dashboard.
+
+The battery should look like a physical cylindrical rechargeable battery, not a cartoon icon.
+
+VISUAL DESIGN:
+
+1. BATTERY BODY
+- Vertical cylindrical battery.
+- Tall rounded/cylindrical body.
+- Dark smoked transparent/glass-like outer shell.
+- Slightly metallic appearance.
+- Subtle reflections.
+- Realistic bevels around edges.
+- Smooth curved surface.
+- The body should feel like a premium industrial battery.
+
+2. TOP
+- Metallic silver top cap.
+- Rounded/beveled edge.
+- Central positive terminal.
+- Brushed-metal appearance.
+- Realistic specular highlights.
+- Slightly reflective.
+
+3. BOTTOM
+- Metallic dark/silver bottom cap.
+- Rounded edges.
+- Subtle reflection.
+- Small contact/base detail if appropriate.
+
+4. INNER ENERGY
+Inside the transparent battery body, create an animated energy/liquid volume.
+
+The energy should:
+- Start from the bottom.
+- Fill vertically according to battery percentage.
+- Have a smooth curved/wavy surface at the top.
+- Glow subtly.
+- Look like glowing liquid/energy rather than a flat colored rectangle.
+- Have slight internal movement.
+- Add a few tiny floating particles/bubbles.
+- Use additive/emissive-style lighting where appropriate.
+
+BATTERY LEVEL:
+Create a JavaScript variable:
+
+const batteryLevel = 68;
+
+The visual fill must correspond to this percentage.
+
+Examples:
+20 = approximately 20% filled
+50 = approximately 50% filled
+80 = approximately 80% filled
+100 = completely filled
+
+Animate changes smoothly.
+
+Create:
+
+setBatteryLevel(value)
+
+so I can later call:
+
+setBatteryLevel(75);
+
+and the battery smoothly transitions from the current level to 75%.
+
+5. COLOR SYSTEM
+
+Use dynamic colors based on battery level:
+
+0–20%:
+deep red / orange-red
+
+21–40%:
+orange
+
+41–65%:
+yellow / lime
+
+66–100%:
+green / cyan-green
+
+Do NOT abruptly switch colors.
+
+Use smooth color interpolation.
+
+The energy should have:
+- emissive appearance
+- subtle glow
+- brighter top surface
+- slightly darker lower region
+
+6. CHARGING ANIMATION
+
+Create:
+
+setCharging(true)
+setCharging(false)
+
+When charging is true:
+- Energy should subtly pulse.
+- Small particles should move upward.
+- The top liquid surface should gently move.
+- Glow should breathe/pulse.
+- Add a subtle charging shimmer traveling through the energy.
+- Do NOT make it look like a flashing neon effect.
+- Animation should feel premium and realistic.
+
+When charging is false:
+- Stop the charging-specific animation.
+- Keep the battery visually alive with very subtle movement.
+
+7. REALISTIC MATERIALS
+
+Use Three.js materials appropriately.
+
+Prefer:
+MeshPhysicalMaterial
+MeshStandardMaterial
+
+Use:
+- metalness
+- roughness
+- transmission where appropriate
+- clearcoat where useful
+- envMap/environment lighting
+
+The glass shell should have:
+- transparency
+- transmission
+- low roughness
+- subtle thickness
+
+Avoid making the battery completely invisible.
+
+The energy should remain clearly visible through the glass.
+
+8. LIGHTING
+
+Create a professional studio-style lighting setup.
+
+Use:
+- Ambient/light environment
+- Key light
+- Rim light
+- Soft fill light
+
+The battery should have:
+- visible edge highlights
+- metallic reflections
+- subtle floor reflection
+- soft shadow
+
+Do NOT use harsh lighting.
+
+9. CAMERA
+
+Use a perspective camera.
+
+Camera should show:
+- front
+- slight side
+- slight top perspective
+
+The battery should look 3D immediately.
+
+Default camera should be approximately:
+
+camera position:
+x = 3
+y = 2
+z = 5
+
+but adjust it visually so the battery is centered and fills the screen nicely.
+
+10. FLOOR
+
+Add a dark studio floor beneath the battery.
+
+Create:
+- soft contact shadow
+- subtle reflection beneath the battery
+- faint glow from the energy
+
+The floor should not distract from the battery.
+
+11. ANIMATION
+
+Add subtle idle animation:
+
+- Very small vertical floating movement.
+- Very small rotation.
+- Do NOT make it spin continuously like a product viewer.
+- Movement should be slow and premium.
+
+Example:
+
+batteryGroup.position.y = Math.sin(time * 0.8) * 0.03;
+
+and subtle rotation.
+
+12. REALISTIC ENERGY SURFACE
+
+This is important.
+
+Do NOT represent the battery level simply as a flat rectangular box.
+
+Create a rounded/cylindrical liquid volume that follows the inside of the battery.
+
+The top of the energy should have a slightly curved/wavy surface.
+
+Possible implementation:
+- CylinderGeometry for the main liquid body.
+- Separate thin cylinder/disc for the top surface.
+- Animate the top surface with vertex displacement or shader.
+- Keep the liquid clipped to the battery interior.
+
+The energy should appear volumetric.
+
+13. GLASS SHELL
+
+The battery should have an outer transparent shell.
+
+Use a cylinder with bevel-like geometry.
+
+Make it slightly transparent so the energy can be seen inside.
+
+Add:
+- Fresnel-like edge brightness if practical.
+- Reflection.
+- Refraction/transmission if performance allows.
+
+If transmission causes browser performance issues, implement a simpler transparent physical material.
+
+14. PERFORMANCE
+
+The component must be lightweight enough for a dashboard.
+
+Avoid:
+- excessive geometry
+- thousands of particles
+- expensive post-processing
+
+Target:
+60 FPS on a normal desktop browser.
+
+Use a small number of particles, around 20–40 maximum.
+
+15. RESPONSIVE
+
+The battery should automatically resize with the browser window.
+
+Handle:
+
+window.addEventListener("resize", ...)
+
+Correctly update:
+- camera aspect
+- renderer size
+- pixel ratio
+
+Limit pixel ratio to something reasonable:
+
+Math.min(window.devicePixelRatio, 2)
+
+16. CONTROLS
+
+Do NOT show OrbitControls by default.
+
+The battery should present itself as a dashboard visualization.
+
+However, include commented code showing how OrbitControls could be enabled for development.
+
+17. DASHBOARD API
+
+Expose these functions globally:
+
+window.setBatteryLevel(value)
+window.setCharging(value)
+
+Example:
+
+setBatteryLevel(72);
+setCharging(true);
+
+These should work from the browser console.
+
+18. OPTIONAL UI
+
+Add a very minimal HTML overlay:
+
+72%
+
+Charging
+
+But keep it clean and premium.
+
+The main focus should remain on the 3D battery.
+
+19. VISUAL STYLE
+
+Overall visual direction:
+
+Premium industrial technology
+Modern AMR / robotics dashboard
+Dark background
+Realistic materials
+Soft green energy
+Subtle reflections
+Clean
+Minimal
+High-end product visualization
+
+Avoid:
+- cartoon style
+- emoji
+- flat SVG appearance
+- excessive neon
+- gaming UI
+- excessive bloom
+- unrealistic colors
+
+20. CODE QUALITY
+
+Structure the JavaScript clearly:
+
+- scene initialization
+- renderer
+- camera
+- lighting
+- battery geometry
+- battery materials
+- energy system
+- particles
+- animation
+- battery level controller
+- charging controller
+- resize handling
+- render loop
+
+Use meaningful function names such as:
+
+createBattery()
+createBatteryBody()
+createBatteryCaps()
+createEnergy()
+createEnergySurface()
+createParticles()
+setupLighting()
+setBatteryLevel()
+setCharging()
+animate()
+
+Add comments explaining the important sections.
+
+21. FINAL REQUIREMENT
+
+Return ONE complete HTML file.
+
+It must contain:
+
+<!DOCTYPE html>
+<html>
+<head>
+...
+</head>
+
+<body>
+...
+</body>
+
+<script type="module">
+...
+</script>
+
+Do not give me fragments.
+
+Do not require npm.
+
+Do not require Vite.
+
+Do not require React.
+
+Do not require any downloaded model.
+
+Only Three.js loaded from CDN.
+
+Before finishing, test the logic carefully and make sure:
+- battery renders
+- battery level works
+- charging animation works
+- resize works
+- no undefined variables
+- no missing imports
+- no external model files are required.
+
+The final result should look like a realistic 3D physical battery rather than a 2D battery icon.

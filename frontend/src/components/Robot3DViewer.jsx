@@ -70,9 +70,11 @@ export default function Robot3DViewer({ shadowColor = '#e2b35c', modelPath = '/m
     // Load GLB model with shadows
     onLoadStart?.()
     const loader = new GLTFLoader()
+    let loadCompleted = false
     loader.load(
       modelPath,
       (gltf) => {
+        loadCompleted = true
         onLoadEnd?.()
         const model = gltf.scene
         model.scale.set(2.8, 2.8, 2.8)
@@ -94,6 +96,8 @@ export default function Robot3DViewer({ shadowColor = '#e2b35c', modelPath = '/m
         console.log(`Model loading: ${(progress.loaded / progress.total * 100).toFixed(0)}%`)
       },
       (error) => {
+        loadCompleted = true
+        onLoadEnd?.()
         console.error('Error loading model:', error)
       }
     )
@@ -164,6 +168,10 @@ export default function Robot3DViewer({ shadowColor = '#e2b35c', modelPath = '/m
       }
       document.removeEventListener('mouseup', onMouseUp)
       cancelAnimationFrame(animationId)
+      // Clear loading state if component unmounts during loading
+      if (!loadCompleted) {
+        onLoadEnd?.()
+      }
     }
   }, [modelPath])
 

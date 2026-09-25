@@ -10,8 +10,8 @@ const StopIcon = () => <svg width="18" height="18" viewBox="0 0 18 18" fill="cur
 // serial_bridge.py ramps commanded RPM toward the target by at most
 // _RPM_RAMP (5.0) per /cmd_vel message received, not per second — so a
 // single zero-velocity publish only steps speed down a little, not to a
-// full stop. At VMAX=0.4 m/s (~50 RPM), fully ramping down needs roughly
-// 50/5 = 10 messages; STOP_REPEAT_MS/STOP_REPEAT_COUNT below send enough
+// full stop. At VMAX=0.45 m/s (~56 RPM), fully ramping down needs roughly
+// 56/5 = 11 messages; STOP_REPEAT_MS/STOP_REPEAT_COUNT below send enough
 // zero commands, at the same 80ms cadence press() already uses, to
 // actually reach zero regardless of current speed — confirmed as a real
 // bug otherwise (a single stopNow()/release() call left the robot still
@@ -23,7 +23,7 @@ export default function TeleopPad({ connected, compact = false }) {
   const holdRef  = useRef(null)
   const stopRef  = useRef(null)
   const [active, setActive] = useState(null)
-  const [speed, setSpeed]   = useState(0.5)
+  const [speed, setSpeed]   = useState(0.45)
 
   useEffect(() => {
     return () => { clearInterval(holdRef.current); clearInterval(stopRef.current) }
