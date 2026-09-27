@@ -311,7 +311,14 @@ export default function App() {
 
     let index = 0
     const interval = setInterval(() => {
-      setBattery({ ...demoStates[index % demoStates.length], estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0, ...demoStates[index % demoStates.length] })
+      const state = demoStates[index % demoStates.length]
+      setBattery({
+        battery_percent: state.battery_percent,
+        charging: state.charging,
+        connected: state.connected,
+        estimated_remaining_hours: state.estimated_remaining_hours || 0,
+        estimated_charge_remaining_hours: state.estimated_charge_remaining_hours || 0
+      })
       index++
     }, 3000)
 
