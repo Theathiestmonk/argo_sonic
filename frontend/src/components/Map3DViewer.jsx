@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // Renders the GLB that map_to_3d.py builds from a saved map (served by the launcher at
@@ -132,8 +133,13 @@ export default function Map3DViewer({ launcherUrl, mapName, robotPose, goalPose,
     halo.position.y = 0.02
     robot.add(halo)
 
-    // Load white.glb model
-    new GLTFLoader().load('/models/White.glb',
+    // Load white.glb model with DRACO support
+    const gltfLoader = new GLTFLoader()
+    const dracoLoader = new DRACOLoader()
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/')
+    gltfLoader.setDRACOLoader(dracoLoader)
+
+    gltfLoader.load('/models/White.glb',
       (gltf) => {
         const model = gltf.scene
         // Scale and position to match robot footprint

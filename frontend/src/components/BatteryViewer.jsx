@@ -210,13 +210,22 @@ export default function BatteryViewer({ battery = {} }) {
                     : 'none',
                   transition: 'all 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
                   transitionDelay: isCharging ? `${i * 80}ms` : '0ms',
-                  animation: isCharging && isFilled
-                    ? `premium-pulse 1.8s ease-in-out infinite`
+                  animationName: isCharging && isFilled
+                    ? 'premium-pulse'
                     : displayPercent <= 20 && isFilled
-                    ? `critical-pulse 1.2s ease-in-out infinite`
+                    ? 'critical-pulse'
                     : displayPercent <= 40 && isFilled
-                    ? `low-pulse 2s ease-in-out infinite`
+                    ? 'low-pulse'
                     : 'none',
+                  animationDuration: isCharging && isFilled
+                    ? '1.8s'
+                    : displayPercent <= 20 && isFilled
+                    ? '1.2s'
+                    : displayPercent <= 40 && isFilled
+                    ? '2s'
+                    : '0s',
+                  animationTimingFunction: 'ease-in-out',
+                  animationIterationCount: 'infinite',
                   animationDelay: `${i * 60}ms`,
                   opacity: isFilled ? 1 : 0.7
                 }}
