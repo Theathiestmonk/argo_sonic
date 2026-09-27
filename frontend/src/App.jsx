@@ -76,7 +76,6 @@ export default function App() {
   const [connected, setConnected] = useState(false)
   const [battery, setBattery] = useState({ connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
   const [demoMode, setDemoMode] = useState(() => {
-    // Enable demo mode if ?demo=true in URL
     return new URLSearchParams(window.location.search).get('demo') === 'true'
   })
   const [rosUrl, setRosUrl]       = useState(() => {
@@ -306,16 +305,12 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id) }
   }, [rosUrl])
 
-  // Demo mode: cycles through battery states to test animations
-  // Enable with ?demo=true in URL (e.g., http://localhost:3002?demo=true)
+  // Temp demo mode for ETA positioning test
   useEffect(() => {
     if (!demoMode) return
 
-    // Show dashboard in demo mode
     setView('dashboard')
     setConnected(true)
-
-    // Add mock map data so map displays
     setMapData({
       width: 100,
       height: 100,
@@ -325,21 +320,21 @@ export default function App() {
     })
 
     const states = [
-      { battery_percent: 15, charging: false, connected: true },  // Low - red, blinking
-      { battery_percent: 35, charging: false, connected: true },  // Medium-low - orange, blinking
-      { battery_percent: 60, charging: false, connected: true },  // Medium - yellow, blinking
-      { battery_percent: 80, charging: false, connected: true },  // Good - light green, blinking
-      { battery_percent: 95, charging: false, connected: true },  // Full - cyan, blinking
-      { battery_percent: 85, charging: true, connected: true },   // Charging - green pulse
-      { battery_percent: 75, charging: true, connected: true },   // Still charging
-      { battery_percent: 65, charging: true, connected: true },   // Still charging
+      { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5, estimated_charge_remaining_hours: 0 },
+      { battery_percent: 35, charging: false, connected: true, estimated_remaining_hours: 1.5, estimated_charge_remaining_hours: 0 },
+      { battery_percent: 60, charging: false, connected: true, estimated_remaining_hours: 3.5, estimated_charge_remaining_hours: 0 },
+      { battery_percent: 80, charging: false, connected: true, estimated_remaining_hours: 5.25, estimated_charge_remaining_hours: 0 },
+      { battery_percent: 95, charging: false, connected: true, estimated_remaining_hours: 6.75, estimated_charge_remaining_hours: 0 },
+      { battery_percent: 85, charging: true, connected: true, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 1.5 },
+      { battery_percent: 75, charging: true, connected: true, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 2.5 },
+      { battery_percent: 65, charging: true, connected: true, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 3.25 },
     ]
 
     let index = 0
     const interval = setInterval(() => {
-      setBattery({ ...states[index % states.length], estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
+      setBattery(states[index % states.length])
       index++
-    }, 2000) // Change state every 2 seconds
+    }, 2500)
 
     return () => clearInterval(interval)
   }, [demoMode])

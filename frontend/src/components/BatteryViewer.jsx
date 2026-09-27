@@ -28,7 +28,7 @@ export default function BatteryViewer({ battery = {} }) {
   }, [batteryPercent, displayPercent])
 
   const getBarColor = (percent) => {
-    if (isCharging) return '#7CFF6B' // Electric green when charging
+    if (isCharging) return '#4AC925' // Dark green when charging
     if (percent >= 100) return '#4ADE80' // Full
     if (percent <= 20) return '#FF5C5C' // Critical - red
     if (percent <= 40) return '#F5B942' // Low - amber
@@ -40,13 +40,22 @@ export default function BatteryViewer({ battery = {} }) {
   const segments = 8
   const filledSegments = Math.round((displayPercent / 100) * segments)
 
+  const formatTime = (hours) => {
+    if (!hours) return '—'
+    if (hours < 1) return Math.round(hours * 60) + 'm'
+    if (hours < 2) return Math.round(hours * 10) / 10 + 'h'
+    const h = Math.floor(hours)
+    const m = Math.round((hours - h) * 60)
+    return m === 0 ? h + 'h' : h + 'h ' + m + 'm'
+  }
+
   return (
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 14,
+        gap: 12,
         width: '100%'
       }}
     >
@@ -58,6 +67,23 @@ export default function BatteryViewer({ battery = {} }) {
           height: '150px'
         }}
       >
+        {/* Blinking Indicator - Top-right on battery when NOT charging */}
+        {!isCharging && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '-2px',
+              right: '0px',
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: barColor,
+              boxShadow: `0 0 8px ${barColor}`,
+              animation: 'status-blink 1.5s ease-in-out infinite',
+              zIndex: 10
+            }}
+          />
+        )}
         {/* Battery Terminal (Top) - Minimal metal look */}
         <div
           style={{
@@ -91,9 +117,35 @@ export default function BatteryViewer({ battery = {} }) {
             flexDirection: 'column-reverse',
             gap: '4px',
             overflow: 'hidden',
-            boxShadow: 'inset 0 1px 8px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.3)'
+            boxShadow: 'inset 0 1px 8px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.3)',
+            justifyContent: 'center',
+            alignItems: 'center'
           }}
         >
+          {/* Thunderbolt Icon - Inside battery when charging (Bright yellow) */}
+          {isCharging && (
+            <svg
+              width="20"
+              height="28"
+              viewBox="0 0 60 80"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              style={{
+                position: 'absolute',
+                filter: 'drop-shadow(0 0 8px #FFFF3380) drop-shadow(0 0 16px #FFFF3360)',
+                animation: 'premium-glow 1.8s ease-in-out infinite',
+                opacity: 1,
+                zIndex: 5
+              }}
+            >
+              <path
+                d="M30 2 L12 38 L28 38 L10 78 L50 22 L34 22 L52 2 Z"
+                fill="#FFFF33"
+                stroke="#FFFF33"
+                strokeWidth="0.5"
+              />
+            </svg>
+          )}
           {/* Segmented Bars - Premium animation */}
           {Array.from({ length: segments }).map((_, i) => {
             const isFilled = i < filledSegments
@@ -131,38 +183,51 @@ export default function BatteryViewer({ battery = {} }) {
         </div>
       </div>
 
-      {/* Electric Lightning Icon - Premium animation */}
-      {isCharging && (
+
+      {/* Battery Info - Format: "Battery: 15% | Runtime: 30m" */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 6,
+          textAlign: 'center',
+          width: '100%'
+        }}
+      >
+        {/* Line 1: Battery Percentage */}
         <div
           style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            height: '40px',
-            position: 'relative'
+            fontSize: '13px',
+            fontWeight: '600',
+            color: 'rgba(255,255,255,0.7)',
+            letterSpacing: '0.03em'
           }}
         >
-          <svg
-            width="28"
-            height="40"
-            viewBox="0 0 60 80"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            style={{
-              filter: 'drop-shadow(0 0 8px #7CFF6B60) drop-shadow(0 0 16px #7CFF6B30)',
-              animation: 'premium-glow 1.8s ease-in-out infinite',
-              opacity: 0.95
-            }}
-          >
-            <path
-              d="M30 2 L12 38 L28 38 L10 78 L50 22 L34 22 L52 2 Z"
-              fill="#7CFF6B"
-              stroke="#7CFF6B"
-              strokeWidth="0.5"
-            />
-          </svg>
+          Battery: <span style={{ color: barColor, fontWeight: '700' }}>{displayPercent}%</span>
         </div>
-      )}
+
+        {/* Line 2: Runtime / Charging Time */}
+        <div
+          style={{
+            fontSize: '13px',
+            fontWeight: '600',
+            color: 'rgba(255,255,255,0.7)',
+            letterSpacing: '0.03em'
+          }}
+        >
+          {isCharging ? 'Charging: ' : 'Runtime: '}
+          <span style={{ color: barColor, fontWeight: '700' }}>
+            {isCharging
+              ? battery.estimated_charge_remaining_hours
+                ? formatTime(battery.estimated_charge_remaining_hours)
+                : '—'
+              : battery.estimated_remaining_hours
+              ? formatTime(battery.estimated_remaining_hours)
+              : '—'}
+          </span>
+        </div>
+      </div>
 
       {/* Premium Animation Keyframes */}
       <style>{`
@@ -207,6 +272,19 @@ export default function BatteryViewer({ battery = {} }) {
           50% {
             filter: drop-shadow(0 0 12px #7CFF6B80) drop-shadow(0 0 20px #7CFF6B50);
             opacity: 1;
+          }
+        }
+
+        @keyframes status-blink {
+          0%, 100% {
+            opacity: 1;
+            box-shadow: 0 0 6px currentColor;
+            transform: scale(1);
+          }
+          50% {
+            opacity: 0.4;
+            box-shadow: 0 0 3px currentColor;
+            transform: scale(0.85);
           }
         }
       `}</style>
