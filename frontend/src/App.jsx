@@ -311,16 +311,24 @@ export default function App() {
     let waypointIndex = 0
     let stepWithinWaypoint = 0
     const stepsPerWaypoint = 50  // Slower movement - 10 seconds per waypoint
+    let waitAtLocation = 0
+    const stepsToWait = 30        // 6 seconds pause at each location
 
     const updateRobotPose = () => {
       const current = waypoints[waypointIndex]
       const next = waypoints[(waypointIndex + 1) % waypoints.length]
 
+      // Wait at location before moving
+      if (waitAtLocation > 0) {
+        setRobotPose({ x: current.x, y: current.y, theta: Math.atan2(next.y - current.y, next.x - current.x) + Math.PI / 2 })
+        waitAtLocation--
+        return
+      }
+
       // Interpolate smoothly between waypoints
       const progress = stepWithinWaypoint / stepsPerWaypoint
       const x = current.x + (next.x - current.x) * progress
       const y = current.y + (next.y - current.y) * progress
-      // Calculate heading with proper 3D orientation adjustment
       const theta = Math.atan2(next.y - current.y, next.x - current.x) + Math.PI / 2
 
       setRobotPose({ x, y, theta })
@@ -329,6 +337,7 @@ export default function App() {
       if (stepWithinWaypoint >= stepsPerWaypoint) {
         stepWithinWaypoint = 0
         waypointIndex = (waypointIndex + 1) % waypoints.length
+        waitAtLocation = stepsToWait  // Pause at next location
       }
     }
 
