@@ -35,35 +35,77 @@ export default function BatteryViewer({ battery = {} }) {
     return '#3bf09b'
   })()
 
-  const segments = 10
-  const filledSegments = Math.round((displayPercent / 100) * segments)
+  const fillHeight = (displayPercent / 100) * 100
 
   return (
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 12,
-        width: '100%',
-        padding: '16px',
-        background: 'rgba(255,255,255,0.02)',
-        borderRadius: 8,
-        border: '1px solid rgba(255,255,255,0.06)'
+        alignItems: 'center',
+        gap: 16,
+        width: '100%'
       }}
     >
-      {/* Thunderbolt Indicator */}
+      {/* Short & Thick Cylindrical Battery */}
+      <div
+        style={{
+          position: 'relative',
+          width: '100px',
+          height: '120px',
+          background: 'linear-gradient(90deg, rgba(50,50,60,0.8) 0%, rgba(30,30,40,0.8) 50%, rgba(50,50,60,0.8) 100%)',
+          border: '2px solid rgba(255,255,255,0.15)',
+          borderRadius: '16px',
+          overflow: 'hidden',
+          boxShadow: `inset 0 2px 8px rgba(0,0,0,0.6), 0 8px 24px rgba(0,0,0,0.4), 0 0 20px ${energyColor}30`
+        }}
+      >
+        {/* Battery Fill */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: `${fillHeight}%`,
+            background: `linear-gradient(180deg, ${energyColor}ff 0%, ${energyColor}cc 100%)`,
+            borderRadius: '14px',
+            transition: 'height 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+            boxShadow: `0 0 12px ${energyColor}80, inset 0 1px 3px rgba(255,255,255,0.2)`,
+            animation: isCharging ? `pulse-fill 1.2s ease-in-out infinite` : 'none'
+          }}
+        />
+
+        {/* Battery Terminal */}
+        <div
+          style={{
+            position: 'absolute',
+            top: -8,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '30px',
+            height: '12px',
+            background: 'linear-gradient(180deg, #c0c0c0, #a0a0a0)',
+            border: '1px solid rgba(255,255,255,0.4)',
+            borderRadius: '0 0 4px 4px',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.3)'
+          }}
+        />
+      </div>
+
+      {/* Thunderbolt Indicator Below Battery */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          height: '80px',
+          height: '50px',
           position: 'relative'
         }}
       >
         <svg
-          width="60"
-          height="80"
+          width="40"
+          height="50"
           viewBox="0 0 60 80"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
@@ -83,42 +125,6 @@ export default function BatteryViewer({ battery = {} }) {
             strokeWidth="0.5"
           />
         </svg>
-      </div>
-
-      {/* Battery Level Bars */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column-reverse',
-          gap: 2,
-          alignItems: 'center',
-          width: '100%',
-          height: '80px'
-        }}
-      >
-        {Array.from({ length: segments }).map((_, i) => {
-          const isFilled = i < filledSegments
-          return (
-            <div
-              key={i}
-              style={{
-                flex: 1,
-                width: '100%',
-                maxWidth: '50px',
-                background: isFilled
-                  ? `linear-gradient(90deg, ${energyColor}ff 0%, ${energyColor}cc 100%)`
-                  : 'rgba(255,255,255,0.05)',
-                borderRadius: 2,
-                border: `1px solid ${isFilled ? energyColor + '40' : 'rgba(255,255,255,0.1)'}`,
-                boxShadow: isFilled ? `0 0 6px ${energyColor}50, inset 1px 1px 2px rgba(255,255,255,0.1)` : 'none',
-                transition: 'all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                transitionDelay: `${i * 30}ms`,
-                animation: isCharging && isFilled ? `pulse-bar 1.2s ease-in-out infinite` : 'none',
-                animationDelay: `${i * 80}ms`
-              }}
-            />
-          )
-        })}
       </div>
 
       {/* Animation keyframes */}
@@ -145,14 +151,14 @@ export default function BatteryViewer({ battery = {} }) {
           }
         }
 
-        @keyframes pulse-bar {
+        @keyframes pulse-fill {
           0%, 100% {
+            box-shadow: 0 0 12px ${energyColor}80, inset 0 1px 3px rgba(255,255,255,0.2);
             opacity: 1;
-            boxShadow: 0 0 6px ${energyColor}50, inset 1px 1px 2px rgba(255,255,255,0.1);
           }
           50% {
-            opacity: 0.7;
-            boxShadow: 0 0 12px ${energyColor}80, inset 1px 1px 3px rgba(255,255,255,0.2);
+            box-shadow: 0 0 20px ${energyColor}a0, inset 0 1px 4px rgba(255,255,255,0.3);
+            opacity: 0.9;
           }
         }
       `}</style>
