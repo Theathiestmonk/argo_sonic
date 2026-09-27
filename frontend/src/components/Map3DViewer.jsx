@@ -133,18 +133,33 @@ export default function Map3DViewer({ launcherUrl, mapName, robotPose, goalPose,
     robot.add(halo)
 
     // Load white.glb model
-    new GLTFLoader().load('/models/White.glb', (gltf) => {
-      const model = gltf.scene
-      model.scale.set(0.8, 0.8, 0.8)
-      model.position.y = 0
-      model.traverse(o => {
-        if (o.isMesh && o.material) {
-          o.material.roughness = 0.6
-          o.material.metalness = 0.1
-        }
-      })
-      robot.add(model)
-    })
+    new GLTFLoader().load('/models/White.glb',
+      (gltf) => {
+        const model = gltf.scene
+        // Scale and position to match robot footprint
+        model.scale.set(1, 1, 1)
+        model.position.set(0, 0, 0)
+        model.traverse(o => {
+          if (o.isMesh && o.material) {
+            o.material.roughness = 0.5
+            o.material.metalness = 0.2
+            o.material.side = THREE.DoubleSide
+          }
+        })
+        robot.add(model)
+      },
+      undefined,
+      (error) => {
+        console.warn('Failed to load white.glb model:', error)
+        // Fallback to simple box if model fails to load
+        const fallback = new THREE.Mesh(
+          new THREE.BoxGeometry(ROBOT_LEN, 0.28, ROBOT_WID),
+          new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.6 }),
+        )
+        fallback.position.y = 0.17
+        robot.add(fallback)
+      }
+    )
     robot.visible = false
 
     const goal = new THREE.Group()
