@@ -856,7 +856,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
           {/* Robot Image (left) - Larger */}
           <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: '100%', height: '280px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modelLoading ? 'rgba(0,0,0,0.5)' : 'transparent', borderRadius: 12, transition: 'background 0.2s', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ position: 'relative', width: '100%', height: '450px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modelLoading ? 'rgba(0,0,0,0.5)' : 'transparent', borderRadius: 12, transition: 'background 0.2s', border: '1px solid rgba(255,255,255,0.05)' }}>
               {modelLoading ? (
                 <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
                   <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
