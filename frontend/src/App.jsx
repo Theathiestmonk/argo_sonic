@@ -75,6 +75,10 @@ export default function App() {
   const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
   const [battery, setBattery] = useState({ connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
+  const [demoMode, setDemoMode] = useState(() => {
+    // Enable demo mode if ?demo=true in URL
+    return new URLSearchParams(window.location.search).get('demo') === 'true'
+  })
   const [rosUrl, setRosUrl]       = useState(() => {
     // Auto-use the same host the page was served from.
     // If opened from http://192.168.1.100:3000 → ws://192.168.1.100:9090
@@ -301,6 +305,44 @@ export default function App() {
     const id = setInterval(load, 10000)
     return () => { cancelled = true; clearInterval(id) }
   }, [rosUrl])
+
+  // Demo mode: cycles through battery states to test animations
+  // Enable with ?demo=true in URL (e.g., http://localhost:3002?demo=true)
+  useEffect(() => {
+    if (!demoMode) return
+
+    // Show dashboard in demo mode
+    setView('dashboard')
+    setConnected(true)
+
+    // Add mock map data so map displays
+    setMapData({
+      width: 100,
+      height: 100,
+      resolution: 0.05,
+      origin: { x: -2.5, y: -2.5 },
+      data: new Array(10000).fill(0)
+    })
+
+    const states = [
+      { battery_percent: 15, charging: false, connected: true },  // Low - red, blinking
+      { battery_percent: 35, charging: false, connected: true },  // Medium-low - orange, blinking
+      { battery_percent: 60, charging: false, connected: true },  // Medium - yellow, blinking
+      { battery_percent: 80, charging: false, connected: true },  // Good - light green, blinking
+      { battery_percent: 95, charging: false, connected: true },  // Full - cyan, blinking
+      { battery_percent: 85, charging: true, connected: true },   // Charging - green pulse
+      { battery_percent: 75, charging: true, connected: true },   // Still charging
+      { battery_percent: 65, charging: true, connected: true },   // Still charging
+    ]
+
+    let index = 0
+    const interval = setInterval(() => {
+      setBattery({ ...states[index % states.length], estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
+      index++
+    }, 2000) // Change state every 2 seconds
+
+    return () => clearInterval(interval)
+  }, [demoMode])
 
   useEffect(() => { localStorage.setItem('argo_selected_map', selectedMap) }, [selectedMap])
 

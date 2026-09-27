@@ -7,7 +7,7 @@ export default function BatteryViewer({ battery = {} }) {
 
   useEffect(() => {
     if (displayPercent !== batteryPercent) {
-      const animationTime = 600
+      const animationTime = 400
       const startPercent = displayPercent
       const startTime = Date.now()
 
@@ -27,15 +27,18 @@ export default function BatteryViewer({ battery = {} }) {
     }
   }, [batteryPercent, displayPercent])
 
-  const energyColor = (() => {
-    if (displayPercent <= 20) return '#ff3333'
-    if (displayPercent <= 40) return '#ff8c00'
-    if (displayPercent <= 60) return '#ffd700'
-    if (displayPercent <= 80) return '#90ee90'
-    return '#3bf09b'
-  })()
+  const getBarColor = (percent) => {
+    if (isCharging) return '#7CFF6B' // Electric green when charging
+    if (percent >= 100) return '#4ADE80' // Full
+    if (percent <= 20) return '#FF5C5C' // Critical - red
+    if (percent <= 40) return '#F5B942' // Low - amber
+    return '#F5F5F5' // Normal - off-white
+  }
 
-  const fillHeight = (displayPercent / 100) * 100
+  const barColor = getBarColor(displayPercent)
+
+  const segments = 8
+  const filledSegments = Math.round((displayPercent / 100) * segments)
 
   return (
     <div
@@ -43,122 +46,167 @@ export default function BatteryViewer({ battery = {} }) {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 16,
+        gap: 14,
         width: '100%'
       }}
     >
-      {/* Cylindrical Battery - Taller */}
+      {/* Premium Battery Container */}
       <div
         style={{
           position: 'relative',
-          width: '85px',
-          height: '180px',
-          background: 'linear-gradient(90deg, rgba(50,50,60,0.8) 0%, rgba(30,30,40,0.8) 50%, rgba(50,50,60,0.8) 100%)',
-          border: '2px solid rgba(255,255,255,0.15)',
-          borderRadius: '14px',
-          overflow: 'hidden',
-          boxShadow: `inset 0 2px 8px rgba(0,0,0,0.6), 0 8px 24px rgba(0,0,0,0.4), 0 0 20px ${energyColor}30`
+          width: '68px',
+          height: '150px'
         }}
       >
-        {/* Battery Fill */}
+        {/* Battery Terminal (Top) - Minimal metal look */}
         <div
           style={{
             position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: `${fillHeight}%`,
-            background: `linear-gradient(180deg, ${energyColor}ff 0%, ${energyColor}cc 100%)`,
-            borderRadius: '14px',
-            transition: 'height 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
-            boxShadow: `0 0 12px ${energyColor}80, inset 0 1px 3px rgba(255,255,255,0.2)`,
-            animation: isCharging ? `pulse-fill 1.2s ease-in-out infinite` : 'none'
-          }}
-        />
-
-        {/* Battery Terminal */}
-        <div
-          style={{
-            position: 'absolute',
-            top: -8,
+            top: -2,
             left: '50%',
             transform: 'translateX(-50%)',
-            width: '30px',
+            width: '24px',
             height: '12px',
-            background: 'linear-gradient(180deg, #c0c0c0, #a0a0a0)',
-            border: '1px solid rgba(255,255,255,0.4)',
-            borderRadius: '0 0 4px 4px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.4), inset 0 1px 1px rgba(255,255,255,0.3)'
+            background: 'rgba(200,200,200,0.3)',
+            border: '1px solid rgba(255,255,255,0.15)',
+            borderRadius: '3px 3px 0 0',
+            boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.1)'
           }}
         />
-      </div>
 
-      {/* Thunderbolt Indicator Below Battery */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          height: '50px',
-          position: 'relative'
-        }}
-      >
-        <svg
-          width="40"
-          height="50"
-          viewBox="0 0 60 80"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
+        {/* Battery Housing - Premium translucent charcoal */}
+        <div
           style={{
-            filter: isCharging
-              ? `drop-shadow(0 0 12px #00ff88) drop-shadow(0 0 24px #00ff8860)`
-              : `drop-shadow(0 0 8px rgba(255,255,255,0.4))`,
-            animation: isCharging ? 'pulse-glow 1.5s ease-in-out infinite' : 'blink-white 1s ease-in-out infinite',
-            opacity: isCharging ? 1 : 0.8
+            position: 'absolute',
+            top: '10px',
+            left: 0,
+            right: 0,
+            height: '136px',
+            background: 'rgba(30, 30, 35, 0.6)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '8px 8px 12px 12px',
+            padding: '8px',
+            display: 'flex',
+            flexDirection: 'column-reverse',
+            gap: '4px',
+            overflow: 'hidden',
+            boxShadow: 'inset 0 1px 8px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.3)'
           }}
         >
-          {/* Thunderbolt shape */}
-          <path
-            d="M30 2 L12 38 L28 38 L10 78 L50 22 L34 22 L52 2 Z"
-            fill={isCharging ? '#00ff88' : '#ffffff'}
-            stroke={isCharging ? '#00ff88' : '#ffffff'}
-            strokeWidth="0.5"
-          />
-        </svg>
+          {/* Segmented Bars - Premium animation */}
+          {Array.from({ length: segments }).map((_, i) => {
+            const isFilled = i < filledSegments
+            return (
+              <div
+                key={i}
+                style={{
+                  flex: 1,
+                  width: '100%',
+                  background: isFilled
+                    ? barColor
+                    : 'rgba(255,255,255,0.03)',
+                  borderRadius: '2px',
+                  border: `0.5px solid ${isFilled ? `${barColor}40` : 'rgba(255,255,255,0.05)'}`,
+                  boxShadow: isFilled
+                    ? isCharging
+                      ? `0 0 6px ${barColor}70, inset 0 1px 1px rgba(255,255,255,0.2)`
+                      : `0 0 3px ${barColor}50, inset 0 1px 1px rgba(255,255,255,0.15)`
+                    : 'none',
+                  transition: 'all 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+                  transitionDelay: isCharging ? `${i * 80}ms` : '0ms',
+                  animation: isCharging && isFilled
+                    ? `premium-pulse 1.8s ease-in-out infinite`
+                    : displayPercent <= 20 && isFilled
+                    ? `critical-pulse 1.2s ease-in-out infinite`
+                    : displayPercent <= 40 && isFilled
+                    ? `low-pulse 2s ease-in-out infinite`
+                    : 'none',
+                  animationDelay: `${i * 60}ms`,
+                  opacity: isFilled ? 1 : 0.7
+                }}
+              />
+            )
+          })}
+        </div>
       </div>
 
-      {/* Animation keyframes */}
+      {/* Electric Lightning Icon - Premium animation */}
+      {isCharging && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            height: '40px',
+            position: 'relative'
+          }}
+        >
+          <svg
+            width="28"
+            height="40"
+            viewBox="0 0 60 80"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            style={{
+              filter: 'drop-shadow(0 0 8px #7CFF6B60) drop-shadow(0 0 16px #7CFF6B30)',
+              animation: 'premium-glow 1.8s ease-in-out infinite',
+              opacity: 0.95
+            }}
+          >
+            <path
+              d="M30 2 L12 38 L28 38 L10 78 L50 22 L34 22 L52 2 Z"
+              fill="#7CFF6B"
+              stroke="#7CFF6B"
+              strokeWidth="0.5"
+            />
+          </svg>
+        </div>
+      )}
+
+      {/* Premium Animation Keyframes */}
       <style>{`
-        @keyframes pulse-glow {
+        @keyframes premium-pulse {
           0%, 100% {
-            filter: drop-shadow(0 0 12px #00ff88) drop-shadow(0 0 24px #00ff8860);
             opacity: 1;
+            box-shadow: 0 0 6px #7CFF6B70, inset 0 1px 1px rgba(255,255,255,0.2);
           }
           50% {
-            filter: drop-shadow(0 0 20px #00ff88) drop-shadow(0 0 32px #00ff88aa);
-            opacity: 0.9;
-          }
-        }
-
-        @keyframes blink-white {
-          0%, 100% {
-            filter: drop-shadow(0 0 8px rgba(255,255,255,0.4));
             opacity: 0.8;
-          }
-          50% {
-            filter: drop-shadow(0 0 4px rgba(255,255,255,0.2));
-            opacity: 0.5;
+            box-shadow: 0 0 10px #7CFF6B90, inset 0 1px 2px rgba(255,255,255,0.25);
           }
         }
 
-        @keyframes pulse-fill {
+        @keyframes critical-pulse {
           0%, 100% {
-            box-shadow: 0 0 12px ${energyColor}80, inset 0 1px 3px rgba(255,255,255,0.2);
             opacity: 1;
+            box-shadow: 0 0 4px #FF5C5C50, inset 0 1px 1px rgba(255,255,255,0.1);
           }
           50% {
-            box-shadow: 0 0 20px ${energyColor}a0, inset 0 1px 4px rgba(255,255,255,0.3);
-            opacity: 0.9;
+            opacity: 0.75;
+            box-shadow: 0 0 8px #FF5C5C70, inset 0 1px 1px rgba(255,255,255,0.15);
+          }
+        }
+
+        @keyframes low-pulse {
+          0%, 100% {
+            opacity: 1;
+            box-shadow: 0 0 4px #F5B94250, inset 0 1px 1px rgba(255,255,255,0.1);
+          }
+          50% {
+            opacity: 0.85;
+            box-shadow: 0 0 6px #F5B94270, inset 0 1px 1px rgba(255,255,255,0.15);
+          }
+        }
+
+        @keyframes premium-glow {
+          0%, 100% {
+            filter: drop-shadow(0 0 8px #7CFF6B60) drop-shadow(0 0 16px #7CFF6B30);
+            opacity: 0.95;
+          }
+          50% {
+            filter: drop-shadow(0 0 12px #7CFF6B80) drop-shadow(0 0 20px #7CFF6B50);
+            opacity: 1;
           }
         }
       `}</style>
