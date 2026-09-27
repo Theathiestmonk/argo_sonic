@@ -75,9 +75,6 @@ export default function App() {
   const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
   const [battery, setBattery] = useState({ connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
-  const [demoMode, setDemoMode] = useState(() => {
-    return new URLSearchParams(window.location.search).get('demo') === 'true'
-  })
   const [rosUrl, setRosUrl]       = useState(() => {
     // Auto-use the same host the page was served from.
     // If opened from http://192.168.1.100:3000 → ws://192.168.1.100:9090
@@ -305,39 +302,6 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id) }
   }, [rosUrl])
 
-  // Temp demo mode for ETA positioning test
-  useEffect(() => {
-    if (!demoMode) return
-
-    setView('dashboard')
-    setConnected(true)
-    setMapData({
-      width: 100,
-      height: 100,
-      resolution: 0.05,
-      origin: { x: -2.5, y: -2.5 },
-      data: new Array(10000).fill(0)
-    })
-
-    const states = [
-      { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5, estimated_charge_remaining_hours: 0 },
-      { battery_percent: 35, charging: false, connected: true, estimated_remaining_hours: 1.5, estimated_charge_remaining_hours: 0 },
-      { battery_percent: 60, charging: false, connected: true, estimated_remaining_hours: 3.5, estimated_charge_remaining_hours: 0 },
-      { battery_percent: 80, charging: false, connected: true, estimated_remaining_hours: 5.25, estimated_charge_remaining_hours: 0 },
-      { battery_percent: 95, charging: false, connected: true, estimated_remaining_hours: 6.75, estimated_charge_remaining_hours: 0 },
-      { battery_percent: 85, charging: true, connected: true, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 1.5 },
-      { battery_percent: 75, charging: true, connected: true, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 2.5 },
-      { battery_percent: 65, charging: true, connected: true, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 3.25 },
-    ]
-
-    let index = 0
-    const interval = setInterval(() => {
-      setBattery(states[index % states.length])
-      index++
-    }, 2500)
-
-    return () => clearInterval(interval)
-  }, [demoMode])
 
   useEffect(() => { localStorage.setItem('argo_selected_map', selectedMap) }, [selectedMap])
 

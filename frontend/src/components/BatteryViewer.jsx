@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 
 export default function BatteryViewer({ battery = {} }) {
+  const isConnected = battery.connected !== false
   const batteryPercent = Math.round(battery.battery_percent || 0)
   const isCharging = battery.charging || false
   const [displayPercent, setDisplayPercent] = useState(batteryPercent)
@@ -122,8 +123,47 @@ export default function BatteryViewer({ battery = {} }) {
             alignItems: 'center'
           }}
         >
+          {/* Loading Spinner - When no BMS data */}
+          {!isConnected && (
+            <div style={{
+              position: 'absolute',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 15
+            }}>
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 100 100"
+                style={{
+                  animation: 'spin-battery 2s linear infinite'
+                }}
+              >
+                {[0, 1, 2, 3].map((i) => (
+                  <line
+                    key={i}
+                    x1="50"
+                    y1="15"
+                    x2="50"
+                    y2="30"
+                    stroke="rgba(255,255,255,0.4)"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    transform={`rotate(${i * 90} 50 50)`}
+                    opacity={0.3 + (i * 0.2)}
+                    style={{
+                      animation: `pulse-bar-${i} 1.2s ease-in-out infinite`,
+                      animationDelay: `${i * 0.3}s`
+                    }}
+                  />
+                ))}
+              </svg>
+            </div>
+          )}
+
           {/* Thunderbolt Icon - Inside battery when charging (Bright yellow) */}
-          {isCharging && (
+          {isConnected && isCharging && (
             <svg
               width="20"
               height="28"
@@ -146,8 +186,8 @@ export default function BatteryViewer({ battery = {} }) {
               />
             </svg>
           )}
-          {/* Segmented Bars - Premium animation */}
-          {Array.from({ length: segments }).map((_, i) => {
+          {/* Segmented Bars - Premium animation (only when connected) */}
+          {isConnected && Array.from({ length: segments }).map((_, i) => {
             const isFilled = i < filledSegments
             return (
               <div
@@ -231,6 +271,28 @@ export default function BatteryViewer({ battery = {} }) {
 
       {/* Premium Animation Keyframes */}
       <style>{`
+        @keyframes spin-battery {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse-bar-0 {
+          0%, 100% { opacity: 0.3; }
+          50% { opacity: 1; }
+        }
+        @keyframes pulse-bar-1 {
+          0%, 100% { opacity: 0.5; }
+          50% { opacity: 0.8; }
+        }
+        @keyframes pulse-bar-2 {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 0.9; }
+        }
+        @keyframes pulse-bar-3 {
+          0%, 100% { opacity: 0.3; }
+          50% { opacity: 0.7; }
+        }
+
         @keyframes premium-pulse {
           0%, 100% {
             opacity: 1;
