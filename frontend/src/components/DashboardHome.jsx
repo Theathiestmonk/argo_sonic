@@ -4,7 +4,7 @@ import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
 import TelemetryCard from './TelemetryCard'
-import CylindricalBattery from './CylindricalBattery'
+import BatteryViewer from './BatteryViewer'
 import FreeRoamPanel from './FreeRoamPanel'
 import Map3DViewer from './Map3DViewer'
 
@@ -20,14 +20,6 @@ import Map3DViewer from './Map3DViewer'
 // shared access to menu-data.js's currency/tax settings here.
 const money = (n) => '$' + Number(n || 0).toFixed(2)
 
-// Get battery color based on level
-const getColor = (percent) => {
-  if (percent <= 20) return { bg: '#ff3333', glow: '#ff3333' }
-  if (percent <= 40) return { bg: '#ff8c00', glow: '#ff8c00' }
-  if (percent <= 60) return { bg: '#ffd700', glow: '#ffd700' }
-  if (percent <= 80) return { bg: '#90ee90', glow: '#90ee90' }
-  return { bg: '#3bf09b', glow: '#3bf09b' }
-}
 
 // A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
 // waypoints/<map>.json file — it has NO guaranteed relationship to the
@@ -852,11 +844,11 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 10px', borderLeft: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', background: 'rgba(0,0,0,0.1)' }}>
 
         {/* Robot Preview & Battery in Single Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr auto', gap: 16, alignItems: 'stretch', background: 'rgba(255,255,255,0.02)', borderRadius: 10, padding: '16px', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr auto', gap: 16, alignItems: 'stretch', background: 'rgba(255,255,255,0.02)', borderRadius: 10, padding: '16px', border: '1px solid rgba(255,255,255,0.06)', minHeight: '520px' }}>
 
           {/* Robot Image (left) - Larger */}
           <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: '100%', height: '450px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modelLoading ? 'rgba(0,0,0,0.5)' : 'transparent', borderRadius: 12, transition: 'background 0.2s', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: '480px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modelLoading ? 'rgba(0,0,0,0.5)' : 'transparent', borderRadius: 12, transition: 'background 0.2s', border: '1px solid rgba(255,255,255,0.05)' }}>
               {modelLoading ? (
                 <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
                   <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
@@ -874,42 +866,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             </div>
           </div>
 
-          {/* Cylindrical Battery (right) with Percentage Below */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-            <CylindricalBattery battery={battery} />
-
-            {/* Percentage Display Below Battery */}
-            <div
-              style={{
-                textAlign: 'center',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 8,
-                padding: '8px 12px',
-                minWidth: '100px',
-                animation: battery.charging ? 'pulse-percentage 2s ease-in-out infinite' : 'none'
-              }}
-            >
-              <div style={{ fontSize: '24px', fontWeight: 900, color: getColor(battery.battery_percent || 0).glow, textShadow: `0 0 8px ${getColor(battery.battery_percent || 0).glow}60` }}>
-                {Math.round(battery.battery_percent || 0)}%
-              </div>
-              <div style={{ fontSize: '9px', color: 'rgba(200,200,220,0.5)', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>
-                {battery.charging ? '🔌 Charging' : '🔋 Idle'}
-              </div>
-            </div>
-
-            <style>{`
-              @keyframes pulse-percentage {
-                0%, 100% {
-                  opacity: 1;
-                  transform: scale(1);
-                }
-                50% {
-                  opacity: 0.8;
-                  transform: scale(1.05);
-                }
-              }
-            `}</style>
+          {/* Battery Viewer (right) */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0, minWidth: '160px' }}>
+            <BatteryViewer battery={battery} />
           </div>
 
         </div>
