@@ -282,7 +282,7 @@ export default function BatteryViewer({ battery = {} }) {
             animation: 'blink-text 1.5s ease-in-out infinite'
           }}
         >
-          Connecting BMS...
+          Connecting Battery...
         </div>
       )}
 
