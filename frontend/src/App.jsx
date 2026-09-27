@@ -297,8 +297,29 @@ export default function App() {
       origin: { x: -2.5, y: -2.5 },
       data: new Array(10000).fill(0)
     })
-    // Set robot position to center of map for 3D view
-    setRobotPose({ x: 0, y: 0, theta: 0 })
+    // Set goal position for robot to face
+    const goalX = 2, goalY = 2
+
+    // Simulate robot movement around map
+    let moveIndex = 0
+    const robotPath = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0.5 },
+      { x: 1.5, y: 1 },
+      { x: goalX, y: goalY },
+    ]
+
+    const updateRobotPose = () => {
+      const pos = robotPath[moveIndex % robotPath.length]
+      const nextPos = robotPath[(moveIndex + 1) % robotPath.length]
+      // Calculate heading toward next position
+      const theta = Math.atan2(nextPos.y - pos.y, nextPos.x - pos.x)
+      setRobotPose({ x: pos.x, y: pos.y, theta })
+      moveIndex++
+    }
+
+    updateRobotPose()
+    const movementInterval = setInterval(updateRobotPose, 2000)
 
     const demoStates = [
       { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5 },
@@ -312,7 +333,7 @@ export default function App() {
     ]
 
     let index = 0
-    const interval = setInterval(() => {
+    const batteryInterval = setInterval(() => {
       const state = demoStates[index % demoStates.length]
       setBattery({
         battery_percent: state.battery_percent,
@@ -324,7 +345,10 @@ export default function App() {
       index++
     }, 3000)
 
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(batteryInterval)
+      clearInterval(movementInterval)
+    }
   }, [demoMode])
 
   useEffect(() => { if (!demoMode) connect(); return () => clearInterval(retryRef.current) }, [])
