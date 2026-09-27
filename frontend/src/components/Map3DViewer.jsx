@@ -124,24 +124,27 @@ export default function Map3DViewer({ launcherUrl, mapName, robotPose, goalPose,
     const world = new THREE.Group()      // GLB
     const ground = new THREE.Group()     // floor + grid, rebuilt per model
     const robot = new THREE.Group()
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(ROBOT_LEN, 0.28, ROBOT_WID),
-      new THREE.MeshStandardMaterial({ color: 0x800000, roughness: 0.6 }),
-    )
-    body.position.y = 0.17
-    const nose = new THREE.Mesh(
-      new THREE.ConeGeometry(0.1, 0.26, 20),
-      new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.5 }),
-    )
-    nose.rotation.z = -Math.PI / 2                // cone points +Y by default; forward is +X
-    nose.position.set(ROBOT_LEN / 2 + 0.05, 0.36, 0)
     const halo = new THREE.Mesh(
       new THREE.RingGeometry(0.38, 0.44, 40),
       new THREE.MeshBasicMaterial({ color: 0xe2b35c, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
     )
     halo.rotation.x = -Math.PI / 2
     halo.position.y = 0.02
-    robot.add(body, nose, halo)
+    robot.add(halo)
+
+    // Load white.glb model
+    new GLTFLoader().load('/models/White.glb', (gltf) => {
+      const model = gltf.scene
+      model.scale.set(0.8, 0.8, 0.8)
+      model.position.y = 0
+      model.traverse(o => {
+        if (o.isMesh && o.material) {
+          o.material.roughness = 0.6
+          o.material.metalness = 0.1
+        }
+      })
+      robot.add(model)
+    })
     robot.visible = false
 
     const goal = new THREE.Group()
