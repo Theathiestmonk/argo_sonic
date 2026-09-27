@@ -285,7 +285,7 @@ export default function App() {
     clearInterval(retryRef.current)
   }, [])
 
-  // Demo mode - showcase without real robot connection
+  // Demo mode - load dashboard without real connection
   useEffect(() => {
     if (!demoMode) return
     setView('dashboard')
@@ -297,81 +297,16 @@ export default function App() {
       origin: { x: -2.5, y: -2.5 },
       data: new Array(10000).fill(0)
     })
-    // Simulate robot movement using actual Atsn_cafe_map waypoints
-    // Smooth robot movement along waypoints with interpolation
-    const waypoints = [
-      { x: 1.27, y: -0.40 },    // Kitchen
-      { x: 6.10, y: -1.28 },    // Table 5
-      { x: 7.55, y: -1.37 },    // Table 4
-      { x: 9.20, y: -1.11 },    // Table 3
-      { x: 9.41, y: -0.04 },    // Table 1
-      { x: 12.44, y: 0.41 },    // Table 6
-    ]
-
-    let waypointIndex = 0
-    let stepWithinWaypoint = 0
-    const stepsPerWaypoint = 50  // Slower movement - 10 seconds per waypoint
-    let waitAtLocation = 0
-    const stepsToWait = 30        // 6 seconds pause at each location
-
-    const updateRobotPose = () => {
-      const current = waypoints[waypointIndex]
-      const next = waypoints[(waypointIndex + 1) % waypoints.length]
-
-      // Wait at location before moving
-      if (waitAtLocation > 0) {
-        setRobotPose({ x: current.x, y: current.y, theta: Math.atan2(next.y - current.y, next.x - current.x) + Math.PI / 2 })
-        waitAtLocation--
-        return
-      }
-
-      // Interpolate smoothly between waypoints
-      const progress = stepWithinWaypoint / stepsPerWaypoint
-      const x = current.x + (next.x - current.x) * progress
-      const y = current.y + (next.y - current.y) * progress
-      const theta = Math.atan2(next.y - current.y, next.x - current.x) + Math.PI / 2
-
-      setRobotPose({ x, y, theta })
-
-      stepWithinWaypoint++
-      if (stepWithinWaypoint >= stepsPerWaypoint) {
-        stepWithinWaypoint = 0
-        waypointIndex = (waypointIndex + 1) % waypoints.length
-        waitAtLocation = stepsToWait  // Pause at next location
-      }
-    }
-
-    updateRobotPose()
-    const movementInterval = setInterval(updateRobotPose, 200)
-
-    const demoStates = [
-      { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5 },
-      { battery_percent: 35, charging: false, connected: true, estimated_remaining_hours: 1.5 },
-      { battery_percent: 60, charging: false, connected: true, estimated_remaining_hours: 3.5 },
-      { battery_percent: 80, charging: false, connected: true, estimated_remaining_hours: 5.25 },
-      { battery_percent: 95, charging: false, connected: true, estimated_remaining_hours: 6.75 },
-      { battery_percent: 85, charging: true, connected: true, estimated_charge_remaining_hours: 1.5 },
-      { battery_percent: 75, charging: true, connected: true, estimated_charge_remaining_hours: 2.5 },
-      { battery_percent: 65, charging: true, connected: true, estimated_charge_remaining_hours: 3.25 },
-    ]
-
-    let index = 0
-    const interval = setInterval(() => {
-      const state = demoStates[index % demoStates.length]
-      setBattery({
-        battery_percent: state.battery_percent,
-        charging: state.charging,
-        connected: state.connected,
-        estimated_remaining_hours: state.estimated_remaining_hours || 0,
-        estimated_charge_remaining_hours: state.estimated_charge_remaining_hours || 0
-      })
-      index++
-    }, 3000)
-
-    return () => {
-      clearInterval(interval)
-      clearInterval(movementInterval)
-    }
+    // Set initial robot position at Kitchen
+    setRobotPose({ x: 1.27, y: -0.40, theta: 0 })
+    // Set initial battery state
+    setBattery({
+      battery_percent: 75,
+      charging: false,
+      connected: true,
+      estimated_remaining_hours: 4.5,
+      estimated_charge_remaining_hours: 0
+    })
   }, [demoMode])
 
   useEffect(() => { if (!demoMode) connect(); return () => clearInterval(retryRef.current) }, [])
