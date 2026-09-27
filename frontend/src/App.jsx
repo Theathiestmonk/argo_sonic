@@ -310,7 +310,7 @@ export default function App() {
 
     let waypointIndex = 0
     let stepWithinWaypoint = 0
-    const stepsPerWaypoint = 20
+    const stepsPerWaypoint = 50  // Slower movement - 10 seconds per waypoint
 
     const updateRobotPose = () => {
       const current = waypoints[waypointIndex]
