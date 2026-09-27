@@ -320,7 +320,8 @@ export default function App() {
       const progress = stepWithinWaypoint / stepsPerWaypoint
       const x = current.x + (next.x - current.x) * progress
       const y = current.y + (next.y - current.y) * progress
-      const theta = Math.atan2(next.y - current.y, next.x - current.x)
+      // Calculate heading with proper 3D orientation adjustment
+      const theta = Math.atan2(next.y - current.y, next.x - current.x) + Math.PI / 2
 
       setRobotPose({ x, y, theta })
 
