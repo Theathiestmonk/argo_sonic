@@ -844,26 +844,24 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 10px', borderLeft: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', background: 'rgba(0,0,0,0.1)' }}>
 
         {/* Robot Preview & Battery in Single Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr auto', gap: 16, alignItems: 'stretch', background: 'rgba(255,255,255,0.02)', borderRadius: 10, padding: '16px', border: '1px solid rgba(255,255,255,0.06)', minHeight: '520px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr auto', gap: 16, alignItems: 'center', minHeight: '520px' }}>
 
           {/* Robot Image (left) - Larger */}
-          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: '480px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modelLoading ? 'rgba(0,0,0,0.5)' : 'transparent', borderRadius: 12, transition: 'background 0.2s', border: '1px solid rgba(255,255,255,0.05)' }}>
-              {modelLoading ? (
-                <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
-                  <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
-                  <div style={{ fontSize: 11, fontWeight: 600 }}>Loading...</div>
-                </div>
-              ) : (
-                <img
-                  src="/models/argo.png"
-                  alt="Argo Robot"
-                  onLoad={() => setModelLoading(false)}
-                  onError={() => setModelLoading(false)}
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))' }}
-                />
-              )}
-            </div>
+          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+            {modelLoading ? (
+              <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
+                <div style={{ fontSize: 11, fontWeight: 600 }}>Loading...</div>
+              </div>
+            ) : (
+              <img
+                src="/models/argo.png"
+                alt="Argo Robot"
+                onLoad={() => setModelLoading(false)}
+                onError={() => setModelLoading(false)}
+                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', filter: 'drop-shadow(0 8px 20px rgba(0,0,0,0.6))' }}
+              />
+            )}
           </div>
 
           {/* Battery Viewer (right) */}

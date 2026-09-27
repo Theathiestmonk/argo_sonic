@@ -47,15 +47,15 @@ export default function BatteryViewer({ battery = {} }) {
         width: '100%'
       }}
     >
-      {/* Short & Thick Cylindrical Battery */}
+      {/* Cylindrical Battery - Taller */}
       <div
         style={{
           position: 'relative',
-          width: '100px',
-          height: '120px',
+          width: '85px',
+          height: '180px',
           background: 'linear-gradient(90deg, rgba(50,50,60,0.8) 0%, rgba(30,30,40,0.8) 50%, rgba(50,50,60,0.8) 100%)',
           border: '2px solid rgba(255,255,255,0.15)',
-          borderRadius: '16px',
+          borderRadius: '14px',
           overflow: 'hidden',
           boxShadow: `inset 0 2px 8px rgba(0,0,0,0.6), 0 8px 24px rgba(0,0,0,0.4), 0 0 20px ${energyColor}30`
         }}
