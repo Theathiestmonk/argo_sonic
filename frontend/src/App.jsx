@@ -297,22 +297,19 @@ export default function App() {
       origin: { x: -2.5, y: -2.5 },
       data: new Array(10000).fill(0)
     })
-    // Set goal position for robot to face
-    const goalX = 2, goalY = 2
-
-    // Simulate robot movement around map
+    // Simulate robot movement with proper face orientation toward goal
     let moveIndex = 0
     const robotPath = [
       { x: 0, y: 0 },
       { x: 1, y: 0.5 },
       { x: 1.5, y: 1 },
-      { x: goalX, y: goalY },
+      { x: 2, y: 1.5 },
     ]
 
     const updateRobotPose = () => {
       const pos = robotPath[moveIndex % robotPath.length]
       const nextPos = robotPath[(moveIndex + 1) % robotPath.length]
-      // Calculate heading toward next position
+      // Calculate heading toward next position (robot face direction)
       const theta = Math.atan2(nextPos.y - pos.y, nextPos.x - pos.x)
       setRobotPose({ x: pos.x, y: pos.y, theta })
       moveIndex++
@@ -333,7 +330,7 @@ export default function App() {
     ]
 
     let index = 0
-    const batteryInterval = setInterval(() => {
+    const interval = setInterval(() => {
       const state = demoStates[index % demoStates.length]
       setBattery({
         battery_percent: state.battery_percent,
@@ -346,7 +343,7 @@ export default function App() {
     }, 3000)
 
     return () => {
-      clearInterval(batteryInterval)
+      clearInterval(interval)
       clearInterval(movementInterval)
     }
   }, [demoMode])
