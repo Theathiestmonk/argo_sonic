@@ -227,50 +227,64 @@ export default function BatteryViewer({ battery = {} }) {
       </div>
 
 
-      {/* Battery Info - Format: "Battery: 15% | Runtime: 30m" */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 6,
-          textAlign: 'center',
-          width: '100%'
-        }}
-      >
-        {/* Line 1: Battery Percentage */}
+      {/* Battery Info - Format: "Battery: 15% | Runtime: 30m" or "Connecting..." */}
+      {isConnected ? (
         <div
           style={{
-            fontSize: '13px',
-            fontWeight: '600',
-            color: 'rgba(255,255,255,0.7)',
-            letterSpacing: '0.03em'
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 6,
+            textAlign: 'center',
+            width: '100%'
           }}
         >
-          Battery: <span style={{ color: barColor, fontWeight: '700' }}>{displayPercent}%</span>
-        </div>
+          {/* Line 1: Battery Percentage */}
+          <div
+            style={{
+              fontSize: '13px',
+              fontWeight: '600',
+              color: 'rgba(255,255,255,0.7)',
+              letterSpacing: '0.03em'
+            }}
+          >
+            Battery: <span style={{ color: barColor, fontWeight: '700' }}>{displayPercent}%</span>
+          </div>
 
-        {/* Line 2: Runtime / Charging Time */}
+          {/* Line 2: Runtime / Charging Time */}
+          <div
+            style={{
+              fontSize: '13px',
+              fontWeight: '600',
+              color: 'rgba(255,255,255,0.7)',
+              letterSpacing: '0.03em'
+            }}
+          >
+            {isCharging ? 'Charging: ' : 'Runtime: '}
+            <span style={{ color: barColor, fontWeight: '700' }}>
+              {isCharging
+                ? battery.estimated_charge_remaining_hours
+                  ? formatTime(battery.estimated_charge_remaining_hours)
+                  : '—'
+                : battery.estimated_remaining_hours
+                ? formatTime(battery.estimated_remaining_hours)
+                : '—'}
+            </span>
+          </div>
+        </div>
+      ) : (
         <div
           style={{
             fontSize: '13px',
             fontWeight: '600',
-            color: 'rgba(255,255,255,0.7)',
-            letterSpacing: '0.03em'
+            color: 'rgba(255,255,255,0.5)',
+            letterSpacing: '0.03em',
+            animation: 'blink-text 1.5s ease-in-out infinite'
           }}
         >
-          {isCharging ? 'Charging: ' : 'Runtime: '}
-          <span style={{ color: barColor, fontWeight: '700' }}>
-            {isCharging
-              ? battery.estimated_charge_remaining_hours
-                ? formatTime(battery.estimated_charge_remaining_hours)
-                : '—'
-              : battery.estimated_remaining_hours
-              ? formatTime(battery.estimated_remaining_hours)
-              : '—'}
-          </span>
+          Connecting BMS...
         </div>
-      </div>
+      )}
 
       {/* Premium Animation Keyframes */}
       <style>{`
@@ -287,6 +301,15 @@ export default function BatteryViewer({ battery = {} }) {
           50% {
             opacity: 1;
             stroke-width: 3.5;
+          }
+        }
+
+        @keyframes blink-text {
+          0%, 100% {
+            opacity: 0.5;
+          }
+          50% {
+            opacity: 1;
           }
         }
 
