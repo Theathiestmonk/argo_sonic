@@ -297,6 +297,8 @@ export default function App() {
       origin: { x: -2.5, y: -2.5 },
       data: new Array(10000).fill(0)
     })
+    // Set robot position to center of map for 3D view
+    setRobotPose({ x: 0, y: 0, theta: 0 })
 
     const demoStates = [
       { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5 },
