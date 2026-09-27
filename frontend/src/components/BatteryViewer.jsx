@@ -133,31 +133,34 @@ export default function BatteryViewer({ battery = {} }) {
               zIndex: 15
             }}>
               <svg
-                width="32"
-                height="32"
+                width="40"
+                height="40"
                 viewBox="0 0 100 100"
                 style={{
                   animation: 'spin-battery 2s linear infinite'
                 }}
               >
-                {[0, 1, 2, 3].map((i) => (
-                  <line
-                    key={i}
-                    x1="50"
-                    y1="15"
-                    x2="50"
-                    y2="30"
-                    stroke="rgba(255,255,255,0.4)"
-                    strokeWidth="4"
-                    strokeLinecap="round"
-                    transform={`rotate(${i * 90} 50 50)`}
-                    opacity={0.3 + (i * 0.2)}
-                    style={{
-                      animation: `pulse-bar-${i} 1.2s ease-in-out infinite`,
-                      animationDelay: `${i * 0.3}s`
-                    }}
-                  />
-                ))}
+                {Array.from({ length: 12 }).map((_, i) => {
+                  const angle = (i * 360) / 12
+                  return (
+                    <line
+                      key={i}
+                      x1="50"
+                      y1="18"
+                      x2="50"
+                      y2="32"
+                      stroke="rgba(255,255,255,0.5)"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      transform={`rotate(${angle} 50 50)`}
+                      style={{
+                        animation: `pulse-bar 1.2s ease-in-out infinite`,
+                        animationDelay: `${i * 0.1}s`,
+                        opacity: 0.4 + (i * 0.05)
+                      }}
+                    />
+                  )
+                })}
               </svg>
             </div>
           )}
@@ -276,21 +279,15 @@ export default function BatteryViewer({ battery = {} }) {
           100% { transform: rotate(360deg); }
         }
 
-        @keyframes pulse-bar-0 {
-          0%, 100% { opacity: 0.3; }
-          50% { opacity: 1; }
-        }
-        @keyframes pulse-bar-1 {
-          0%, 100% { opacity: 0.5; }
-          50% { opacity: 0.8; }
-        }
-        @keyframes pulse-bar-2 {
-          0%, 100% { opacity: 0.4; }
-          50% { opacity: 0.9; }
-        }
-        @keyframes pulse-bar-3 {
-          0%, 100% { opacity: 0.3; }
-          50% { opacity: 0.7; }
+        @keyframes pulse-bar {
+          0%, 100% {
+            opacity: 0.4;
+            stroke-width: 3;
+          }
+          50% {
+            opacity: 1;
+            stroke-width: 3.5;
+          }
         }
 
         @keyframes premium-pulse {
