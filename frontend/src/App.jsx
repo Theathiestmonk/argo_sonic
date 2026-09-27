@@ -298,8 +298,8 @@ export default function App() {
       data: new Array(10000).fill(0)
     })
     // Simulate robot movement using actual Atsn_cafe_map waypoints
-    let moveIndex = 0
-    const robotPath = [
+    // Smooth robot movement along waypoints with interpolation
+    const waypoints = [
       { x: 1.27, y: -0.40 },    // Kitchen
       { x: 6.10, y: -1.28 },    // Table 5
       { x: 7.55, y: -1.37 },    // Table 4
@@ -308,17 +308,31 @@ export default function App() {
       { x: 12.44, y: 0.41 },    // Table 6
     ]
 
+    let waypointIndex = 0
+    let stepWithinWaypoint = 0
+    const stepsPerWaypoint = 20
+
     const updateRobotPose = () => {
-      const pos = robotPath[moveIndex % robotPath.length]
-      const nextPos = robotPath[(moveIndex + 1) % robotPath.length]
-      // Calculate heading toward next position (robot face direction)
-      const theta = Math.atan2(nextPos.y - pos.y, nextPos.x - pos.x)
-      setRobotPose({ x: pos.x, y: pos.y, theta })
-      moveIndex++
+      const current = waypoints[waypointIndex]
+      const next = waypoints[(waypointIndex + 1) % waypoints.length]
+
+      // Interpolate smoothly between waypoints
+      const progress = stepWithinWaypoint / stepsPerWaypoint
+      const x = current.x + (next.x - current.x) * progress
+      const y = current.y + (next.y - current.y) * progress
+      const theta = Math.atan2(next.y - current.y, next.x - current.x)
+
+      setRobotPose({ x, y, theta })
+
+      stepWithinWaypoint++
+      if (stepWithinWaypoint >= stepsPerWaypoint) {
+        stepWithinWaypoint = 0
+        waypointIndex = (waypointIndex + 1) % waypoints.length
+      }
     }
 
     updateRobotPose()
-    const movementInterval = setInterval(updateRobotPose, 2000)
+    const movementInterval = setInterval(updateRobotPose, 200)
 
     const demoStates = [
       { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5 },
