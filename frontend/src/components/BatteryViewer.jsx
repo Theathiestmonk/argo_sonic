@@ -64,8 +64,8 @@ export default function BatteryViewer({ battery = {} }) {
       <div
         style={{
           position: 'relative',
-          width: '68px',
-          height: '150px'
+          width: '85px',
+          height: '160px'
         }}
       >
         {/* Blinking Indicator - Top-right on battery when NOT charging */}
@@ -108,7 +108,7 @@ export default function BatteryViewer({ battery = {} }) {
             top: '10px',
             left: 0,
             right: 0,
-            height: '136px',
+            height: '145px',
             background: 'rgba(30, 30, 35, 0.6)',
             backdropFilter: 'blur(8px)',
             border: '1px solid rgba(255,255,255,0.08)',
