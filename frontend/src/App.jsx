@@ -75,6 +75,7 @@ export default function App() {
   const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
   const [battery, setBattery] = useState({ connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
+  const [demoMode] = useState(() => new URLSearchParams(window.location.search).get('demo') === 'true')
   const [rosUrl, setRosUrl]       = useState(() => {
     // Auto-use the same host the page was served from.
     // If opened from http://192.168.1.100:3000 → ws://192.168.1.100:9090
@@ -284,7 +285,40 @@ export default function App() {
     clearInterval(retryRef.current)
   }, [])
 
-  useEffect(() => { connect(); return () => clearInterval(retryRef.current) }, [])
+  // Demo mode - showcase without real robot connection
+  useEffect(() => {
+    if (!demoMode) return
+    setView('dashboard')
+    setConnected(true)
+    setMapData({
+      width: 100,
+      height: 100,
+      resolution: 0.05,
+      origin: { x: -2.5, y: -2.5 },
+      data: new Array(10000).fill(0)
+    })
+
+    const demoStates = [
+      { battery_percent: 15, charging: false, connected: true, estimated_remaining_hours: 0.5 },
+      { battery_percent: 35, charging: false, connected: true, estimated_remaining_hours: 1.5 },
+      { battery_percent: 60, charging: false, connected: true, estimated_remaining_hours: 3.5 },
+      { battery_percent: 80, charging: false, connected: true, estimated_remaining_hours: 5.25 },
+      { battery_percent: 95, charging: false, connected: true, estimated_remaining_hours: 6.75 },
+      { battery_percent: 85, charging: true, connected: true, estimated_charge_remaining_hours: 1.5 },
+      { battery_percent: 75, charging: true, connected: true, estimated_charge_remaining_hours: 2.5 },
+      { battery_percent: 65, charging: true, connected: true, estimated_charge_remaining_hours: 3.25 },
+    ]
+
+    let index = 0
+    const interval = setInterval(() => {
+      setBattery({ ...demoStates[index % demoStates.length], estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0, ...demoStates[index % demoStates.length] })
+      index++
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [demoMode])
+
+  useEffect(() => { if (!demoMode) connect(); return () => clearInterval(retryRef.current) }, [])
 
   // Live BMS reading (GET /battery, backend/launcher.py) — drives the top
   // header's battery pill, next to the Argo Sonic brand/connection status.
