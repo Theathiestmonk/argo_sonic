@@ -297,13 +297,15 @@ export default function App() {
       origin: { x: -2.5, y: -2.5 },
       data: new Array(10000).fill(0)
     })
-    // Simulate robot movement with proper face orientation toward goal
+    // Simulate robot movement using actual Atsn_cafe_map waypoints
     let moveIndex = 0
     const robotPath = [
-      { x: 0, y: 0 },
-      { x: 1, y: 0.5 },
-      { x: 1.5, y: 1 },
-      { x: 2, y: 1.5 },
+      { x: 1.27, y: -0.40 },    // Kitchen
+      { x: 6.10, y: -1.28 },    // Table 5
+      { x: 7.55, y: -1.37 },    // Table 4
+      { x: 9.20, y: -1.11 },    // Table 3
+      { x: 9.41, y: -0.04 },    // Table 1
+      { x: 12.44, y: 0.41 },    // Table 6
     ]
 
     const updateRobotPose = () => {
