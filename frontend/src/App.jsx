@@ -551,7 +551,7 @@ export default function App() {
           <button
             onClick={() => { setNavInitializing(true); dashboardRef.current?.startNav?.() }}
             disabled={navInitializing}
-            title={navInitializing ? (navProgress || 'Starting navigation stack...') : undefined}
+            title={navInitializing ? (navProgress || 'Starting Argo…') : undefined}
             style={{
               padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
               background: navReady ? 'rgba(59,240,155,0.12)' : 'rgba(226,179,92,0.14)',

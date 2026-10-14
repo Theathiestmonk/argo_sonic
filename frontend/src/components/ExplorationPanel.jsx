@@ -124,7 +124,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
     if (!mode) return
     setStackState('starting')
     const toastMsg = mode === 'manual'
-      ? 'Starting SLAM mapping — please wait…'
+      ? 'Starting mapping — please wait…'
       : mode === 'freeRoam'
         ? 'Starting Free Roam — please wait…'
         : 'Starting Argo stack — please wait…'
@@ -228,8 +228,8 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
               body: JSON.stringify({ map: mapName }),
             })
               .then(r => r.json())
-              .then(d => { if (!d.ok && d.error !== 'ntfields_train_busy') showToast('Could not start NTFields training', 'danger') })
-              .catch(() => showToast('Could not reach launcher to start NTFields training', 'danger'))
+              .then(d => { if (!d.ok && d.error !== 'ntfields_train_busy') showToast('Could not start learning the map', 'danger') })
+              .catch(() => showToast('Could not reach the robot to start learning the map', 'danger'))
 
             // Also build the 3D wall model the dashboard's 3D map view shows. Best-effort:
             // a missing converter (503) or a build already running (409) must never disturb
@@ -299,7 +299,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gold-bright)' }}>Starting up…</div>
                   <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
-                    {mode === 'manual' ? 'SLAM and sensors are launching' : mode === 'freeRoam' ? 'SLAM, Nav2, sensors and free roam are launching' : 'SLAM, Nav2 and sensors are launching'}
+                    {mode === 'manual' ? 'Sensors and mapping are starting' : mode === 'freeRoam' ? 'Sensors, mapping and free roam are starting' : 'Sensors, mapping and navigation are starting'}
                   </div>
                 </div>
               </div>
@@ -324,8 +324,8 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
                 </button>
                 <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 12, lineHeight: 1.65 }}>
                   {mode === 'manual'
-                    ? 'Starts SLAM and sensors only — you drive, no Nav2 required.'
-                    : 'Starts SLAM, Nav2, sensors and the exploration stack on the robot automatically.'}
+                    ? 'Starts sensors and mapping only — you drive manually.'
+                    : 'Starts sensors, mapping and navigation — the robot explores automatically.'}
                 </p>
               </>
             )}

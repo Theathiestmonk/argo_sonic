@@ -238,6 +238,20 @@ Endpoints (CORS-open so the browser can call them directly):
                            planner, etc. keep running) — for when the robot
                            is physically misbehaving and needs motors cut
                            right now, not a graceful stop of everything.
+    POST /teleop/start →  starts ONLY serial_bridge (no SLAM/Nav2) so the drive pad
+                           works immediately — called when the UI's joystick
+                           button is clicked. No-op if serial_bridge is already
+                           up (standalone or as part of the nav stack, or the nav
+                           stack is still booting and will launch it itself).
+                           Also recovers from the motors-cut state left by
+                           "Stop Argo", but NOT from an operator's explicit
+                           /estop (returns status "estopped" — use /estop/resume).
+                           Response: {"ok": bool, "status": "started"|"already_running"|
+                           "nav_starting"|"estopped"}.
+    POST /teleop/stop  →  called when the drive pad closes: zero-ramps and kills
+                           serial_bridge, unless the nav stack is running (then
+                           left alone, status "nav_running"). Not an e-stop —
+                           motors stay resumable. Status: "stopped"|"not_running"|"nav_running".
     POST /estop/resume →  relaunches serial_bridge directly to resume manual
                            control after an /estop, without restarting the
                            whole nav stack.
@@ -1375,6 +1389,7 @@ def _wake_stop_locked():
 # having to restart the whole stack (SLAM, planner, etc. all keep running).
 _serial_proc: subprocess.Popen | None = None
 _serial_estopped = False
+_serial_estop_manual = False   # True only for an operator's POST /estop, not /stop's teardown
 _serial_lock = threading.Lock()
 SERIAL_PORT = '/dev/esp32'
 SERIAL_BAUD = 115200
@@ -1416,10 +1431,45 @@ def _estop_locked():
     _serial_estopped = True
 
 
+def _serial_bridge_running():
+    """serial_bridge process alive anywhere — standalone or as a child of the
+    nav stack. pgrep -f ignores itself."""
+    return subprocess.run(['pgrep', '-f', 'serial_bridge'], capture_output=True).returncode == 0
+
+
+def _teleop_start():
+    """Bring up just serial_bridge for manual driving. Returns a status string."""
+    with _serial_lock:
+        if _serial_estopped and _serial_estop_manual:
+            return 'estopped'
+        if _proc is not None and _proc.poll() is None:
+            return 'nav_starting' if not _serial_bridge_running() else 'already_running'
+        if _serial_bridge_running():
+            return 'already_running'
+        _estop_resume_locked()
+        return 'started'
+
+
+def _teleop_stop():
+    """Stop the motor driver when the drive pad closes: zero-ramp then kill,
+    like an e-stop, but NOT left in the estopped state. Never touches a driver
+    that belongs to a running nav stack."""
+    global _serial_estopped
+    with _serial_lock:
+        if _proc is not None and _proc.poll() is None:
+            return 'nav_running'
+        if not _serial_bridge_running():
+            return 'not_running'
+        _estop_locked()
+        _serial_estopped = False
+        return 'stopped'
+
+
 def _estop_resume_locked():
     """Relaunch serial_bridge directly, sourcing the same ROS environment
     argo_sonic_nav.py's own build_env() does. Caller must hold _serial_lock."""
-    global _serial_proc, _serial_estopped
+    global _serial_proc, _serial_estopped, _serial_estop_manual
+    _serial_estop_manual = False
     cmd = (
         "source /opt/ros/humble/setup.bash && "
         f"source {_ROOT}/install/setup.bash && "
@@ -1684,7 +1734,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'error': 'not found'}, 404)
 
     def do_POST(self):
-        global _proc, _mode, _map, _wake_should_run
+        global _proc, _mode, _map, _wake_should_run, _serial_estop_manual
 
         if self.path == '/start':
             # "Start Argo" resumes the motors (e-stop, if it was engaged)
@@ -1810,6 +1860,7 @@ class Handler(BaseHTTPRequestHandler):
                 _wake_stop_locked()
             with _serial_lock:
                 _estop_locked()
+                _serial_estop_manual = False   # full teardown, not an operator e-stop
             _kill_ros_stragglers()
             print('[launcher] Stop Argo — nav stack, voice/wake loop, and motors all stopped; clean state until /start')
             self._json({'ok': True, 'status': 'stopped'})
@@ -2118,9 +2169,20 @@ class Handler(BaseHTTPRequestHandler):
             print(f'[launcher] /maps/{name}/model/build')
             self._json({'ok': True, 'status': 'started', 'map': name})
 
+        elif self.path == '/teleop/start':
+            status = _teleop_start()
+            print(f'[launcher] /teleop/start -> {status}')
+            self._json({'ok': status != 'estopped', 'status': status}, 409 if status == 'estopped' else 200)
+
+        elif self.path == '/teleop/stop':
+            status = _teleop_stop()
+            print(f'[launcher] /teleop/stop -> {status}')
+            self._json({'ok': True, 'status': status})
+
         elif self.path == '/estop':
             with _serial_lock:
                 _estop_locked()
+                _serial_estop_manual = True
             print('[launcher] EMERGENCY STOP — serial_bridge killed')
             self._json({'ok': True, 'status': 'estopped'})
 

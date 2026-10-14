@@ -85,7 +85,7 @@ export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, o
                     border: `1px solid ${hasModel ? 'rgba(59,240,155,0.28)' : 'rgba(255,159,67,0.3)'}`,
                     color: hasModel ? 'var(--ok)' : '#ff9f43',
                   }}>
-                    {hasModel ? 'NTFields model ready' : 'No NTFields model'}
+                    {hasModel ? 'Route model ready' : 'No route model yet'}
                   </div>
                 )}
 

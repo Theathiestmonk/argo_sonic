@@ -3,6 +3,7 @@ import { ros } from '../ros'
 import RadialNav from './RadialNav'
 import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
+import { friendlyNavMessage, TELEOP_BADGE } from '../friendlyNames'
 import TelemetryCard from './TelemetryCard'
 import BatteryViewer from './BatteryViewer'
 import FreeRoamPanel from './FreeRoamPanel'
@@ -235,7 +236,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     const check = () => {
       fetch(`${launcherUrl}/nav_progress`)
         .then(r => r.json())
-        .then(d => { if (!cancelled) { setNavProgress(d); onNavProgress?.(d.message || null) } })
+        .then(d => { if (!cancelled) { setNavProgress({ ...d, message: friendlyNavMessage(d.message) }); onNavProgress?.(friendlyNavMessage(d.message) || null) } })
         .catch(() => {})
     }
     check()
@@ -587,6 +588,37 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     fetch(`${launcherUrl}/estop`, { method: 'POST' })
       .then(() => { setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
       .catch(() => showToast('Could not reach launcher for E-STOP', 'danger'))
+  }
+
+  // Joystick button: bring up serial_bridge alone so manual driving works
+  // without waiting for SLAM/Nav2. Fire-and-forget — the pad opens immediately.
+  const [teleopStatus, setTeleopStatus] = useState(null) // null|'starting'|'started'|'already_running'|'nav_starting'|'estopped'|'error'
+  const startTeleop = () => {
+    setShowTeleopPad(true)
+    setTeleopStatus('starting')
+    fetch(`${launcherUrl}/teleop/start`, { method: 'POST' })
+      .then(async r => {
+        const d = await r.json().catch(() => ({}))
+        setTeleopStatus(d.status || 'error')
+        if (d.status === 'estopped') showToast('Emergency stop is active — resume the motors to drive', 'danger')
+        else if (d.status === 'started') showToast('Drive controls ready', 'ok')
+        else if (d.status === 'already_running') showToast('Drive controls ready', 'ok')
+        else if (d.status === 'nav_starting') showToast('Argo is still starting up — driving will be available shortly', 'ok')
+      })
+      .catch(() => { setTeleopStatus('error'); showToast('Could not reach the robot to enable driving', 'danger') })
+  }
+
+  const stopTeleop = () => {
+    setShowTeleopPad(false)
+    setTeleopStatus(null)
+    fetch(`${launcherUrl}/teleop/stop`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.status === 'stopped') showToast('Drive controls closed — motors switched off', 'ok')
+        else if (d.status === 'nav_running') showToast('Drive controls closed', 'ok')
+        else showToast('Drive controls closed', 'ok')
+      })
+      .catch(() => showToast('Could not reach the robot to switch motors off', 'danger'))
   }
 
   const estopResume = () => {
@@ -1043,7 +1075,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 100 }}>
         {!showTeleopPad && (
         <button
-          onClick={() => setShowTeleopPad(!showTeleopPad)}
+          onClick={startTeleop}
           title="Toggle drive controls"
           style={{
             padding: '12px 14px', borderRadius: 12, fontSize: 16,
@@ -1067,9 +1099,15 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         {showTeleopPad && (
           <div className="glass-card" style={{ padding: 20, marginTop: 12, minWidth: 220 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div className="label-xs">Drive Controls</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div className="label-xs">Drive Controls</div>
+                {teleopStatus && (() => {
+                  const m = TELEOP_BADGE[teleopStatus] || [teleopStatus, 'var(--muted)']
+                  return <span style={{ fontSize: 9.5, fontWeight: 700, color: m[1] }}>● {m[0]}</span>
+                })()}
+              </div>
               <button
-                onClick={() => setShowTeleopPad(false)}
+                onClick={stopTeleop}
                 title="Minimize drive controls"
                 style={{
                   background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
