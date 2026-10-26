@@ -33,12 +33,21 @@ class SerialBridge(Node):
         self.declare_parameter('left_tick_scale', 1.0)
         self.declare_parameter('disable_tank_turns', False)
         self.declare_parameter('imu_flip_z', False)
+        # Per-wheel direction flip for a motor wired/mounted backwards — flips
+        # the RPM sent to the ESP32 AND the sign of that wheel's encoder ticks
+        # (ticks are signed by real rotation direction, so a reversed motor
+        # also counts backwards; odometry must see forward as positive).
+        self.declare_parameter('invert_left', False)
+        # Default True: right motor spins opposite to left after the Oct-2026 rebuild.
+        self.declare_parameter('invert_right', True)
         port = self.get_parameter('port').value
         baud = self.get_parameter('baud').value
         self.forward_only       = self.get_parameter('forward_only').value
         self.left_tick_scale    = self.get_parameter('left_tick_scale').value
         self.disable_tank_turns = self.get_parameter('disable_tank_turns').value
         self.imu_flip_z         = self.get_parameter('imu_flip_z').value
+        self.invert_left        = self.get_parameter('invert_left').value
+        self.invert_right       = self.get_parameter('invert_right').value
 
         if self.forward_only:
             self.get_logger().info('forward_only=true: reverse commands blocked')
@@ -89,6 +98,7 @@ class SerialBridge(Node):
         self.prev_left  = None
         self.prev_right = None
         self._bad_tick_streak = 0
+        self._rx_buf = b''
         self.last_time  = self.get_clock().now()
         self.last_cmd        = self.get_clock().now()
         self._last_watchdog_stop = False
@@ -190,6 +200,11 @@ class SerialBridge(Node):
             rpm_l = self._v_to_rpm(v_l)
             rpm_r = self._v_to_rpm(v_r)
 
+        if self.invert_left:
+            rpm_l = -rpm_l
+        if self.invert_right:
+            rpm_r = -rpm_r
+
         # Ramp through zero on direction change so ESC accepts reverse
         rpm_l = self._ramp_rpm(self._out_rpm_l, rpm_l)
         rpm_r = self._ramp_rpm(self._out_rpm_r, rpm_r)
@@ -205,28 +220,45 @@ class SerialBridge(Node):
             self.get_logger().error(f'Write error: {e}')
 
     def read_serial(self):
+        # Never block here. pyserial's readline() only times out *between*
+        # bytes, so on a line that streams bytes without a newline (garbage
+        # from the ESP32 UART right after a reset, or a wrong baud) it never
+        # returns -- which froze this whole single-threaded node, including the
+        # 50 Hz odom->base_footprint TF, for ~1 min on a first start after
+        # boot. Instead take whatever is already buffered, split it into lines
+        # ourselves, and drop anything that cannot be a valid line.
         try:
-            if self.ser.in_waiting > 400:
+            waiting = self.ser.in_waiting
+            if waiting > 400:
                 self.ser.reset_input_buffer()
+                self._rx_buf = b''
                 return
-            while self.ser.in_waiting:
-                raw = self.ser.readline().decode(
-                    'utf-8', errors='ignore').strip()
+            if waiting:
+                self._rx_buf += self.ser.read(waiting)
+            *lines, self._rx_buf = self._rx_buf.split(b'\n')
+            if len(self._rx_buf) > 120:       # no newline in 120 bytes: not our protocol
+                self._rx_buf = b''
+            for chunk in lines:
+                raw = chunk.decode('utf-8', errors='ignore').strip()
                 if not raw:
-                    break
+                    continue
                 if raw.startswith('O '):
                     parts = raw.split()
                     if len(parts) == 4:
                         gz = float(parts[3])
                         if self.imu_flip_z:
                             gz = -gz
-                        self.update_odom(int(parts[1]), int(parts[2]), gz)
+                        self.update_odom(*self._signed_ticks(parts[1], parts[2]), gz)
                     elif len(parts) == 3:
-                        self.update_odom(int(parts[1]), int(parts[2]))
+                        self.update_odom(*self._signed_ticks(parts[1], parts[2]))
                 elif raw.startswith('U '):
                     self._publish_us(raw)
         except Exception as e:
             self.get_logger().warn(f'Read error: {e}')
+
+    def _signed_ticks(self, left, right):
+        l, r = int(left), int(right)
+        return (-l if self.invert_left else l), (-r if self.invert_right else r)
 
     def _publish_us(self, raw: str):
         parts = raw.split()

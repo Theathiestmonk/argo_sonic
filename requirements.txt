@@ -6,18 +6,15 @@
 # Install once from the repo root:
 #   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# ── sonic/ (voice agent) ──────────────────────────────────────────────────
+# ── sonic/ (DB scripts) ──────────────────────────────────────────────────
 requests>=2.31.0
 numpy
 python-dotenv
-sounddevice>=0.4.6
-openwakeword
+sounddevice>=0.4.6   # depth_stop.py spoken alerts
 psycopg2-binary>=2.9
-langgraph>=0.2    # main_agent.py (the LangGraph agent) only — payload_agent/ doesn't use it
 typing_extensions
-websockets>=12.0   # Sarvam streaming TTS (sarvam_tts_stream) — optional at runtime,
-                    # speak() falls back to the REST API if this isn't installed
-# pydantic (below, shared with settings-dashboard/backend) — payload_agent/'s Payload schema
+websockets>=12.0   # admin_panel.py
+# pydantic (below, shared with settings-dashboard/backend)
 
 # ── settings-dashboard/backend/ (Jetson WiFi/Bluetooth/System settings API) ──
 fastapi>=0.110,<1.0
@@ -26,8 +23,7 @@ pydantic>=2.5,<3.0
 
 # ── src/argo_mini/ (ROS2 package) ──────────────────────────────────────────
 # NOT installable into .venv above — these back `ros2 run argo_mini <node>`
-# console-script entry points (voice_agent, voice_agent2, restaurant_agent,
-# ntfields_planner_node), which run on the system/global Python alongside
+# console-script entry points (ntfields_planner_node), which run on the system/global Python alongside
 # rclpy, not a project venv. Install with the system pip3 instead:
 #   pip3 install -r requirements.txt   (this section only — the rest above
 #   assumes a venv and will pull in packages this system python doesn't need)
@@ -39,9 +35,3 @@ pydantic>=2.5,<3.0
 # .nv24.08); see NVIDIA's Jetson PyTorch install instructions for the matching
 # JetPack/CUDA version if it ever needs reinstalling.
 #
-openwakeword       # voice_agent.py (top-level import), argo_mini/stt/wake.py (lazy)
-vosk               # argo_mini/stt/wake.py, argo_mini/stt/pipeline.py (lazy imports)
-sherpa-onnx        # argo_mini/stt/recognizer.py (lazy import, streaming ASR)
-pyaudio            # voice_agent.py
-# requests, numpy, sounddevice, langgraph — already listed above; same
-# packages, needed here too for voice_agent.py / restaurant_agent_node.py

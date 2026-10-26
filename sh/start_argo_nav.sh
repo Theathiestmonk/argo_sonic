@@ -142,7 +142,8 @@ echo "[argo] Starting serial_bridge..."
 ros2 run argo_mini serial_bridge --ros-args \
   -p port:=/dev/esp32 \
   -p baud:=115200 \
-  -p left_tick_scale:=0.66 &
+  -p left_tick_scale:=0.66 \
+  -p invert_right:=true &
 SERIAL_PID=$!
 sleep 5
 

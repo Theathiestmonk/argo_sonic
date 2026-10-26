@@ -55,8 +55,8 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
   const [saving, setSaving]        = useState(false)  // map save in progress
   const [mapsDir, setMapsDir]      = useState(null)   // src/argo_mini/maps on the robot, from launcher /config
   // NTFields training kicked off automatically once a map save succeeds
-  // (see saveMap() below) — polled the same way /nav/goto/status and
-  // /voice/status already are elsewhere, non-blocking: doesn't gate
+  // (see saveMap() below) — polled the same way /nav/goto/status is
+  // elsewhere, non-blocking: doesn't gate
   // "Map is ready — label places", just shown alongside it.
   const [trainStatus, setTrainStatus] = useState({ running: false, map: null, phase: null, phase_text: null })
   const pauseTopicRef = useRef(null)

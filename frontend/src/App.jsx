@@ -90,11 +90,6 @@ export default function App() {
   const [navReady, setNavReady] = useState(false)
   const [navPoseSet, setNavPoseSet] = useState(false)
   const [navProgress, setNavProgress] = useState(null)   // live step-by-step message (e.g. "Starting Serial Bridge"), shown on the Start Argo button while initializing
-  // Wake-word/companion-agent loop — deliberately independent of navReady
-  // above now (see backend/launcher.py's POST /agent/start comment): the
-  // agent loads an LLM onto the same GPU ntfields_planner_node needs, so
-  // it's a separate manual on/off, not tied to Start/Stop Argo anymore.
-  const [agentRunning, setAgentRunning] = useState(false)
   const retryRef = useRef(null)
 
   const [mapData, setMapData]     = useState(null)
@@ -595,34 +590,6 @@ export default function App() {
             🛑 Stop Argo
           </button>
 
-          {/* Start/Stop Sonic (companion_agent.py's wake-word loop) —
-              deliberately separate from Start/Stop Argo above: it loads an
-              LLM onto the same GPU ntfields_planner_node needs, so it's a
-              manual choice, not tied to nav being up (see
-              backend/launcher.py's POST /agent/start comment). */}
-          {!agentRunning ? (
-            <button
-              onClick={() => dashboardRef.current?.startAgent?.()}
-              style={{
-                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
-                background: 'rgba(127,168,232,0.14)', border: '1px solid rgba(127,168,232,0.4)', color: '#7fa8e8',
-                display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
-              }}
-            >
-              🎙️ Start Sonic
-            </button>
-          ) : (
-            <button
-              onClick={() => dashboardRef.current?.stopAgent?.()}
-              style={{
-                padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
-                background: 'rgba(59,240,155,0.12)', border: '1px solid rgba(59,240,155,0.3)', color: 'var(--ok)',
-                display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
-              }}
-            >
-              ✓ Sonic On — Stop
-            </button>
-          )}
         </div>
       </header>
 
@@ -665,7 +632,6 @@ export default function App() {
             onNavReady={setNavReady}
             onNavPoseSet={setNavPoseSet}
             onNavProgress={setNavProgress}
-            onAgentRunning={setAgentRunning}
           />
         )}
 

@@ -3,7 +3,7 @@
 // (/safety_shield/lidar_distance, /safety_shield/depth_distance) and
 // serial_bridge.py's own per-corner ultrasonic (/us/front_left etc.,
 // published directly, not routed through the shield). Always visible
-// (unlike the teleop pad/transcript toggles) — this is passive readout,
+// (unlike the teleop pad toggle) — this is passive readout,
 // not an on-demand control.
 const fmtSpeed = (v) => (v == null || !Number.isFinite(v)) ? '—' : `${v.toFixed(2)} m/s`
 const fmtAngular = (v) => (v == null || !Number.isFinite(v)) ? '—' : `${v.toFixed(2)} rad/s`

@@ -4,7 +4,7 @@ Argo Sonic – NTFields Navigation Launcher
 Usage: python3 argo_sonic_nav.py [--no-cam] [--map /path/to/map]
 """
 
-import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, math, select, json, yaml
+import os, sys, re, time, signal, shutil, subprocess, threading, argparse, io, select, json, fcntl
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +28,18 @@ POSE_MAX_AGE_S = 3600
 # live somewhere else, e.g. ~/my_project/argo_sonic. Matches the sh/*.sh
 # scripts' own SCRIPT_DIR convention for the same reason.
 REPO_ROOT = str(Path(__file__).resolve().parent)
+
+# In-process rclpy helper for lifecycle bring-up and readiness checks (see its
+# module docstring for why this replaced `ros2 lifecycle`/`ros2 topic` CLI calls).
+LIFECYCLE_HELPER = f"{REPO_ROOT}/nav_lifecycle.py"
+# One nav stack at a time: a second copy would pkill the first one's nodes
+# mid-run. flock() is released by the kernel when the owning process dies.
+LOCK_PATH = "/tmp/argo_sonic_nav.lock"
+_lock_fh = None
+_helper_procs = []      # nav_lifecycle.py subprocesses currently running (killed on shutdown)
+# Last "fail"-level message, so cleanup() can keep the reason visible in the
+# progress file instead of overwriting it with a bare "STOPPED".
+_last_error = None
 
 if hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -94,6 +106,48 @@ telem_lock = threading.Lock()
 
 TOTAL_STEPS = 14
 
+# Lifecycle nodes Nav2 needs, and the processes whose death after READY means
+# navigation is gone. Checked in this order by the final readiness gate.
+NAV2_LIFECYCLE_NODES = ["/planner_server", "/controller_server", "/velocity_smoother",
+                        "/behavior_server", "/bt_navigator"]
+CRITICAL_PROCS = ["Serial Bridge", "RPLidar A1", "Scan Relay", "SLAM Toolbox",
+                  "NTFields Planner", "Controller Server", "Velocity Smoother",
+                  "Behavior Server", "BT Navigator"]
+
+# Per-run diagnostics. Every child's stdout/stderr and every lifecycle
+# bring-up report is kept here (previously all child output went to DEVNULL,
+# so a failed first start left nothing to inspect). /tmp/argo_nav_logs/latest
+# always points at the newest run.
+LOG_ROOT = Path("/tmp/argo_nav_logs")
+LOG_DIR  = None
+
+def init_log_dir():
+    global LOG_DIR
+    LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    LOG_DIR = LOG_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    latest = LOG_ROOT / "latest"
+    try:
+        if latest.is_symlink() or latest.exists():
+            latest.unlink()
+        latest.symlink_to(LOG_DIR)
+    except OSError:
+        pass
+    # Keep only the 10 most recent runs.
+    runs = sorted(d for d in LOG_ROOT.iterdir() if d.is_dir() and not d.is_symlink())
+    for old in runs[:-10]:
+        shutil.rmtree(old, ignore_errors=True)
+
+def node_log(name):
+    """Open (append) the per-node log file; DEVNULL if the dir isn't ready."""
+    if LOG_DIR is None:
+        return subprocess.DEVNULL
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+    try:
+        return open(LOG_DIR / f"{safe}.log", "ab")
+    except OSError:
+        return subprocess.DEVNULL
+
 STEP_NAMES = [
     "Robot State Publisher", "Camera TF Bridge",    "Serial Bridge",
     "RPLidar A1",            "Scan Relay",           "SLAM Toolbox",
@@ -118,8 +172,13 @@ COLORS = {
     "warn": YELLOW, "run": GOLD, "sys": PURPLE,
 }
 
-def _telem_reader(proc):
+def _telem_reader(proc, logf=None):
     for raw in proc.stdout:
+        if logf not in (None, subprocess.DEVNULL):
+            try:
+                logf.write(raw); logf.flush()
+            except Exception:
+                pass
         try:
             line = raw.decode('utf-8', errors='ignore')
         except Exception:
@@ -157,6 +216,8 @@ def log(msg, kind="info"):
     with log_lock:
         log_lines.append(line)
     if kind == "fail":
+        global _last_error
+        _last_error = msg
         report_progress("ERROR", msg)
     elif kind == "run" and not _progress_locked:
         report_progress("OK", msg)
@@ -273,9 +334,10 @@ def launch(name, cmd, env):
     global step_name
     step_name = name
     log(f"Starting  {name}", "run")
+    lf = node_log(name)
     p = subprocess.Popen(
         cmd, shell=True, env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=lf, stderr=subprocess.STDOUT,
         preexec_fn=os.setsid,
     )
     pids[name] = p
@@ -291,7 +353,7 @@ def launch_with_telem(name, cmd, env):
         preexec_fn=os.setsid,
     )
     pids[name] = p
-    threading.Thread(target=_telem_reader, args=(p,), daemon=True).start()
+    threading.Thread(target=_telem_reader, args=(p, node_log(name)), daemon=True).start()
     return p
 
 def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
@@ -313,7 +375,7 @@ def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
         log(f"Starting  {name}{tag}", "run")
         p = subprocess.Popen(
             cmd, shell=True, env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=node_log(name), stderr=subprocess.STDOUT,
             preexec_fn=os.setsid,
         )
         pids[name] = p
@@ -400,46 +462,17 @@ def save_last_pose(env):
     have a seed to work from, not a fatal error, since slam_toolbox's own
     scan-matching doesn't strictly require one (see nav.launch.py's own
     comment on this node)."""
+    slam = pids.get("SLAM Toolbox")
+    if slam is None or slam.poll() is not None:
+        return   # no live localizer (startup aborted early / crashed): nothing worth saving, and don't stall shutdown probing for one
     if not env:
-        return   # cleanup() fired before build_env(home) ever ran (e.g. Ctrl-C during map selection) — nothing to capture yet
+        return   # cleanup() fired before build_env(home) ever ran
     try:
-        # Try to get slam_toolbox's final localized pose from /pose
-        check = runcmd("ros2 topic list --no-daemon 2>/dev/null | grep -qx '/pose'", env, timeout=2)
-        if check.returncode == 0:
-            for attempt in range(3):
-                r = runcmd("timeout 5 ros2 topic echo /pose --once --no-daemon", env, timeout=6)
-                if r.returncode == 0 and r.stdout.strip():
-                    try:
-                        msg = yaml.safe_load(r.stdout)
-                        if not msg or "pose" not in msg:
-                            raise ValueError("Invalid message structure")
-                        pos = msg["pose"]["pose"]["position"]
-                        ori = msg["pose"]["pose"]["orientation"]
-                        with open(LAST_POSE_PATH, "w") as f:
-                            json.dump({"x": pos["x"], "y": pos["y"], "qz": ori["z"], "qw": ori["w"],
-                                       "saved_at": time.time()}, f)
-                        log(f"Saved last pose ({pos['x']:.2f}, {pos['y']:.2f}) for next start", "ok")
-                        return
-                    except (ValueError, KeyError, TypeError) as e:
-                        log(f"Pose parse error (attempt {attempt + 1}/3): {e}", "warn")
-                if attempt < 2:
-                    time.sleep(0.5)
-            log("Couldn't capture /pose topic — trying odometry fallback", "warn")
-
-        # Fallback: get last odometry position if /pose topic unavailable
-        r = runcmd("timeout 3 ros2 topic echo /odom --once --no-daemon", env, timeout=4)
-        if r.returncode == 0 and r.stdout.strip():
-            msg = yaml.safe_load(r.stdout)
-            if msg and "pose" in msg and "pose" in msg["pose"]:
-                pos = msg["pose"]["pose"]["position"]
-                ori = msg["pose"]["pose"]["orientation"]
-                with open(LAST_POSE_PATH, "w") as f:
-                    json.dump({"x": pos["x"], "y": pos["y"], "qz": ori["z"], "qw": ori["w"],
-                               "saved_at": time.time()}, f)
-                log(f"Saved last odometry pose ({pos['x']:.2f}, {pos['y']:.2f}) for next start", "ok")
-                return
-
-        log("Couldn't capture pose from /pose or /odom — robot position won't be seeded next start", "warn")
+        r = subprocess.run(
+            ["python3", LIFECYCLE_HELPER, "pose", "--out", LAST_POSE_PATH, "--timeout", "2.0"],
+            env=env, capture_output=True, text=True, timeout=8)
+        line = (r.stdout.strip().splitlines() or ["(no output)"])[-1]
+        log(f"Last pose for next start: {line}", "ok" if r.returncode == 0 else "warn")
     except Exception as e:
         log(f"Couldn't save last pose: {e}", "warn")
 
@@ -500,154 +533,209 @@ def seed_initial_pose(env):
     except Exception as e:
         log(f"Couldn't seed initial pose: {e}", "warn")
 
-def wait_nav_prerequisites(env, timeout_odom=25, timeout_scan=20, timeout_map=30, timeout_tf=45):
-    """Block until odometry, scan streams, map, and TFs are strictly active.
+def run_helper(args, env, timeout):
+    """Run nav_lifecycle.py in the sourced ROS env. Its output is mirrored to the
+    UI log and to <logdir>/lifecycle.log. Returns (ok, last_fail_line)."""
+    cmd = f"python3 {LIFECYCLE_HELPER} {args}"
+    lines, fails = [], []
+    try:
+        p = subprocess.Popen(cmd, shell=True, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, preexec_fn=os.setsid)
+    except OSError as e:
+        log(f"Could not run lifecycle helper: {e}", "fail")
+        return False, str(e)
+    _helper_procs.append(p)
+    timer = threading.Timer(timeout, lambda: os.killpg(os.getpgid(p.pid), signal.SIGKILL))
+    timer.start()
+    try:
+        for raw in p.stdout:
+            line = raw.rstrip()
+            if not line:
+                continue
+            lines.append(line)
+            body = line.split(" ", 1)[1] if " " in line else line
+            kind = body.split(" ", 1)[0]
+            msg = body.split(" ", 1)[1].strip() if " " in body else body
+            if kind == "OK":
+                log(msg, "ok")
+            elif kind == "WARN":
+                log(msg, "warn")
+            elif kind == "FAIL":
+                fails.append(msg)
+                log(msg, "warn")      # the caller decides whether this is fatal
+            else:
+                log(msg, "info")
+        p.wait()
+    finally:
+        timer.cancel()
+        if p in _helper_procs:
+            _helper_procs.remove(p)
+    if LOG_DIR is not None:
+        try:
+            with open(LOG_DIR / "lifecycle.log", "a") as f:
+                f.write(f"$ {args}\n" + "\n".join(lines) + f"\n(rc={p.returncode})\n\n")
+        except OSError:
+            pass
+    if p.returncode != 0 and not fails:
+        fails.append(f"helper exited rc={p.returncode} (killed on timeout or crashed) for: {args}")
+        log(fails[0], "warn")
+    return p.returncode == 0, "; ".join(fails) or None
 
-    timeout_tf=45 (not 20): on-robot testing showed odom->base_footprint and
-    base_footprint->base_link both resolve fine, just not inside 20s — the
-    Jetson is already under heavy load at boot (NTFields alone can take 30s+
-    to configure), so the TF tree just hasn't settled yet at the 20s mark,
-    not because anything is structurally broken.
+def wait_nav_prerequisites(env, timeout=150):
+    """Hard gate: every dependency the Nav2 servers need must be present, with
+    real data, before any of them is configured. Checked in-process (one rclpy
+    node, all checks in parallel) instead of by short-lived CLI probes, which
+    time out under boot load even when everything is healthy.
+
+      - /odom delivering messages           (serial_bridge <-> ESP32 alive)
+      - /scan_corrected delivering messages (RPLidar + scan_relay alive)
+      - odom -> base_link TF, fresh          (serial_bridge TF + robot_state_publisher)
+      - odom -> lidar_link TF                (the local costmap's sensor frame)
+
+    The first start after a power-up runs while the Jetson is still booting
+    (a node can take 20+ s just to import), so the wait is long but it is
+    dependency-driven, not a blind sleep: it ends the moment everything is
+    present, and gives up at once if a required process has died. If odometry
+    never shows up, the bridge is restarted once before giving up.
     """
-    log("Checking navigation prerequisites (odom / scan / map / TF)...", "sys")
-    ok = True
-    
-    # 1. Check for /odom topic existence and data flow
-    if not wait_topic("/odom", env, timeout=timeout_odom):
-        ok = False
-    elif not wait_topic_data("/odom", env, timeout=10):
-        log("Topic /odom exists but not publishing data", "warn")
-        ok = False
-
-    # 2. Check for scan data
-    if not wait_topic("/scan", env, timeout=timeout_scan):
-        log("Primary /scan not found – continuing (scan_relay may use another name)", "warn")
-        
-    # 3. Check for map
-    if not wait_topic("/map", env, timeout=timeout_map):
-        ok = False
-        
-    # 4. Check critical transform tree: odom -> base_link
-    if not wait_tf("odom", "base_link", env, timeout=timeout_tf):
-        ok = False
-
+    log("Checking navigation prerequisites (odom / scan / TF)...", "sys")
+    checks = ("--topic /odom:nav_msgs/msg/Odometry "
+              "--topic /scan_corrected:sensor_msgs/msg/LaserScan "
+              "--tf-fresh odom:base_link --tf odom:lidar_link")
+    first = int(timeout * 0.5)
+    ok, fail = run_helper(f"check --timeout {first} {checks}", env, timeout=first + 30)
     if ok:
         log("Navigation prerequisites ready", "ok")
-    else:
-        log("Some prerequisites missing – lifecycle nodes may still fail on first try", "warn")
-    return ok
+        return True, None
+    for name in ("Serial Bridge", "RPLidar A1", "Scan Relay", "Robot State Publisher"):
+        p = pids.get(name)
+        if p is not None and p.poll() is not None:
+            return False, f"{name} exited during startup (rc={p.returncode}); {fail}"
+    if "/odom" in (fail or ""):
+        log("No odometry yet - restarting the serial bridge once (motors stay stopped)", "warn")
+        restart_serial_bridge(env)
+    rest = timeout - first
+    ok, fail = run_helper(f"check --timeout {rest} {checks}", env, timeout=rest + 30)
+    if ok:
+        log("Navigation prerequisites ready", "ok")
+    return ok, fail
 
-def wait_action(action, env, timeout=30):
-    # `ros2 action list` has no --no-daemon option and always depends on the
-    # daemon, spawning one if none exists — which is exactly the dependency
-    # this script otherwise avoids everywhere else (Cyclone DDS discovery
-    # doesn't need it, and every other ros2 CLI call here passes
-    # --no-daemon). Every rclcpp/rclpy action server auto-publishes an
-    # <action>/_action/status topic, so check that via `ros2 topic list
-    # --no-daemon` instead — same readiness signal, zero daemon dependency.
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = runcmd(f"ros2 topic list --no-daemon --include-hidden-topics 2>/dev/null | grep -qx '{action}/_action/status'", env)
-        if r.returncode == 0:
-            return True
-        time.sleep(1)
-    log(f"Timeout – action not found: {action}", "warn")
-    return False
+# lifecycle node -> the per-node log file its process writes
+NODE_LOGS = {"/planner_server": "NTFields_Planner", "/controller_server": "Controller_Server",
+             "/velocity_smoother": "Velocity_Smoother", "/behavior_server": "Behavior_Server",
+             "/bt_navigator": "BT_Navigator"}
 
-def wait_for_node(node, env, timeout=20):
-    # A fixed sleep before the first lifecycle call isn't reliable — a
-    # fresh process importing torch can occasionally take a beat longer
-    # than expected, and calling `ros2 lifecycle set` before the node has
-    # registered in the ROS graph yet fails immediately with "Node not
-    # Found" (seen on this exact sequence for /planner_server). Wait for
-    # the node to actually exist first instead of guessing with a delay.
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = runcmd(f"ros2 node list --no-daemon 2>/dev/null | grep -qx '{node}'", env)
-        if r.returncode == 0:
-            return True
-        time.sleep(0.5)
-    return False
+def log_node_errors(node, limit=4):
+    """Surface the node's own FATAL/ERROR lines (plugin load, parameter, TF
+    errors) next to the failed transition, so the cause is visible without
+    digging through files. The harmless footprint/inflation advisory is skipped."""
+    name = NODE_LOGS.get(node)
+    if not name or LOG_DIR is None:
+        return
+    try:
+        with open(LOG_DIR / f"{name}.log", errors="replace") as f:
+            hits = [l.strip() for l in f if re.search(r"\[(FATAL|ERROR)\]", l) and "inflation radius" not in l]
+    except OSError:
+        return
+    for l in hits[-limit:]:
+        log(f"{node} log: {l[:160]}", "warn")
 
-def wait_lifecycle_state(node, state, env, timeout=30):
-    """Poll ros2 lifecycle get until node reports the expected state."""
-    _state_num = {'unconfigured': '[1]', 'inactive': '[2]', 'active': '[3]'}
-    target = _state_num.get(state, state)
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = runcmd(f"ros2 lifecycle get {node} --no-daemon 2>/dev/null", env)
-        if target in r.stdout:
-            return True
-        time.sleep(1)
-    return False
-
-def lc_node(node, env, configure_timeout=30, activate_timeout=25, attempts=2):
-    if not wait_for_node(node, env):
-        log(f"{node} never appeared in 'ros2 node list' — process may have crashed on startup", "fail")
+def lc_node(node, env, configure_timeout=60, activate_timeout=60, attempts=2,
+            pre_tf=(), pre_topic=(), post_action=()):
+    """Configure + activate a lifecycle node and verify the real resulting
+    state (and, optionally, dependencies before activation and that its
+    action servers came up). Returns True only if the node is truly active."""
+    args = (f"bringup {node} --configure-timeout {configure_timeout} "
+            f"--activate-timeout {activate_timeout} --attempts {attempts}")
+    for x in pre_tf:      args += f" --pre-tf {x}"
+    for x in pre_topic:   args += f" --pre-topic {x}"
+    for x in post_action: args += f" --post-action {x}"
+    log(f"Lifecycle bring-up  {node}", "sys")
+    ok, fail = run_helper(args, env,
+                          timeout=60 + attempts * (configure_timeout + activate_timeout) + 60)
+    if not ok:
+        log(f"{node}: {fail or 'bring-up failed'}", "fail")
+        log_node_errors(node)
         return False
-    for attempt in range(1, attempts + 1):
-        tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
-        log(f"Lifecycle configure  {node}{tag}", "sys")
-        runcmd(f"ros2 lifecycle set {node} configure --no-daemon 2>&1", env)
-        if not wait_lifecycle_state(node, 'inactive', env, timeout=configure_timeout):
-            log(f"Configure timeout for {node} – proceeding anyway", "warn")
+    log(f"Active  {node}", "ok")
+    return True
 
-        log(f"Lifecycle activate   {node}", "sys")
-        runcmd(f"ros2 lifecycle set {node} activate --no-daemon 2>&1", env)
-        if wait_lifecycle_state(node, 'active', env, timeout=activate_timeout):
-            log(f"Active  {node}", "ok")
-            return True
-
-        log(f"{node} did not activate (attempt {attempt}/{attempts})", "warn")
-        if attempt < attempts:
-            log(f"Resetting {node} before retry...", "warn")
-            runcmd(f"ros2 lifecycle set {node} deactivate --no-daemon 2>&1", env)
-            runcmd(f"ros2 lifecycle set {node} cleanup --no-daemon 2>&1", env)
-            time.sleep(2)
-
-    log(f"FAILED to activate {node} after {attempts} attempts – check node logs", "fail")
-    return False
-
-def lc_ntfields(node, env, model_path=None, attempts=2):
+def lc_ntfields(node, env, model_path=None):
     if model_path is not None and not Path(model_path).exists():
-        msg = f"NTFields model not found: {model_path} – train it first"
-        log(msg, "fail")
-        report_progress("ERROR", msg)
+        log(f"NTFields model not found: {model_path} – train it first", "fail")
         return False
+    return lc_node(node, env, configure_timeout=150, activate_timeout=60, attempts=1,
+                   post_action=("/compute_path_to_pose:nav2_msgs/action/ComputePathToPose",))
 
-    if not wait_for_node(node, env):
-        msg = f"{node} never appeared in 'ros2 node list' — process may have crashed on startup"
-        log(msg, "fail")
-        report_progress("ERROR", msg)
-        return False
+SERIAL_BRIDGE_CMD = ("ros2 run argo_mini serial_bridge --ros-args "
+                     "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66 -p invert_right:=true")
 
-    for attempt in range(1, attempts + 1):
-        tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
-        log(f"Lifecycle configure  {node}  (loading NTFields model...){tag}", "sys")
-        runcmd(f"ros2 lifecycle set {node} configure --no-daemon 2>&1", env)
+def start_serial_bridge(env):
+    return launch_with_telem("Serial Bridge", SERIAL_BRIDGE_CMD, env)
 
-        if not wait_lifecycle_state(node, 'inactive', env, timeout=50):
-            log(f"Configure timed out for {node} – model may still be loading", "warn")
-            time.sleep(5)
+def restart_serial_bridge(env):
+    """Bounded recovery for a bridge that came up but never delivered odometry
+    (first start after boot: ESP32/USB-UART still settling). Safe: only this
+    script's own bridge is touched, and no velocity command is ever sent from
+    here, so the motors stay stopped. The process group is verified gone before
+    the port is reopened."""
+    old = pids.pop("Serial Bridge", None)
+    if old is not None:
+        try:
+            os.killpg(old.pid, signal.SIGTERM)
+        except Exception:
+            pass
+        deadline = time.time() + 4
+        while time.time() < deadline and _group_alive(old.pid):
+            time.sleep(0.1)
+        try:
+            os.killpg(old.pid, signal.SIGKILL)
+        except Exception:
+            pass
+    time.sleep(1.5)
+    start_serial_bridge(env)
 
-        log(f"Lifecycle activate   {node}", "sys")
-        runcmd(f"ros2 lifecycle set {node} activate --no-daemon 2>&1", env)
+def abort_startup(reason):
+    """A required stage failed: tear down everything this script started (so no
+    half-started stack can drive the robot; serial_bridge, the only motor path,
+    is among them and no velocity command is sent from here), keep the reason
+    in the progress file and the UI, and wait. The process stays alive on
+    purpose: the dashboard only shows /nav_progress while this process runs, so
+    exiting would turn a clear error into a silent 'stopped'. Stop Argo
+    (SIGTERM) or Ctrl+C ends it; Start Argo then retries from a clean state."""
+    log(reason, "fail")
+    log("Startup aborted - stopping everything this script started. "
+        f"Per-node logs: {LOG_DIR}", "warn")
+    terminate_children()
+    pids.clear()
+    log("Stack is down. Press Stop Argo, then Start Argo to retry.", "warn")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        cleanup()
 
-        if wait_action("/compute_path_to_pose", env, timeout=45):
-            log(f"Active  {node}  – /compute_path_to_pose ready", "ok")
-            return True
-
-        log(f"NTFields planner did not register action server (attempt {attempt}/{attempts})", "warn")
-        if attempt < attempts:
-            log(f"Resetting {node} before retry...", "warn")
-            runcmd(f"ros2 lifecycle set {node} deactivate --no-daemon 2>&1", env)
-            runcmd(f"ros2 lifecycle set {node} cleanup --no-daemon 2>&1", env)
-            time.sleep(2)
-
-    msg = f"NTFields planner ({node}) failed to activate after {attempts} attempts – check model path"
-    log(msg, "fail")
-    report_progress("ERROR", msg)
-    return False
+def acquire_single_instance():
+    """Refuse to run next to another copy of this script (waits briefly for one
+    that is still shutting down, e.g. a map switch from the dashboard)."""
+    global _lock_fh
+    # Open WITHOUT truncating: a losing second instance must not wipe the pid
+    # the running one recorded.
+    _lock_fh = os.fdopen(os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o666), "r+")
+    deadline = time.time() + 20
+    while True:
+        try:
+            fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_fh.seek(0); _lock_fh.truncate()
+            _lock_fh.write(str(os.getpid())); _lock_fh.flush()
+            return
+        except OSError:
+            if time.time() > deadline:
+                print(f"{RED}Another argo_sonic_nav.py is already running "
+                      f"(see {LOCK_PATH}); not starting a second nav stack.{RS}")
+                report_progress("ERROR", "Another nav stack is already running")
+                sys.exit(1)
+            time.sleep(0.5)
 
 def step_done(name):
     global step_idx
@@ -670,23 +758,48 @@ def step_done(name):
 # ──────────────────────────────────────────────────────────────────────────────
 #  Cleanup
 # ──────────────────────────────────────────────────────────────────────────────
+def _group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+def terminate_children():
+    """Stop every process THIS script started plus any in-flight lifecycle
+    helper, and wait until their process groups are really gone. Each child
+    runs in its own session (pgid == pid), so this reaches the node behind a
+    `sh -c` wrapper too. Nothing outside those groups is touched."""
+    pgids = [p.pid for p in list(pids.values()) + list(_helper_procs)]
+    for pg in pgids:
+        try:
+            os.killpg(pg, signal.SIGTERM)
+        except Exception:
+            pass
+    deadline = time.time() + 2.0
+    while time.time() < deadline and any(_group_alive(pg) for pg in pgids):
+        time.sleep(0.1)
+    for pg in pgids:
+        try:
+            os.killpg(pg, signal.SIGKILL)
+        except Exception:
+            pass
+    deadline = time.time() + 2.0
+    while time.time() < deadline and any(_group_alive(pg) for pg in pgids):
+        time.sleep(0.1)
+
 def cleanup(sig=None, frame=None):
-    save_last_pose(_last_env)   # while /pose is still alive — before anything below gets killed
+    # The launcher gives this process ~10 s after SIGTERM before it SIGKILLs it,
+    # and the nodes live in their own sessions, so a SIGKILL here would orphan
+    # every one of them. Pose capture is best-effort and therefore time-boxed so
+    # the teardown below always gets to run.
+    t = threading.Thread(target=save_last_pose, args=(_last_env,), daemon=True)
+    t.start()
+    t.join(timeout=9.0)
     stop_ui.set()
-    report_progress("STOPPED", "Stack shut down")
+    report_progress("STOPPED", f"Stack shut down: {_last_error}" if _last_error else "Stack shut down")
     log("Shutting down – terminating all nodes...", "warn")
-    time.sleep(0.3)
-    for _name, p in pids.items():
-        try:
-            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-        except Exception:
-            pass
-    time.sleep(1)
-    for _name, p in pids.items():
-        try:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-        except Exception:
-            pass
+    terminate_children()
     sys.stdout.write("\033[?25h\033[0m\n")
     sys.exit(0)
 
@@ -797,8 +910,10 @@ def main():
         print(f"{RED}--map is required when not running in an interactive terminal{RS}")
         sys.exit(1)
 
+    init_log_dir()
     signal.signal(signal.SIGINT,  cleanup)
     signal.signal(signal.SIGTERM, cleanup)
+    acquire_single_instance()
 
     sys.stdout.write("\033[2J\033[H\033[?25l")
     sys.stdout.flush()
@@ -903,9 +1018,7 @@ def main():
     time.sleep(0.5); step_done("Camera TF Bridge")
 
     # ── 3. Serial Bridge ──────────────────────────────────────────────────────
-    launch_with_telem("Serial Bridge",
-           ("ros2 run argo_mini serial_bridge --ros-args "
-            "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66"), env)
+    start_serial_bridge(env)
     time.sleep(1); step_done("Serial Bridge")
 
     # ── 4. RPLidar ────────────────────────────────────────────────────────────
@@ -939,64 +1052,76 @@ def main():
     time.sleep(2); step_done("SLAM Toolbox")
     seed_initial_pose(env)   # from the last shutdown, if any — see save_last_pose() in cleanup()
 
-    # Verify sensor flow & TFs before configuring downstream Nav2 servers
-    wait_nav_prerequisites(env)
+    # Verify sensor flow & TFs before configuring downstream Nav2 servers. This
+    # is a hard gate: starting Nav2 on top of missing odometry/scan/TF is what
+    # made the first launch after boot fail in unpredictable ways.
+    prereq_ok, prereq_fail = wait_nav_prerequisites(env)
+    if not prereq_ok:
+        abort_startup(f"Prerequisite not met, Nav2 NOT started: {prereq_fail}")
 
     # ── 7. NTFields Planner ───────────────────────────────────────────────────
     ntfields_model = str(ntfields_models_dir(home) / f"{Path(map_base).name}.pt")
     launch("NTFields Planner",
            (f"ros2 run argo_mini ntfields_planner_node --ros-args "
             f"--params-file {ntfields_cfg} -p model_path:={ntfields_model}"), env)
-    time.sleep(6)
     ntfields_ok = lc_ntfields("/planner_server", env, model_path=ntfields_model)
     step_done("NTFields Planner")
+    if not ntfields_ok:
+        abort_startup("NTFields planner (/planner_server) failed to activate")
 
     # ── 8. Controller Server ──────────────────────────────────────────────────
     launch("Controller Server",
            (f"ros2 run nav2_controller controller_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
-    time.sleep(2)
-    lc_node("/controller_server", env, configure_timeout=40, activate_timeout=30)
+    # Its local costmap needs odom->base_link, the lidar frame and live
+    # /scan_corrected data *before* activation (otherwise activation blocks on
+    # TF), so those are verified by the helper right before the transition.
+    ctrl_ok = lc_node("/controller_server", env,
+                      pre_tf=("odom:base_link", "odom:lidar_link"),
+                      pre_topic=("/scan_corrected:sensor_msgs/msg/LaserScan",),
+                      post_action=("/follow_path:nav2_msgs/action/FollowPath",))
     step_done("Controller Server")
+    if not ctrl_ok:
+        abort_startup("controller_server failed to activate")
 
     # ── 9. Velocity Smoother ──────────────────────────────────────────────────
     launch("Velocity Smoother",
            (f"ros2 run nav2_velocity_smoother velocity_smoother --ros-args "
             f"--params-file {nav_cfg} "
             f"-r cmd_vel:=/cmd_vel_raw -r cmd_vel_smoothed:=/cmd_vel_smoothed"), env)
-    time.sleep(1)
-    lc_node("/velocity_smoother", env, configure_timeout=35, activate_timeout=25)
+    smoother_ok = lc_node("/velocity_smoother", env)
     step_done("Velocity Smoother")
+    if not smoother_ok:
+        abort_startup("velocity_smoother failed to activate")
 
     # ── 10. Behavior Server ───────────────────────────────────────────────────
     launch("Behavior Server",
            (f"ros2 run nav2_behaviors behavior_server --ros-args "
             f"--params-file {nav_cfg} -r cmd_vel:=/cmd_vel_raw"), env)
-    time.sleep(1)
-    lc_node("/behavior_server", env, configure_timeout=35, activate_timeout=25)
+    behavior_ok = lc_node("/behavior_server", env,
+                          post_action=("/backup:nav2_msgs/action/BackUp",))
     step_done("Behavior Server")
-
-    # ── Wait for all action servers ───────────────────────────────────────────
-    log("Waiting for action servers...", "info")
-    wait_action("/follow_path", env, 30)
-    wait_action("/backup",      env, 30)
-    time.sleep(3)
+    if not behavior_ok:
+        abort_startup("behavior_server failed to activate")
 
     # ── 11. BT Navigator ──────────────────────────────────────────────────────
     launch("BT Navigator",
            f"ros2 run nav2_bt_navigator bt_navigator --ros-args --params-file {nav_cfg} "
            f"-p default_nav_to_pose_bt_xml:={ws}/src/argo_mini/config/bt/navigate_to_pose.xml "
            f"-p default_nav_through_poses_bt_xml:={ws}/src/argo_mini/config/bt/navigate_to_pose.xml", env)
-    time.sleep(5)
-    bt_active = lc_node("/bt_navigator", env, configure_timeout=40, activate_timeout=30)
+    bt_active = lc_node("/bt_navigator", env,
+                        post_action=("/navigate_to_pose:nav2_msgs/action/NavigateToPose",))
     step_done("BT Navigator")
+    if not bt_active:
+        abort_startup("bt_navigator failed to activate - /navigate_to_pose is not available")
 
-    if not ntfields_ok:
-        report_progress("ERROR", "NTFields planner failed to activate - path planning unavailable")
-    elif bt_active:
-        report_progress("READY", "Nav2 fully activated - ready for goals")
-    else:
-        report_progress("ERROR", "bt_navigator failed to activate - /navigate_to_pose is not available")
+    # Final gate: re-read the real lifecycle state of everything. Only now is
+    # the stack reported READY (the UI accepts goals on READY).
+    all_ok, bad = run_helper(
+        "states " + " ".join(NAV2_LIFECYCLE_NODES), env, timeout=60)
+    if not all_ok:
+        abort_startup(f"Nav2 not fully active at final check: {bad}")
+    report_progress("READY", "Nav2 fully activated - ready for goals")
 
     # ── 12. Depth Camera ──────────────────────────────────────────────────────
     if not no_cam:
@@ -1056,12 +1181,36 @@ def main():
     log("Use RViz 2D Goal Pose to navigate  |  Ctrl+C to stop", "sys")
     log("----------------------------------------------------", "sys")
 
+    # Supervise (never silently restart) the processes Nav2 depends on: if one
+    # dies after READY the UI must stop believing the stack can take goals.
+    reported = set()
     try:
         while True:
             time.sleep(1)
+            for name in CRITICAL_PROCS:
+                p = pids.get(name)
+                if p is not None and p.poll() is not None and name not in reported:
+                    reported.add(name)
+                    log(f"{name} exited unexpectedly (rc={p.returncode}) - "
+                        f"navigation is no longer available, restart Argo", "fail")
     except KeyboardInterrupt:
         cleanup()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException as e:      # unexpected crash: never leave children behind
+        import traceback
+        try:
+            if LOG_DIR is not None:
+                with open(LOG_DIR / "launcher_crash.log", "a") as f:
+                    f.write(traceback.format_exc())
+        except OSError:
+            pass
+        _last_error = f"launcher script crashed: {type(e).__name__}: {e}"
+        report_progress("ERROR", _last_error)
+        terminate_children()
+        raise

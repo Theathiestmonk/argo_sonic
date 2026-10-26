@@ -24,16 +24,3 @@ planner_server:
 
     # Maximum gradient steps before giving up.
     max_iter: 400
-
-
-ntfields_data_logger:
-  ros__parameters:
-    # Where to write scan log NPZ files (Mode 2A data collection).
-    output_dir: ~/ntfields_data
-
-    # Only log a frame when the robot has moved at least this far since the last frame.
-    min_move_dist: 0.30    # metres
-    min_move_rad:  0.20    # radians
-
-    # Cap on total frames per logging session.
-    max_frames: 5000

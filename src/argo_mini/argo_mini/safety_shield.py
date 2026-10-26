@@ -119,13 +119,13 @@ DEPTH_TOPIC  = "/ascamera_hp60c/camera_publisher/depth0/points"
 # ── Beep ──────────────────────────────────────────────────────────────────────
 BEEP_COOLDOWN = 2.0        # s
 
-# Same hardware auto-detect voice_agent.py uses for its speaker device — the
+# Hardware auto-detect for the beep speaker device — the
 # Jetson's USB audio card isn't the ALSA default, so mpg123 needs pointing at
 # it explicitly there; a dev machine just uses whatever "default" resolves to.
 _ON_JETSON     = os.path.exists("/etc/nv_tegra_release") or "argo" in socket.gethostname().lower()
 SPEAKER_DEVICE = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
 
-# <repo_root>/sound/sound.mp3 — resolved from this file's own location (not a
+# <repo_root>/sound/beep.mp3 — resolved from this file's own location (not a
 # hardcoded absolute path) so it keeps working under a --symlink-install
 # build, same convention as waypoint_manager.py's DEFAULT_WAYPOINTS_DIR.
 SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" / "beep.mp3")
@@ -133,7 +133,7 @@ SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" 
 # This is a "something's nearby" nudge, not an alarm — kept well under full
 # volume on purpose so it doesn't disturb the room (customers/staff), and
 # fixed in code rather than following the Jetson's system mixer, since
-# voice_agent.py/tts.py already play speech at whatever that's set to and
+# other audio may play at whatever that's set to and
 # this alert needs to stay quiet independent of that. Raised from 0.60 —
 # reported inaudible on real hardware; re-lower this if it turns out to be
 # genuinely disruptive rather than just quiet.

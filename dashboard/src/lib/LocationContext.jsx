@@ -24,7 +24,7 @@ export function LocationProvider({ children }) {
     setLoading(true)
     supabase
       .from('locations')
-      .select('location_id, location_name, city, voice_nav_enabled')
+      .select('location_id, location_name, city')
       .eq('client_id', selectedClientId)
       .then(({ data }) => {
         if (cancelled) return

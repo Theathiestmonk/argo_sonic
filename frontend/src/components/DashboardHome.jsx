@@ -13,10 +13,8 @@ import Map3DViewer from './Map3DViewer'
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
 // panels. Places come from GET /waypoints/<selectedMap> (live, per-map)
 // instead of localStorage. Navigation itself is never triggered from here
-// directly — every trip is either a table action (below, backend-managed by
-// main_agent.py via POST /voice/start) or the "Go to kitchen" button
-// (backend-managed by POST /nav/goto) — this component only displays status
-// polled back from those, it never publishes a Nav2 goal itself. Same plain
+// directly — trips are started via POST /nav/goto or /goal_pose, and this
+// component only displays status polled back from those. Same plain
 // '$'-prefixed formatting TablesPanel.jsx uses for the same reason — no
 // shared access to menu-data.js's currency/tax settings here.
 const money = (n) => '$' + Number(n || 0).toFixed(2)
@@ -24,7 +22,7 @@ const money = (n) => '$' + Number(n || 0).toFixed(2)
 
 // A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
 // waypoints/<map>.json file — it has NO guaranteed relationship to the
-// table's actual number. main_agent.py's nav_bridge lookup ("Table {N}")
+// table's actual number. nav_bridge's lookup ("Table {N}")
 // and Postgres's service_points.label both expect the real number embedded
 // in the waypoint's own name ("Table 3" -> "3"). Sending the raw key
 // instead (as this used to) silently routed to whichever OTHER table
@@ -37,22 +35,6 @@ function tableNumberFromName(name, fallbackKey) {
   return m ? m[0] : fallbackKey
 }
 
-// Maps a table-card task to the voice action backend/launcher.py's
-// POST /voice/start expects.
-const TASK_TO_ACTION = {
-  'Take order':   'order',
-  'Deliver':      'deliver',
-  'Billing':      'bill',
-  'Room service': 'room_service',
-}
-
-// Direct per-card buttons on a Saved Place — [task, button label].
-const TABLE_ACTIONS = [
-  ['Take order',   'Take Order'],
-  ['Deliver',      'Deliver'],
-  ['Billing',      'Send Bill'],
-]
-
 const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
   const [tables, setTables]         = useState({})
   const [view3d, setView3d] = useState(() => {
@@ -64,22 +46,18 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
   // Blue goal marker on the map — set whenever a table action, "Navigate",
-  // or "Go to kitchen" is clicked (see dispatchVoiceAction/goToDestination
+  // or "Go to kitchen" is clicked (see goToDestination
   // below), cleared once that trip is no longer running (below).
   const [goalMarker, setGoalMarker] = useState(null)
   const [taskLabel, setTaskLabel]   = useState('—')
   const [activity, setActivity]     = useState([])
   const [greeting, setGreeting]     = useState('Good day')
   const [time, setTime]             = useState('—')
-  const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null, phase: null, phase_text: null })
   const [navGotoStatus, setNavGotoStatus] = useState({ running: false, destination: null, phase: null, phase_text: null })
   const [orders, setOrders]         = useState({})
   const [showTeleopPad, setShowTeleopPad] = useState(false)
   const [showActivityPanel, setShowActivityPanel] = useState(false)
-  const [showTranscript, setShowTranscript] = useState(false)
-  const [transcript, setTranscript] = useState({ session_id: null, started_at: null, turns: [] })
   const [selectedTable, setSelectedTable] = useState(null)  // {key, name, x, y} when a table is clicked on map
-  const transcriptBottomRef = useRef(null)
   const [modelLoading, setModelLoading] = useState(false)
   const [freeRoamActive, setFreeRoamActive] = useState(false)
   const [freeRoamStats, setFreeRoamStats] = useState({ goalsReached: 0, goalsFailed: 0 })
@@ -325,50 +303,8 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     }).catch(() => showToast('Could not save to robot', 'danger'))
   }, [launcherUrl, selectedMap, showToast])
 
-  // Is Sonic currently mid-conversation at some table? Same poll pattern as
-  // TablesPanel.jsx's identical hook — used to show a busy banner and avoid
-  // firing a second voice session the backend would just 409 anyway. Also
-  // carries main_agent.py's own real phase/phase_text now (see
-  // report_phase() in sonic/main_agent.py) — this is the sole source of
-  // truth for "moving/arrived/taking order" status, not anything simulated
-  // locally.
-  useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      fetch(`${launcherUrl}/voice/status`)
-        .then(r => r.json())
-        .then(d => { if (!cancelled) setVoiceStatus(d) })
-        .catch(() => {})
-    }
-    load()
-    const id = setInterval(load, 3000)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [launcherUrl])
-
-  // Voice transcript (GET /voice/transcript) — only polled while the panel
-  // is actually open, unlike voiceStatus above which other UI state depends
-  // on regardless of visibility.
-  useEffect(() => {
-    if (!showTranscript) return
-    let cancelled = false
-    const load = () => {
-      fetch(`${launcherUrl}/voice/transcript`)
-        .then(r => r.json())
-        .then(d => { if (!cancelled) setTranscript(d) })
-        .catch(() => {})
-    }
-    load()
-    const id = setInterval(load, 3000)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [launcherUrl, showTranscript])
-
-  // Auto-scroll to the latest turn whenever the transcript updates.
-  useEffect(() => {
-    transcriptBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [transcript])
-
   // Status of the current/last plain single-destination trip (POST
-  // /nav/goto — e.g. "Go to kitchen"), same poll pattern as voiceStatus.
+  // /nav/goto — e.g. "Go to kitchen"), polled.
   useEffect(() => {
     let cancelled = false
     const load = () => {
@@ -384,24 +320,19 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
 
   // Left rail's Status stat card, driven entirely by real backend state now
-  // (no more local nav simulation): prefer main_agent.py's own phase while a
-  // voice session is active, else the plain /nav/goto trip's phase, else Idle.
+  // (no more local nav simulation): the plain /nav/goto trip's phase, else Idle.
   useEffect(() => {
-    if (voiceStatus.running && voiceStatus.phase_text) {
-      setCurStatus(voiceStatus.phase_text)
-      setCurPos(voiceStatus.table || curPos)   // already the full waypoint name, e.g. "Table 3" or "table 1"
-      setTaskLabel(voiceStatus.action || taskLabel)
-    } else if (navGotoStatus.running && navGotoStatus.phase_text) {
+    if (navGotoStatus.running && navGotoStatus.phase_text) {
       setCurStatus(navGotoStatus.phase_text)
       setCurPos(navGotoStatus.destination || curPos)
-    } else if (!voiceStatus.running && !navGotoStatus.running) {
+    } else if (!navGotoStatus.running) {
       setCurStatus('Idle')
       setGoalMarker(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voiceStatus, navGotoStatus])
+  }, [navGotoStatus])
 
-  // Mirrors voiceStatus's polling pattern — independent state, own endpoint,
+  // Same polling pattern — independent state, own endpoint,
   // so the E-Stop button's label always reflects the actual backend state
   // rather than an optimistic local guess (e.g. after a page refresh, or if
   // another operator on a different device already hit it).
@@ -479,59 +410,11 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     setActivity(prev => [{ dest, task, time }, ...prev].slice(0, 6))
   }, [])
 
-  // Starts a table's voice action. This is now the ONLY thing this call
-  // does — main_agent.py owns the entire physical trip (Kitchen -> table ->
-  // conversation -> Kitchen) once POST /voice/start spawns it, and reports
-  // real status back via /voice/status's phase/phase_text (see the useEffect
-  // above). No direct Nav2 goal, no local arrival simulation, no auto-return
-  // timer here anymore — those were racing main_agent.py's own navigation,
-  // which is what caused the double-navigation seen in testing.
-  const dispatchVoiceAction = useCallback((tableLabel, task) => {
-    const dest = destinations.find(d => d.name === tableLabel)
-    if (!dest || !dest.key || dest.key === '0') return   // '0' = Home — no table context
-    const action = TASK_TO_ACTION[task]
-    if (!action) return
-
-    // dest.name (the waypoint's own name, e.g. "Table 3"/"table 1") is what
-    // gets sent, searched for, and echoed back — never dest.key, which is
-    // just this waypoint's arbitrary position in the waypoints JSON and has
-    // no guaranteed relationship to which table it actually is. See
-    // table_ref_for_nav() in main_agent.py, which searches for this exact
-    // name too, instead of reconstructing a guess from a number.
-    if (voiceStatus.running && voiceStatus.table !== dest.name) {
-      showToast('Sonic is busy with another table — wait for that session to finish', 'warn')
-      return
-    }
-    if (navGotoStatus.running) {
-      showToast('Argo is on a trip right now — wait for it to finish', 'warn')
-      return
-    }
-
-    setGoalMarker({ x: dest.x, y: dest.y })
-
-    fetch(`${launcherUrl}/voice/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, map: selectedMap, table: dest.name }),
-    })
-      .then(r => r.json())
-      .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger') })
-      .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
-
-    addActivity(tableLabel, task)
-  }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
-
   // Plain, conversation-free trip to any named waypoint, backend-managed
-  // via POST /nav/goto (shells out to nav_bridge.py directly, same as
-  // main_agent.py's own navigate_and_wait() — no NLP, no order flow, just
-  // the raw NavigateToPose goal). Status polled via navGotoStatus above.
+  // via POST /nav/goto (shells out to nav_bridge.py directly). Status polled via navGotoStatus above.
   // Used both by "Go to kitchen" and each table card's own "Navigate"
   // button (a pure nav-stack smoke test, deliberately bypassing Sonic).
   const goToDestination = useCallback((name) => {
-    if (voiceStatus.running) {
-      showToast('Sonic is busy with a table — wait for that session to finish', 'warn')
-      return
-    }
     if (navGotoStatus.running) return
     const dest = destinations.find(d => d.name === name)
     if (!dest) {
@@ -547,25 +430,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     showToast(`Navigating to ${name}`, 'ok')
     addActivity(name, 'Navigate')
   }, [destinations, showToast, addActivity, ros])
-
-  // Cancels whichever table's order-processing session is currently
-  // running and frees that table's lock. Only one voice session runs at a
-  // time system-wide, so /voice/stop always targets the right one — no
-  // table param needed. Used by the per-card Cancel button, which only
-  // renders on the table that's actually locked (voiceStatus.table === label).
-  const cancelVoice = useCallback((label) => {
-    fetch(`${launcherUrl}/voice/stop`, { method: 'POST' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok) {
-          showToast(`Cancelled — ${label} is free again`, 'warn')
-          addActivity(label, 'Cancelled')
-        } else {
-          showToast('Could not cancel — try again', 'danger')
-        }
-      })
-      .catch(() => showToast('Could not reach launcher', 'danger'))
-  }, [launcherUrl, showToast, addActivity])
 
   // No confirm() dialog here on purpose, unlike stopNav() — this is a real
   // emergency stop (cuts motor commands immediately if the robot is
@@ -1003,74 +867,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         </div>
       )}
 
-      {/* Floating voice transcript — sits directly above the Teleop Pad's
-          own floating icon, same corner/collapse pattern. Shows the live
-          STT/TTS turns between Sonic and the guest, read from Postgres via
-          GET /voice/transcript (main_agent.py's db_log_turn() already
-          writes every turn there — this only displays it). */}
-      <div style={{ position: 'fixed', bottom: 84, right: 24, zIndex: 100 }}>
-        {!showTranscript && (
-        <button
-          onClick={() => setShowTranscript(!showTranscript)}
-          title="Toggle conversation transcript"
-          style={{
-            padding: '12px 14px', borderRadius: 12, fontSize: 16,
-            background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)',
-            color: 'var(--gold-bright)', cursor: 'pointer', fontWeight: 700,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transition: 'all 0.2s',
-          }}
-        >
-          {/* Speech-bubble icon */}
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-          </svg>
-        </button>
-        )}
-        {showTranscript && (
-          <div className="glass-card" style={{ padding: 20, marginTop: 12, width: 300 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div className="label-xs">Conversation</div>
-              <button
-                onClick={() => setShowTranscript(false)}
-                title="Minimize transcript"
-                style={{
-                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
-                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 16,
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
-            </div>
-            <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {transcript.turns.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: 'var(--muted)', textAlign: 'center', padding: '12px 0' }}>
-                  No conversation yet
-                </div>
-              ) : transcript.turns.map((t, i) => {
-                const isRobot = t.role === 'robot'
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: isRobot ? 'flex-start' : 'flex-end' }}>
-                    <div style={{
-                      maxWidth: '85%', padding: '7px 10px', borderRadius: 10, fontSize: 12.5, lineHeight: 1.4,
-                      background: isRobot ? 'rgba(226,179,92,0.12)' : 'rgba(59,240,155,0.12)',
-                      border: `1px solid ${isRobot ? 'rgba(226,179,92,0.3)' : 'rgba(59,240,155,0.3)'}`,
-                      color: isRobot ? 'var(--gold-bright)' : 'var(--ok)',
-                    }}>
-                      {t.text}
-                    </div>
-                  </div>
-                )
-              })}
-              <div ref={transcriptBottomRef} />
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* Floating Teleop Pad — bottom right corner */}
       <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 100 }}>
         {!showTeleopPad && (
@@ -1189,31 +985,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                     </div>
                   )}
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 12 }}>
-                    {['Take Order', 'Deliver'].map((action) => {
-                      const task = action
-                      const blocked = voiceStatus.running && voiceStatus.table !== selectedTable.name
-                      const active = voiceStatus.running && voiceStatus.table === selectedTable.name && voiceStatus.action === TASK_TO_ACTION[task]
-                      return (
-                        <button
-                          key={task}
-                          disabled={blocked}
-                          onClick={() => { dispatchVoiceAction(selectedTable.name, task); setSelectedTable(null) }}
-                          style={{
-                            padding: '8px 7px', borderRadius: 6, fontSize: 11, fontWeight: 700,
-                            background: active ? 'rgba(59,240,155,0.15)' : 'rgba(226,179,92,0.08)',
-                            border: `1px solid ${active ? 'rgba(59,240,155,0.35)' : 'rgba(226,179,92,0.22)'}`,
-                            color: active ? 'var(--ok)' : 'var(--gold-bright)',
-                            opacity: blocked ? 0.4 : 1,
-                            cursor: blocked ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          {active ? '…' : action}
-                        </button>
-                      )
-                    })}
-                  </div>
-
                   <button
                     onClick={() => { goToDestination(selectedTable.name); setSelectedTable(null) }}
                     title="Navigate to this table"
@@ -1228,20 +999,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                   >
                     Navigate
                   </button>
-
-                  {voiceStatus.running && voiceStatus.table === selectedTable.name && (
-                    <button
-                      onClick={() => { cancelVoice(selectedTable.name); setSelectedTable(null) }}
-                      style={{
-                        width: '100%', padding: '8px 6px', borderRadius: 6, fontSize: 11, fontWeight: 700,
-                        color: 'var(--danger)',
-                        background: 'rgba(224,90,90,0.08)', border: '1px solid rgba(224,90,90,0.25)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  )}
                 </>
               )
             })()}
