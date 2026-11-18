@@ -1,9 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 
-// Inverted palette: black free space, white walls
-const UNK  = [20,  20,  20]
-const FREE = [20,  20,  20]
-const OCC  = [240, 240, 240]
+// Cream & gold palette (matches the dashboard map): warm white free space, ink walls
+const UNK  = [236, 229, 214]
+const FREE = [251, 248, 242]
+const OCC  = [43,  38,  34]
 
 // Patrol violet — deliberately not the goal's blue or the planned path's
 // gold, so a running patrol is distinguishable from a one-shot trip.
@@ -278,9 +278,9 @@ export default function MapCanvas({
     ctx.clearRect(0, 0, W, H)
 
     if (!offRef.current) {
-      ctx.fillStyle = 'rgba(90,90,90,0.18)'
+      ctx.fillStyle = 'rgba(176,127,31,0.06)'
       ctx.fillRect(0, 0, W, H)
-      ctx.fillStyle = 'rgba(160,160,160,0.55)'
+      ctx.fillStyle = '#8b8274'
       ctx.font = '14px Inter,sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
@@ -313,17 +313,17 @@ export default function MapCanvas({
     frontiers.forEach(f => {
       const [px, py] = toC(f.x, f.y)
       ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(127,168,232,0.35)'; ctx.fill()
-      ctx.strokeStyle = '#7fa8e8'; ctx.lineWidth = 1.5; ctx.stroke()
+      ctx.fillStyle = 'rgba(61,111,184,0.25)'; ctx.fill()
+      ctx.strokeStyle = '#3d6fb8'; ctx.lineWidth = 1.5; ctx.stroke()
     })
 
     // Labels (green pins)
     labels.forEach(l => {
       const [px, py] = toC(l.wx, l.wy)
       ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(59,240,155,0.18)'; ctx.fill()
-      ctx.strokeStyle = '#3bf09b'; ctx.lineWidth = 2; ctx.stroke()
-      ctx.fillStyle = '#3bf09b'
+      ctx.fillStyle = 'rgba(47,158,91,0.18)'; ctx.fill()
+      ctx.strokeStyle = '#2f9e5b'; ctx.lineWidth = 2; ctx.stroke()
+      ctx.fillStyle = '#2f9e5b'
       ctx.font = 'bold 11px Inter,sans-serif'
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'
       ctx.fillText(l.name, px, py - 11)
@@ -335,7 +335,7 @@ export default function MapCanvas({
     if (plannedPath.length > 1) {
       ctx.save()
       ctx.setLineDash([8, 6])
-      ctx.strokeStyle = '#e2b35c'
+      ctx.strokeStyle = '#c18a1c'
       ctx.lineWidth = 5
       ctx.lineJoin = 'round'
       ctx.lineCap = 'round'
@@ -412,10 +412,10 @@ export default function MapCanvas({
       const [gx, gy] = toC(goalPose.x, goalPose.y)
       ctx.save()
       ctx.beginPath(); ctx.arc(gx, gy, 9, 0, Math.PI * 2)
-      ctx.fillStyle = 'rgba(127,168,232,0.22)'; ctx.fill()
-      ctx.strokeStyle = '#7fa8e8'; ctx.lineWidth = 2; ctx.stroke()
+      ctx.fillStyle = 'rgba(61,111,184,0.2)'; ctx.fill()
+      ctx.strokeStyle = '#3d6fb8'; ctx.lineWidth = 2; ctx.stroke()
       ctx.beginPath(); ctx.arc(gx, gy, 3, 0, Math.PI * 2)
-      ctx.fillStyle = '#7fa8e8'; ctx.fill()
+      ctx.fillStyle = '#3d6fb8'; ctx.fill()
       ctx.restore()
     }
 
@@ -430,14 +430,14 @@ export default function MapCanvas({
 
         // Glow effect when hovered
         if (isHovered) {
-          ctx.fillStyle = 'rgba(226,179,92,0.15)'
+          ctx.fillStyle = 'rgba(176,127,31,0.18)'
           ctx.beginPath(); ctx.arc(tx, ty, glowRadius, 0, Math.PI * 2)
           ctx.fill()
         }
 
         // Main circle marker - yellow
-        ctx.fillStyle = 'rgba(255,215,0,0.5)'
-        ctx.strokeStyle = isHovered ? '#FFD700' : 'rgba(255,215,0,0.9)'
+        ctx.fillStyle = isHovered ? 'rgba(154,108,20,0.95)' : 'rgba(176,127,31,0.92)'
+        ctx.strokeStyle = isHovered ? '#9a6c14' : '#fff'
         ctx.lineWidth = isHovered ? 3 : 2
         ctx.beginPath(); ctx.arc(tx, ty, radius, 0, Math.PI * 2)
         ctx.fill()
@@ -461,7 +461,7 @@ export default function MapCanvas({
     // (matches the goalPose marker's own blue above) so the two read as
     // related-but-distinct tools rather than identical.
     if (drag) {
-      const color = patrolSetMode ? PATROL : goalSetMode ? '#7fa8e8' : '#3bf09b'
+      const color = patrolSetMode ? PATROL : goalSetMode ? '#3d6fb8' : '#2f9e5b'
       const [sx, sy] = toC(drag.startWX, drag.startWY)
       const [cx, cy] = toC(drag.curWX, drag.curWY)
       ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round'
@@ -472,25 +472,25 @@ export default function MapCanvas({
 
     // Bottom-left, not bottom-right — the zoom buttons now own that corner.
     if (clickable) {
-      ctx.fillStyle = 'rgba(255,255,255,0.04)'
+      ctx.fillStyle = 'rgba(90,80,67,0.55)'
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click map to place label', 12, H - 10)
     }
     if (poseEstimateMode) {
-      ctx.fillStyle = 'rgba(59,240,155,0.6)'
+      ctx.fillStyle = '#2f9e5b'
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click where Argo is, drag toward where it’s facing', 12, H - 10)
     }
     if (goalSetMode) {
-      ctx.fillStyle = 'rgba(127,168,232,0.7)'
+      ctx.fillStyle = '#3d6fb8'
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click where Argo should go, drag to face a direction on arrival', 12, H - 10)
     }
     if (patrolSetMode) {
-      ctx.fillStyle = 'rgba(185,140,245,0.75)'
+      ctx.fillStyle = '#7a52c7'
       ctx.font = '12px Inter,sans-serif'
       ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'
       ctx.fillText('Click the far end of the patrol — Argo shuttles there and back from where it is now', 12, H - 10)
@@ -618,8 +618,8 @@ export default function MapCanvas({
   const zoomOut = useCallback(() => setZoom(z => Math.max(z / ZOOM_STEP, ZOOM_MIN)), [])
   const zoomBtnStyle = {
     width: 30, height: 30, borderRadius: 8,
-    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
-    color: '#fdfbfa', fontSize: 17, fontWeight: 700, lineHeight: 1,
+    background: 'rgba(255,255,255,0.95)', border: '1px solid var(--a-line-strong)',
+    color: '#4a4033', fontSize: 17, fontWeight: 700, lineHeight: 1,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', userSelect: 'none', backdropFilter: 'blur(8px)',
   }
@@ -670,10 +670,10 @@ export default function MapCanvas({
     return `${v.toFixed(2)}m`
   }
   const distColor = (v) => {
-    if (v == null || !Number.isFinite(v)) return 'rgba(255,255,255,0.9)'
-    if (v < 0.4) return '#ff4141'
-    if (v < 0.8) return '#e2b35c'
-    return 'rgba(59,240,155,0.9)'
+    if (v == null || !Number.isFinite(v)) return '#2a2017'
+    if (v < 0.4) return '#d6443b'
+    if (v < 0.8) return '#d89a14'
+    return '#2f9e5b'
   }
 
   const telemetryBar = (
@@ -685,15 +685,15 @@ export default function MapCanvas({
       <div style={{ display: 'flex', gap: 12 }}>
         <div style={{ minWidth: 85 }}>
           <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Speed</div>
-          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: 'rgba(59,240,155,0.9)' }}>{(driveTelemetry?.speed || 0).toFixed(2)} m/s</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: '#2f9e5b' }}>{(driveTelemetry?.speed || 0).toFixed(2)} m/s</div>
         </div>
         <div style={{ minWidth: 85 }}>
           <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>L Wheel</div>
-          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: 'rgba(185,140,245,0.9)' }}>{(driveTelemetry?.wheels?.l || 0).toFixed(1)} rad/s</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: '#b07f1f' }}>{(driveTelemetry?.wheels?.l || 0).toFixed(1)} rad/s</div>
         </div>
         <div style={{ minWidth: 85 }}>
           <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>R Wheel</div>
-          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: 'rgba(185,140,245,0.9)' }}>{(driveTelemetry?.wheels?.r || 0).toFixed(1)} rad/s</div>
+          <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, color: '#b07f1f' }}>{(driveTelemetry?.wheels?.r || 0).toFixed(1)} rad/s</div>
         </div>
       </div>
 
@@ -731,7 +731,7 @@ export default function MapCanvas({
           onClick={() => setMaximized(false)}
           style={{
             position: 'fixed', inset: 0, zIndex: 200,
-            background: 'rgba(4,3,6,0.6)', backdropFilter: 'blur(3px)',
+            background: 'rgba(42,32,23,0.35)', backdropFilter: 'blur(3px)',
           }}
         />
         <div
@@ -739,8 +739,8 @@ export default function MapCanvas({
             position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
             width: '90vw', height: '85vh', zIndex: 201,
             borderRadius: 20, padding: 12, boxSizing: 'border-box',
-            background: 'rgba(20,18,24,0.92)', border: '1px solid rgba(255,255,255,0.12)',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+            background: '#fff', border: '1px solid var(--a-line-strong)',
+            boxShadow: '0 20px 60px rgba(60,40,10,0.25)',
           }}
         >
           <div style={{ position: 'relative', width: '100%', height: '100%' }}>

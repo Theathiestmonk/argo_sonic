@@ -1,0 +1,96 @@
+{
+ "_note": "Furniture layout for this map, in map-frame metres (x right, y up). Derived from the annotated screenshot: each object sits at the centre of its annotation box. 'waypoint' links a table to its saved robot stop point. Edit freely.",
+ "map": "Atsn_cafe_map",
+ "objects": [
+  {
+   "id": "T1",
+   "type": "table",
+   "label": "T1",
+   "waypoint": "Table 1",
+   "x": 9.41,
+   "y": 0.95,
+   "size": 0.62
+  },
+  {
+   "id": "T2",
+   "type": "table",
+   "label": "T2",
+   "waypoint": "Table 2",
+   "x": 7.08,
+   "y": 0.95,
+   "size": 0.62
+  },
+  {
+   "id": "T3",
+   "type": "table",
+   "label": "T3",
+   "waypoint": "Table 3",
+   "x": 9.71,
+   "y": -1.91,
+   "size": 0.62
+  },
+  {
+   "id": "T4",
+   "type": "table",
+   "label": "T4",
+   "waypoint": "Table 4",
+   "x": 7.91,
+   "y": -1.91,
+   "size": 0.62
+  },
+  {
+   "id": "T5",
+   "type": "table",
+   "label": "T5",
+   "waypoint": "Table 5",
+   "x": 6.11,
+   "y": -1.91,
+   "size": 0.62
+  },
+  {
+   "id": "T6",
+   "type": "table",
+   "label": "T6",
+   "waypoint": "Table 6",
+   "x": 12.43,
+   "y": 0.44,
+   "size": 0.62
+  },
+  {
+   "id": "serve",
+   "type": "counter",
+   "label": "Serve table",
+   "x": 2.11,
+   "y": 0.95,
+   "w": 1.2,
+   "h": 0.5
+  },
+  {
+   "id": "printer",
+   "type": "printer",
+   "label": "Printer",
+   "x": 5.12,
+   "y": 0.95,
+   "w": 0.45,
+   "h": 0.38
+  },
+  {
+   "id": "kitchen_table",
+   "type": "counter",
+   "label": "Kitchen table",
+   "x": 0.39,
+   "y": -1.5,
+   "w": 1.2,
+   "h": 0.6
+  },
+  {
+   "id": "center",
+   "type": "island",
+   "label": "Center table",
+   "x": 3.26,
+   "y": -1.15,
+   "w": 2.2,
+   "h": 2.3
+  }
+ ]
+}

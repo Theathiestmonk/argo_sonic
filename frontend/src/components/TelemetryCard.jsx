@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 // Bottom-center live telemetry — drive speed/wheels from serial_bridge.py
 // (/odom, /wheel_speeds), obstacle distances from safety_shield.py
 // (/safety_shield/lidar_distance, /safety_shield/depth_distance) and
@@ -41,7 +42,16 @@ function Tile({ label, value, color = '#fff' }) {
   )
 }
 
-export default function TelemetryCard({ driveTelemetry = {}, sensorDistances = {} }) {
+export default function TelemetryCard({ driveTelemetry = {}, sensorDistances = {}, shieldStatus = {} }) {
+  // Re-render every second so a shield that stops publishing flips to OFF.
+  const [, tick] = useState(0)
+  useEffect(() => { const i = setInterval(() => tick(n => n + 1), 1000); return () => clearInterval(i) }, [])
+  const shieldUp = shieldStatus.ts && Date.now() - shieldStatus.ts < 3000
+  const shield = !shieldUp
+    ? { text: 'OFF', color: 'var(--danger)' }
+    : shieldStatus.depth
+      ? { text: 'ACTIVE', color: 'var(--ok)' }
+      : { text: 'NO DEPTH DATA', color: 'var(--danger)' }
   return (
     <div
       className="glass-card"
@@ -65,9 +75,11 @@ export default function TelemetryCard({ driveTelemetry = {}, sensorDistances = {
           <Tile label="Depth Cam" value={fmtDist(sensorDistances.depth)} color={distColor(sensorDistances.depth)} />
           <Tile label="US Front L" value={fmtDist(sensorDistances.usFrontLeft)} color={distColor(sensorDistances.usFrontLeft)} />
           <Tile label="US Front R" value={fmtDist(sensorDistances.usFrontRight)} color={distColor(sensorDistances.usFrontRight)} />
-          <Tile label="US Back L" value={fmtDist(sensorDistances.usBackLeft)} color={distColor(sensorDistances.usBackLeft)} />
-          <Tile label="US Back R" value={fmtDist(sensorDistances.usBackRight)} color={distColor(sensorDistances.usBackRight)} />
         </div>
+
+        <div style={{ width: 1, background: 'var(--border-glass)' }} />
+
+        <Tile label="Depth Shield" value={shield.text} color={shield.color} />
       </div>
     </div>
   )

@@ -121,7 +121,7 @@ check_process_alive $TF_PID "camera TF bridge"
 # ── Step 3 — serial_bridge ──────────────────────────────────────────────
 pause "Step 3 — serial_bridge (esp32)"
 ros2 run argo_mini serial_bridge --ros-args \
-  -p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66 &
+  -p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.51 &
 SERIAL_PID=$!
 sleep 2
 check_process_alive $SERIAL_PID "serial_bridge"

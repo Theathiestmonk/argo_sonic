@@ -1,0 +1,18 @@
+# Argo POS API – lets the dashboard's Menu + Orders pages (menu editing and the order ledger, port 8890).
+# Install (user service, no sudo; starts at boot because lingering is already enabled for this user):
+#   mkdir -p ~/.config/systemd/user && cp backend/argo-pos-api.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now argo-pos-api
+[Unit]
+Description=Argo POS API (menu editing + order ledger, port 8890)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/argo/my_project/argo_sonic
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/argo/my_project/argo_sonic/backend/pos_api.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

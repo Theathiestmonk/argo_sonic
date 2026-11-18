@@ -273,7 +273,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
           <ModeToggle mode={mode} onAuto={selectAuto} onManual={selectManual} onFreeRoam={selectFreeRoam} disabled={stackState === 'running' || isStarting} />
           {stackState === 'running' && (
             <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6 }}>
-              <strong style={{ color: '#fff' }}>Stop stack</strong> below to choose a different mode.
+              <strong style={{ color: 'var(--text)' }}>Stop stack</strong> below to choose a different mode.
             </p>
           )}
           {stackState !== 'running' && !isStarting && !mode && (
@@ -362,7 +362,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
             </div>
 
             <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14, lineHeight: 1.65 }}>
-              Argo will scan every corner on its own. Switch to <strong style={{ color: '#fff' }}>I'll Drive</strong> or <strong style={{ color: '#fff' }}>Free Roam</strong> to take over at any time.
+              Argo will scan every corner on its own. Switch to <strong style={{ color: 'var(--text)' }}>I'll Drive</strong> or <strong style={{ color: 'var(--text)' }}>Free Roam</strong> to take over at any time.
             </p>
           </div>
         )}
@@ -400,7 +400,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
               style={{
                 width: '100%', padding: '11px 14px', borderRadius: 12, fontSize: 13,
                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                color: '#fff', outline: 'none', marginBottom: 10,
+                color: 'var(--text)', outline: 'none', marginBottom: 10,
                 boxSizing: 'border-box',
               }}
             />
@@ -462,7 +462,7 @@ export default function ExplorationPanel({ mapData, robotPose, frontiers, connec
                 background: 'transparent', border: '1px solid rgba(255,255,255,0.08)',
                 color: 'var(--muted)', cursor: 'pointer', transition: 'all 0.2s',
               }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.18)'; e.currentTarget.style.color = '#fff' }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--a-line-strong)'; e.currentTarget.style.color = 'var(--text)' }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = 'var(--muted)' }}
             >
               Remap

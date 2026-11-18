@@ -1,0 +1,22 @@
+const P = { fill: 'none', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', viewBox: '0 0 24 24' }
+const I = (d) => (props) => <svg {...P} stroke="currentColor" {...props}>{d}</svg>
+
+export const Home    = I(<><path d="M3 11.5 12 4l9 7.5" /><path d="M5.5 10v9.5h13V10" /><path d="M10 19.5v-5h4v5" /></>)
+export const Cart    = I(<><path d="M3 4h2.5l2 11h10.5l2-8H7" /><circle cx="9" cy="19.5" r="1.4" /><circle cx="17" cy="19.5" r="1.4" /></>)
+export const Clip    = I(<><rect x="5" y="4" width="14" height="17" rx="2.5" /><path d="M9 4V3h6v1M8.5 10h7M8.5 14h7M8.5 17.5h4" /></>)
+export const Menu    = I(<><path d="M5 7h14M5 12h14M5 17h9" /></>)
+export const Tables  = I(<><path d="M4 9h16M6 9v10M18 9v10M3 9l1.5-4h15L21 9" /></>)
+export const MapNav  = I(<><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4Z" /><path d="M9 4v14M15 6v14" /></>)
+export const Gear    = I(<><circle cx="12" cy="12" r="3.2" /><path d="M19.4 14.5a1.6 1.6 0 0 0 .3 1.8l.1.1a1.9 1.9 0 1 1-2.7 2.7l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a1.9 1.9 0 1 1-3.8 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1h-.2a1.9 1.9 0 1 1 0-3.8h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1a1.6 1.6 0 0 0 1.8.3h.1a1.6 1.6 0 0 0 1-1.5v-.2a1.9 1.9 0 1 1 3.8 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1h.2a1.9 1.9 0 1 1 0 3.8h-.1a1.6 1.6 0 0 0-1.5 1Z" /></>)
+export const Bell    = I(<><path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.8 8.5-2.8 8.5h17.6S18 15 18 8.5" /><path d="M13.7 20.5a2 2 0 0 1-3.4 0" /></>)
+export const Cutlery = I(<><path d="M7 3v8a2 2 0 0 0 2 2v8M11 3v8a2 2 0 0 1-2 2M9 3v6" /><path d="M17 21V3c-2.2 1.2-3 4-3 7 0 2 1 3 3 3" /></>)
+export const Doc     = I(<><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>)
+export const TableIc = I(<><path d="M4 10h16M6 10v9M18 10v9M5 10l1-4h12l1 4" /><path d="M9.5 6V4M14.5 6V4" /></>)
+export const Search  = I(<><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></>)
+export const Keyboard= I(<><rect x="3" y="6" width="18" height="12" rx="2.5" /><path d="M7 10h.01M10.5 10h.01M14 10h.01M17 10h.01M7 14h10" /></>)
+export const Wifi    = I(<><path d="M2.5 9a15 15 0 0 1 19 0M5.5 12.5a10.5 10.5 0 0 1 13 0M8.6 16a6 6 0 0 1 6.8 0" /><circle cx="12" cy="19.2" r=".6" fill="currentColor" /></>)
+export const Bag     = I(<><path d="M5 8h14l-1 12H6z" /><path d="M9 8a3 3 0 0 1 6 0" /></>)
+export const Expand  = I(<><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></>)
+export const Refresh = I(<><path d="M20 12a8 8 0 1 1-2.6-5.9" /><path d="M20 4v5h-5" /></>)
+export const Layers  = I(<><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>)
+export const Joystick= I(<><circle cx="12" cy="7" r="3.2" /><path d="M12 10.2V15M6 21h12a1 1 0 0 0 1-1v-2a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v2a1 1 0 0 0 1 1Z" /></>)

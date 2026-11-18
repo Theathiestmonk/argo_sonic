@@ -12,3 +12,7 @@ venv/
 .venv/
 *.log
 node_modules/
+
+# POS order ledger (runtime data)
+src/argo_mini/orders/*.sqlite3*
+backend/robot_settings.json

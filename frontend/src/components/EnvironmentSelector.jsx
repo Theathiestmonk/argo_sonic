@@ -5,7 +5,7 @@ const ENVIRONMENTS = [
     id: 'hotel',
     name: 'Hotel',
     desc: 'Lobby, corridors, rooms & service areas',
-    accent: '#e2b35c',
+    accent: '#b07f1f',
     accentBg: 'rgba(226,179,92,0.08)',
     accentBorder: 'rgba(226,179,92,0.25)',
     svg: (
@@ -23,7 +23,7 @@ const ENVIRONMENTS = [
     id: 'restaurant',
     name: 'Restaurant',
     desc: 'Dining area, kitchen & service counters',
-    accent: '#ff8f6b',
+    accent: '#d4603a',
     accentBg: 'rgba(255,143,107,0.08)',
     accentBorder: 'rgba(255,143,107,0.25)',
     svg: (
@@ -43,7 +43,7 @@ const ENVIRONMENTS = [
     id: 'indoor',
     name: 'Indoor',
     desc: 'Office, warehouse or general indoor space',
-    accent: '#7fa8e8',
+    accent: '#3d6fb8',
     accentBg: 'rgba(127,168,232,0.08)',
     accentBorder: 'rgba(127,168,232,0.25)',
     svg: (
@@ -61,7 +61,7 @@ const ENVIRONMENTS = [
     id: 'cafe',
     name: 'Cafe',
     desc: 'Small space, counter, seating & garden',
-    accent: '#a87cf3',
+    accent: '#7a52c7',
     accentBg: 'rgba(168,124,243,0.08)',
     accentBorder: 'rgba(168,124,243,0.25)',
     svg: (
@@ -77,7 +77,7 @@ const ENVIRONMENTS = [
     id: 'hospital',
     name: 'Hospital',
     desc: 'Wards, reception, corridors & pharmacy',
-    accent: '#3bf09b',
+    accent: '#2f9e5b',
     accentBg: 'rgba(59,240,155,0.08)',
     accentBorder: 'rgba(59,240,155,0.25)',
     svg: (
@@ -142,7 +142,7 @@ export default function EnvironmentSelector({ onSelect, onNewMap }) {
 
               <div style={{
                 fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 17,
-                color: sel ? '#fff' : 'rgba(255,255,255,0.85)',
+                color: 'var(--text)',
                 marginBottom: 6,
               }}>
                 {env.name}

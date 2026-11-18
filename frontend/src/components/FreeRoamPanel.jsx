@@ -310,7 +310,7 @@ export default function FreeRoamPanel({
         alignItems: 'center',
         gap: 8,
       }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Free Roam</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Free Roam</div>
         <span style={{
           fontSize: 10,
           fontWeight: 700,

@@ -193,10 +193,11 @@ import subprocess
 import threading
 import time
 import uuid as uuid_lib
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psycopg2
 import psycopg2.extras
+import robot_settings
 from dotenv import load_dotenv
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -244,6 +245,8 @@ ROBOT_UID    = os.environ.get('ROBOT_UID', 'SONIC-001')
 # repeated saves before a page refresh don't create duplicate rows — same
 # namespace/approach as sonic/seed_db.py's menu_item_uuid().
 MENU_UUID_NAMESPACE = uuid_lib.UUID('6f6a1e2e-4b8a-5e3a-9c2a-2f2f2f2f2f2f')
+NAV_STARTUP_STEPS = 15   # step_done() calls in argo_sonic_nav.py's main()
+NAV_PROGRESS_HISTORY_PATH = '/tmp/argo_nav_progress_history'  # every step, one kind|epoch|message per line
 NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by NAV_SCRIPT (whichever nav script is active)
 NAV_LOG_PATH       = '/tmp/argo_nav_output.log'  # full stdout+stderr of the current/last NAV_SCRIPT run
 NAV_LOG_TAIL_LINES = 300
@@ -934,13 +937,90 @@ ROS_NODE_PROCESS_NAMES = [
 ]
 
 
+# Extra substrings (beyond ROS_NODE_PROCESS_NAMES) that identify anything the
+# nav/SLAM stack or its helpers spawn. Matched against the full cmdline, so the
+# `sh -c bash -c "... ros2 launch ascamera ..."` camera wrappers and
+# `ros2 run` wrappers are caught too — those never contain "ascamera_node" and
+# were the residue the old name-only pkill left behind.
+_NAV_EXTRA_PATTERNS = [
+    "ascamera", "ros2 launch argo_mini", "ros2 run argo_mini", "argo_sonic_nav",
+    "nav_lifecycle", "nav_bridge.py", "start_argo_nav", "start_ntfields",
+    "start_slam", "start_nav_stepwise", "static_transform_publisher",
+    "mppi_reverse_controller", "goal_approach_limiter", "map_server", "amcl",
+    "waypoint_follower", "smoother_server", "lifecycle_manager",
+    "frontier_explorer", "slam_teleop", "ekf_node", "rplidar", "nav2_",
+    "_ros2_daemon",
+]
+# Never touched: the UI's own transport and this launcher.
+_NAV_PROTECTED = ("rosbridge", "rosapi", "backend/launcher.py")
+
+
+def _ancestor_pids():
+    pids, pid = set(), os.getpid()
+    while pid > 1:
+        pids.add(pid)
+        try:
+            with open(f'/proc/{pid}/stat') as f:
+                pid = int(f.read().rsplit(')', 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return pids
+
+
+def _nav_stack_pids():
+    """PIDs of every leftover nav-stack process, found by scanning /proc cmdlines
+    (pgrep/pkill -f would also match this launcher's own shell commands)."""
+    patterns = ROS_NODE_PROCESS_NAMES + _NAV_EXTRA_PATTERNS
+    skip = _ancestor_pids()
+    found = []
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit() or int(entry) in skip:
+            continue
+        try:
+            with open(f'/proc/{entry}/cmdline', 'rb') as f:
+                cmd = f.read().replace(b'\0', b' ').decode(errors='ignore')
+        except OSError:
+            continue
+        if not cmd or any(x in cmd for x in _NAV_PROTECTED):
+            continue
+        if any(p in cmd for p in patterns):
+            found.append((int(entry), cmd[:120]))
+    return found
+
+
 def _kill_ros_stragglers():
-    """Best-effort final sweep — pkill -9 by name, same as argo_sonic_nav.py's
-    own defensive startup cleanup. Never raises; a missing pkill binary or a
-    process that's already gone is silently fine either way."""
-    subprocess.run(["pkill", "-9", "-f", "_ros2_daemon"], capture_output=True)
-    for proc_name in ROS_NODE_PROCESS_NAMES:
-        subprocess.run(["pkill", "-9", "-f", proc_name], capture_output=True)
+    """Final sweep for POST /stop: SIGKILL everything the nav stack left behind
+    (retrying until /proc is clean), free the motor/lidar ports, and reset the
+    ros2 CLI daemon — a clean slate equivalent to a reboot of the nav side.
+    rosbridge/rosapi are deliberately kept: the UI talks to the robot through
+    them. Returns the list of processes that could NOT be killed (normally [])."""
+    survivors = []
+    for _ in range(6):
+        survivors = _nav_stack_pids()
+        if not survivors:
+            break
+        for pid, _cmd in survivors:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        time.sleep(0.5)
+    else:
+        survivors = _nav_stack_pids()
+    for dev in ('/dev/esp32', '/dev/lidar'):
+        try:
+            subprocess.run(['fuser', '-k', '-9', dev], capture_output=True, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    for leftover in (NAV_PROGRESS_PATH,):
+        try:
+            with open(leftover, 'w'):
+                pass
+        except OSError:
+            pass
+    if survivors:
+        print(f'[launcher] stop: {len(survivors)} process(es) survived SIGKILL: {survivors}')
+    return survivors
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -1010,7 +1090,7 @@ _serial_estop_manual = False   # True only for an operator's POST /estop, not /s
 _serial_lock = threading.Lock()
 SERIAL_PORT = '/dev/esp32'
 SERIAL_BAUD = 115200
-SERIAL_LEFT_TICK_SCALE = 0.66
+SERIAL_LEFT_TICK_SCALE = 0.51
 SERIAL_INVERT_LEFT = False
 SERIAL_INVERT_RIGHT = True  # right motor spins opposite to left after the Oct-2026 rebuild
 
@@ -1045,9 +1125,46 @@ def _estop_locked():
         subprocess.run(['bash', '-c', zero_cmd], capture_output=True, timeout=8)
     except subprocess.TimeoutExpired:
         pass  # still fall through to the kill below regardless
+    # Lights off BEFORE the bridge dies (it is the only path to the ESP32).
+    # The bridge applies its own relay inversion, so just publish false.
+    light_cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        f"source {_ROOT}/install/setup.bash && "
+        "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        "ros2 topic pub -r 5 -t 5 /light/gpio17 std_msgs/msg/Bool '{data: false}'"
+    )
+    try:
+        subprocess.run(['bash', '-c', light_cmd], capture_output=True, timeout=8)
+    except subprocess.TimeoutExpired:
+        pass
+    # SIGTERM first: the bridge's handler also switches the light off and
+    # stops the motors on its way out. SIGKILL only if it doesn't exit.
+    subprocess.run(['pkill', '-TERM', '-f', 'serial_bridge'], capture_output=True)
+    deadline = time.time() + 3.0
+    while time.time() < deadline and _serial_bridge_pids():
+        time.sleep(0.1)
     subprocess.run(['pkill', '-9', '-f', 'serial_bridge'], capture_output=True)
     _serial_proc = None
     _serial_estopped = True
+
+
+# Everything that publishes velocity toward serial_bridge (directly or via the
+# shield). Killed FIRST on /stop so nothing can fight the zero-ramp below —
+# otherwise Nav2 keeps streaming cmd_vel at 20 Hz interleaved with our 10 Hz
+# zeros and the motors never actually ramp down while the stack tears down.
+CMD_VEL_SOURCES = (
+    "bt_navigator", "controller_server", "behavior_server", "velocity_smoother",
+    "safety_shield", "patrol_manager", "sonic_nlp",
+)
+
+
+def _halt_motors_locked():
+    """Motors first: silence every velocity source, then ramp to zero and kill
+    serial_bridge (_estop_locked). Only after this returns does /stop tear down
+    the rest of the stack. Caller must hold _serial_lock."""
+    for name in CMD_VEL_SOURCES:
+        subprocess.run(["pkill", "-9", "-f", name], capture_output=True)
+    _estop_locked()
 
 
 def _serial_bridge_pids():
@@ -1162,7 +1279,35 @@ class Handler(BaseHTTPRequestHandler):
                         timestamp = int(ts_str)
                     except ValueError:
                         timestamp = None
-            self._json({'status': status, 'message': message, 'timestamp': timestamp})
+            # Every startup step so far (oldest first) so the dashboard can
+            # list them all below the battery until Nav2 is ready.
+            steps = []
+            if os.path.isfile(NAV_PROGRESS_HISTORY_PATH):
+                try:
+                    with open(NAV_PROGRESS_HISTORY_PATH, 'r', errors='replace') as f:
+                        for line in f.read().splitlines()[-60:]:
+                            k, _, rest = line.partition('|')
+                            ts_, _, msg_ = rest.partition('|')
+                            if msg_:
+                                steps.append({'kind': k, 'time': int(ts_) if ts_.isdigit() else None, 'message': msg_})
+                except OSError:
+                    pass
+            # Launch progress 0-100, from the number of startup steps completed
+            # (argo_sonic_nav.py logs "Ready  >>  <step>" for each). 100 only on
+            # READY, which the script now reports after EVERY node is up.
+            done = 0
+            try:
+                with open(NAV_PROGRESS_HISTORY_PATH, 'r', errors='replace') as f:
+                    done = sum(1 for ln in f if '|Ready  >>  ' in ln)
+            except OSError:
+                pass
+            if status == 'READY':
+                percent = 100
+            elif status is None:
+                percent = 0
+            else:
+                percent = min(95, 5 + round(90 * done / NAV_STARTUP_STEPS))
+            self._json({'status': status, 'message': message, 'timestamp': timestamp, 'steps': steps, 'percent': percent})
 
         elif self.path == '/nav_log':
             log = ''
@@ -1174,6 +1319,9 @@ class Handler(BaseHTTPRequestHandler):
 
         elif self.path == '/config':
             self._json({'maps_dir': MAPS_DIR})
+
+        elif self.path == '/settings':
+            self._json(robot_settings.snapshot())
 
         elif self.path == '/maps':
             names = sorted(
@@ -1416,6 +1564,9 @@ class Handler(BaseHTTPRequestHandler):
                     with open(NAV_PROGRESS_PATH, 'w'):
                         pass
                     os.chmod(NAV_PROGRESS_PATH, 0o666)
+                    with open(NAV_PROGRESS_HISTORY_PATH, 'w'):
+                        pass
+                    os.chmod(NAV_PROGRESS_HISTORY_PATH, 0o666)
                 except OSError:
                     pass
                 # Fresh log file per run ('w', not 'a') — otherwise GET
@@ -1447,18 +1598,23 @@ class Handler(BaseHTTPRequestHandler):
                 _mode = mode
                 _map = map_name
             print(f'[launcher] stack started  mode={mode}  map={map_name}  pid={_proc.pid}')
+            robot_settings.apply_motion_after_start()
             self._json({'ok': True, 'status': 'started', 'pid': _proc.pid, 'mode': mode, 'map': map_name})
 
         elif self.path == '/stop':
             # "Stop Argo" — nav/SLAM stack and motors stopped; clean idle state.
+            # Motors first (silence velocity sources, ramp to zero, kill
+            # serial_bridge), THEN tear down the rest of the stack — the
+            # teardown can take 10+ s and must not leave the wheels live.
+            with _serial_lock:
+                _halt_motors_locked()
+                _serial_estop_manual = False   # full teardown, not an operator e-stop
             with _lock:
                 _stop_locked()
-            with _serial_lock:
-                _estop_locked()
-                _serial_estop_manual = False   # full teardown, not an operator e-stop
-            _kill_ros_stragglers()
-            print('[launcher] Stop Argo — nav stack and motors stopped; clean state until /start')
-            self._json({'ok': True, 'status': 'stopped'})
+            survivors = _kill_ros_stragglers()
+            print('[launcher] Stop Argo — motors stopped first, then nav stack; clean state until /start')
+            self._json({'ok': not survivors, 'status': 'stopped' if not survivors else 'stopped_with_survivors',
+                        'survivors': [c for _p, c in survivors]})
 
         elif self.path.startswith('/waypoints/'):
             name = _safe_name(self.path[len('/waypoints/'):])
@@ -1575,6 +1731,33 @@ class Handler(BaseHTTPRequestHandler):
             print(f'[launcher] /maps/{name}/model/build')
             self._json({'ok': True, 'status': 'started', 'map': name})
 
+        elif self.path in ('/settings/motion', '/settings/audio'):
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                data = json.loads(self.rfile.read(length)) if length else {}
+                if not isinstance(data, dict):
+                    raise ValueError
+                if self.path == '/settings/motion':
+                    lin, ang = data.get('max_linear'), data.get('max_angular')
+                    if lin is not None: lin = float(lin)
+                    if ang is not None: ang = float(ang)
+                else:
+                    spk, mic = data.get('speaker'), data.get('mic')
+                    if spk is not None: spk = float(spk)
+                    if mic is not None: mic = float(mic)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                self._json({'error': 'invalid JSON body'}, 400)
+                return
+            if self.path == '/settings/motion':
+                live, msg = robot_settings.update_motion(lin, ang)
+                print(f'[launcher] /settings/motion lin={lin} ang={ang} live={live}')
+                self._json({'ok': True, 'applied_live': live, 'note': None if live else 'Saved; applies when the nav stack is running.',
+                            **robot_settings.snapshot()})
+            else:
+                errs = robot_settings.set_audio(spk, mic)
+                print(f'[launcher] /settings/audio speaker={spk} mic={mic} errors={errs}')
+                self._json({'ok': not errs, 'errors': errs, **robot_settings.snapshot()}, 200 if not errs else 500)
+
         elif self.path == '/teleop/start':
             status = _teleop_start()
             print(f'[launcher] /teleop/start -> {status}')
@@ -1674,7 +1857,8 @@ if __name__ == '__main__':
     if not DATABASE_URL:
         print('[launcher] WARNING: DATABASE_URL not set (sonic/.env) — /menu and /orders will return empty')
     threading.Thread(target=run_bms_thread, daemon=True).start()
-    server = HTTPServer(('0.0.0.0', PORT), Handler)
+    server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+    server.daemon_threads = True
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')
     try:
         server.serve_forever()

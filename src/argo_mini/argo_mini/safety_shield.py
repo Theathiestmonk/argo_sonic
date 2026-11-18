@@ -8,9 +8,9 @@ Pipeline:
 Three independent sensor sources with graduated forward-speed response:
 
   Lidar (LaserScan)  – /scan_corrected
-    > LIDAR_SLOW_DIST (0.70 m) : full speed
+    > LIDAR_SLOW_DIST (1.00 m) : full speed
     LIDAR_STOP_DIST .. LIDAR_SLOW_DIST : speed scaled linearly 0→100%
-    < LIDAR_STOP_DIST (0.50 m) : hard stop (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST
+    < LIDAR_STOP_DIST (0.70 m) : hard stop (see LIDAR_SLOW_DIST/LIDAR_STOP_DIST
       comments below for the full 1.30/1.00 <-> 1.00/0.70 <-> 0.70/0.50 history)
 
   Depth camera (PointCloud2)  – raw /points (independent of restamper)
@@ -18,26 +18,24 @@ Three independent sensor sources with graduated forward-speed response:
     DEPTH_STOP_DIST .. DEPTH_SLOW_DIST : speed scaled linearly 0→100%
     < DEPTH_STOP_DIST (0.70 m) : hard stop
 
-  Ultrasonic (Range x 4)  – graduated, same ramp shape as lidar/depth above
-    > US_FRONT_SLOW_DIST (0.45 m) : full speed forward
+  Ultrasonic (Range x 2, front only — rear sensors removed)  – graduated, same ramp shape as lidar/depth above
+    > US_FRONT_SLOW_DIST (0.55 m) : full speed forward
     US_FRONT_DIST .. US_FRONT_SLOW_DIST : forward speed scaled linearly 0→100%
-    < US_FRONT_DIST (0.30 m) : hard stop forward
-    > US_REAR_SLOW_DIST (0.45 m) : full speed reverse
-    US_REAR_DIST .. US_REAR_SLOW_DIST : reverse speed scaled linearly 0→100%
-    < US_REAR_DIST (0.30 m) : hard stop reverse — this is the ONLY sensor
-      covering the rear at all (lidar/depth are both forward-only), so it is
-      also the only thing gating the BT's BackUp recovery
+    < US_FRONT_DIST (0.40 m) : hard stop forward
+    Reverse is NOT gated: the rear ultrasonics were physically removed and
+    lidar/depth are forward-only, so nothing covers the rear (this includes
+    the BT's BackUp recovery).
 
 Gate:
     fwd_scale  = min(lidar_scale, depth_scale, us_front_scale)   ∈ [0.0, 1.0]
-    rear_scale = us_rear_scale                                  ∈ [0.0, 1.0]
     linear.x   = commanded_linear.x * fwd_scale   (if commanded forward)
-               = commanded_linear.x * rear_scale  (if commanded reverse)
+               = commanded_linear.x              (if commanded reverse, ungated)
     angular.z  = always passes through
 
 All sensors stale → full pass-through (fail-open, robot never freezes).
 """
 
+import json
 import math
 import os
 import socket
@@ -54,13 +52,13 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan, PointCloud2, Range
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 
 # ── Lidar ─────────────────────────────────────────────────────────────────────
-# Raised to 0.70/0.50 for increased safety margin.
-LIDAR_SLOW_DIST  = 0.70    # m   – begin speed reduction
-LIDAR_STOP_DIST  = 0.50    # m   – hard stop
-LIDAR_WIDTH_HALF = 0.35    # m   – half-width of danger corridor
+# Raised to 1.00/0.70 for increased safety margin.
+LIDAR_SLOW_DIST  = 1.00    # m   – begin speed reduction
+LIDAR_STOP_DIST  = 0.70    # m   – hard stop
+LIDAR_WIDTH_HALF = 0.50    # m   – half-width of danger corridor
 LIDAR_MIN_PTS    = 3       # minimum scan points to register an obstacle
 LIDAR_STALE_SECS = 1.0     # s   – treat as stale if no scan arrives
 
@@ -75,9 +73,8 @@ DEPTH_HEIGHT_MAX =  0.05   # opt Y – upper bound (ignore ceiling)
 DEPTH_STALE_SECS = 1.0     # s
 
 # ── Ultrasonic ────────────────────────────────────────────────────────────────
-# Raised to 0.30 m for increased safety margin.
-US_FRONT_DIST    = 0.30    # m   – hard stop forward
-US_REAR_DIST     = 0.30    # m   – hard stop reverse
+# Raised to 0.40 m for increased safety margin (slow zone 0.55 m).
+US_FRONT_DIST    = 0.40    # m   – hard stop forward
 # Added — ultrasonic used to be pure binary (full speed right up until a
 # hard stop at US_FRONT_DIST/US_REAR_DIST), the only one of the three
 # sensor sources with no graduated ramp. A 0.15m ramp above each hard-stop
@@ -96,8 +93,7 @@ US_REAR_DIST     = 0.30    # m   – hard stop reverse
 # most — it's the only sensor covering that direction at all, and the BT's
 # BackUp recovery now actually reverses through it. _validate_zones() below
 # fails loudly if these ever invert again.
-US_FRONT_SLOW_DIST = 0.45  # m   – begin speed reduction forward
-US_REAR_SLOW_DIST  = 0.45  # m   – begin speed reduction reverse
+US_FRONT_SLOW_DIST = 0.55  # m   – begin speed reduction forward
 US_STALE_SECS    = 1.0     # s
 
 # ── Graduated-speed smoothing ─────────────────────────────────────────────────
@@ -118,6 +114,7 @@ DEPTH_TOPIC  = "/ascamera_hp60c/camera_publisher/depth0/points"
 
 # ── Beep ──────────────────────────────────────────────────────────────────────
 BEEP_COOLDOWN = 2.0        # s
+VOICE_COOLDOWN = 6.0       # s between spoken "please move aside" prompts (clip is ~1.9 s)
 
 # Hardware auto-detect for the beep speaker device — the
 # Jetson's USB audio card isn't the ALSA default, so mpg123 needs pointing at
@@ -128,7 +125,16 @@ SPEAKER_DEVICE = "plughw:CARD=Device,DEV=0" if _ON_JETSON else "default"
 # <repo_root>/sound/beep.mp3 — resolved from this file's own location (not a
 # hardcoded absolute path) so it keeps working under a --symlink-install
 # build, same convention as waypoint_manager.py's DEFAULT_WAYPOINTS_DIR.
-SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" / "beep.mp3")
+def _find_sound(name: str) -> str:
+    """<repo_root>/sound/<name>, found by walking up from this file — works
+    from src/ (symlink-install) and from a copied install/.../site-packages."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "sound" / name).is_file():
+            return str(parent / "sound" / name)
+    return str(Path(__file__).resolve().parent.parent.parent.parent / "sound" / name)
+
+
+SOUND_FILE = _find_sound("beep.mp3")
 
 # This is a "something's nearby" nudge, not an alarm — kept well under full
 # volume on purpose so it doesn't disturb the room (customers/staff), and
@@ -137,6 +143,14 @@ SOUND_FILE = str(Path(__file__).resolve().parent.parent.parent.parent / "sound" 
 # this alert needs to stay quiet independent of that. Raised from 0.60 —
 # reported inaudible on real hardware; re-lower this if it turns out to be
 # genuinely disruptive rather than just quiet.
+# Pre-generated (Sarvam bulbul:v3, "priya") spoken prompt, played instead of
+# the beep when present; the beep stays as the fallback if the clip is missing.
+VOICE_FILE = _find_sound("please_move_aside.mp3")
+
+# False: every hard-stop alert (depth, lidar, ultrasonic) is two short beeps.
+# True: lidar/ultrasonic say "please move aside" instead (depth stays a beep).
+SPOKEN_ALERT = False
+
 ALERT_VOLUME = 0.85   # 0.0-1.0, applied to both the mp3 clip and the fallback tone
 
 
@@ -146,7 +160,6 @@ _SPEED_ZONES = (
     ("lidar",    LIDAR_STOP_DIST,    LIDAR_SLOW_DIST),
     ("depth",    DEPTH_STOP_DIST,    DEPTH_SLOW_DIST),
     ("us_front", US_FRONT_DIST,      US_FRONT_SLOW_DIST),
-    ("us_rear",  US_REAR_DIST,       US_REAR_SLOW_DIST),
 )
 
 
@@ -189,7 +202,7 @@ def _scale_for(raw_dist: float, smooth_dist: float, stop: float, slow: float) ->
     return _vel_scale(smooth_dist, stop, slow)
 
 
-def _play_alert_clip() -> bool:
+def _play_alert_clip(path: str = None) -> bool:
     """Play SOUND_FILE via mpg123. Returns False if the file or the mpg123
     binary aren't there, or playback fails, so the caller can fall back to
     the synthesized tone — the alert must still fire either way. Logs the
@@ -197,18 +210,28 @@ def _play_alert_clip() -> bool:
     "the beep isn't audible" report undebuggable — no way to tell whether
     it was just quiet, hitting the wrong output device, or not running at
     all)."""
-    if not os.path.isfile(SOUND_FILE):
-        print(f"[SafetyShield] alert clip missing: {SOUND_FILE}")
+    path = path or SOUND_FILE
+    if not os.path.isfile(path):
+        print(f"[SafetyShield] alert clip missing: {path}")
         return False
     try:
         # mpg123's -f scale is independent of the ALSA mixer (default full
         # scale = 32768) — this is what actually keeps the alert quiet
         # regardless of whatever system volume voice/TTS are using.
         scale = int(32768 * ALERT_VOLUME)
-        result = subprocess.run(
-            ["mpg123", "-q", "-a", SPEAKER_DEVICE, "-f", str(scale), SOUND_FILE],
-            timeout=5, capture_output=True, text=True,
-        )
+        # The USB card is held by PulseAudio, so opening it directly through
+        # ALSA (-a plughw:...) crashes mpg123 with a bus error (rc=-7) and the
+        # spoken alert never played. Go through PulseAudio when its socket is
+        # there; the nav stack runs under the launcher service, whose
+        # environment has no XDG_RUNTIME_DIR, so point it at the user's.
+        pulse_dir = f"/run/user/{os.getuid()}"
+        if os.path.exists(f"{pulse_dir}/pulse/native"):
+            cmd = ["mpg123", "-q", "-f", str(scale), path]
+            env = {**os.environ, "XDG_RUNTIME_DIR": pulse_dir}
+        else:
+            cmd = ["mpg123", "-q", "-a", SPEAKER_DEVICE, "-f", str(scale), path]
+            env = None
+        result = subprocess.run(cmd, timeout=5, capture_output=True, text=True, env=env)
         if result.returncode != 0:
             print(f"[SafetyShield] mpg123 failed (device={SPEAKER_DEVICE!r}, "
                   f"rc={result.returncode}): {result.stderr.strip()[-300:]}")
@@ -222,8 +245,26 @@ def _play_alert_clip() -> bool:
         return False
 
 
-def _beep():
-    threading.Thread(target=_play_alert_clip, daemon=True).start()
+_alert_playing = threading.Lock()
+
+
+def _beep(kind: str = "voice"):
+    """kind="voice": speak "please move aside" (beep if the clip can't play).
+    kind="beep": two short beeps (depth camera hard stop).
+    One alert at a time — overlapping playback would garble the sound."""
+    def run():
+        if not _alert_playing.acquire(blocking=False):
+            return
+        try:
+            if kind == "beep":
+                for _ in range(2):
+                    _play_alert_clip()
+                    time.sleep(0.12)
+            elif not (os.path.isfile(VOICE_FILE) and _play_alert_clip(VOICE_FILE)):
+                _play_alert_clip()
+        finally:
+            _alert_playing.release()
+    threading.Thread(target=run, daemon=True).start()
 
 
 class SafetyShield(Node):
@@ -246,11 +287,8 @@ class SafetyShield(Node):
 
         # Ultrasonic
         self._us_front_blocked = False
-        self._us_rear_blocked  = False
-        self._us_dists = {'fl': math.inf, 'fr': math.inf,
-                          'bl': math.inf, 'br': math.inf}
+        self._us_dists = {'fl': math.inf, 'fr': math.inf}
         self._us_front_dist_smooth = math.inf   # EMA'd — drives the graduated slow-zone scale only
-        self._us_rear_dist_smooth  = math.inf
 
         self._last_lidar = 0.0
         self._last_depth = 0.0
@@ -282,12 +320,6 @@ class SafetyShield(Node):
         self.create_subscription(
             Range, '/us/front_right', lambda m: self._on_us(m, 'fr'), sensor_qos,
             callback_group=self._sensor_group)
-        self.create_subscription(
-            Range, '/us/back_left',   lambda m: self._on_us(m, 'bl'), sensor_qos,
-            callback_group=self._sensor_group)
-        self.create_subscription(
-            Range, '/us/back_right',  lambda m: self._on_us(m, 'br'), sensor_qos,
-            callback_group=self._sensor_group)
 
         self.create_subscription(Twist, INPUT_TOPIC, self._on_cmd, 1,
                                  callback_group=self._gate_group)
@@ -302,6 +334,13 @@ class SafetyShield(Node):
         self._lidar_dist_pub = self.create_publisher(Float32, '/safety_shield/lidar_distance', 10)
         self._depth_dist_pub = self.create_publisher(Float32, '/safety_shield/depth_distance', 10)
 
+        # Liveness for the dashboard + nav startup check: is the shield itself
+        # running, and is each sensor feeding it fresh data right now? Depth
+        # "false" means the depth gate is blind (camera down) and the shield is
+        # passing depth through fail-open.
+        self._status_pub = self.create_publisher(String, '/safety_shield/status', 1)
+        self.create_timer(0.5, self._publish_status)
+
         self.get_logger().info(
             f"[SafetyShield] ready – graduated response\n"
             f"  lidar : slow < {LIDAR_SLOW_DIST:.2f} m | "
@@ -315,10 +354,18 @@ class SafetyShield(Node):
             # about the ramp that had silently collapsed.
             f"  US fwd: slow < {US_FRONT_SLOW_DIST:.2f} m | "
             f"stop < {US_FRONT_DIST:.2f} m (FL/FR)\n"
-            f"  US rear: slow < {US_REAR_SLOW_DIST:.2f} m | "
-            f"stop < {US_REAR_DIST:.2f} m (BL/BR)\n"
+            f"  US rear: removed — reverse is not gated\n"
             f"  {INPUT_TOPIC} -> {OUTPUT_TOPIC}"
         )
+
+    def _publish_status(self):
+        now = time.monotonic()
+        self._status_pub.publish(String(data=json.dumps({
+            'shield': True,
+            'depth': (now - self._last_depth) <= DEPTH_STALE_SECS,
+            'lidar': (now - self._last_lidar) <= LIDAR_STALE_SECS,
+            'us':    (now - self._last_us)    <= US_STALE_SECS,
+        })))
 
     # ── Lidar callback ────────────────────────────────────────────────────────
 
@@ -446,7 +493,7 @@ class SafetyShield(Node):
         if hard_blocked and not prev_blocked:
             self.get_logger().warn(
                 f"[SafetyShield] *** STOP (camera) *** {fwd_dist:.2f} m ({n_stop} pts)")
-            self._maybe_beep()
+            self._maybe_beep("beep")
         elif not hard_blocked and prev_blocked:
             self.get_logger().info("[SafetyShield] forward clear (camera)")
         elif slowing and not prev_slowing:
@@ -464,13 +511,9 @@ class SafetyShield(Node):
         with self._lock:
             self._us_dists[sensor] = dist
             prev_f = self._us_front_blocked
-            prev_r = self._us_rear_blocked
             us_front_raw = min(self._us_dists['fl'], self._us_dists['fr'])
-            us_rear_raw  = min(self._us_dists['bl'], self._us_dists['br'])
             self._us_front_blocked = us_front_raw < US_FRONT_DIST
-            self._us_rear_blocked  = us_rear_raw  < US_REAR_DIST
             new_f = self._us_front_blocked
-            new_r = self._us_rear_blocked
             d     = dict(self._us_dists)
 
             # Same EMA pattern as lidar/depth's own *_fwd_dist_smooth above —
@@ -482,11 +525,6 @@ class SafetyShield(Node):
             else:
                 self._us_front_dist_smooth = (
                     DIST_FILTER_ALPHA * us_front_raw + (1 - DIST_FILTER_ALPHA) * self._us_front_dist_smooth)
-            if math.isinf(self._us_rear_dist_smooth) or math.isinf(us_rear_raw):
-                self._us_rear_dist_smooth = us_rear_raw
-            else:
-                self._us_rear_dist_smooth = (
-                    DIST_FILTER_ALPHA * us_rear_raw + (1 - DIST_FILTER_ALPHA) * self._us_rear_dist_smooth)
 
         if new_f and not prev_f:
             self.get_logger().warn(
@@ -496,13 +534,6 @@ class SafetyShield(Node):
         elif not new_f and prev_f:
             self.get_logger().info("[SafetyShield] forward clear (ultrasonic)")
 
-        if new_r and not prev_r:
-            self.get_logger().warn(
-                f"[SafetyShield] *** STOP (ultrasonic rear) *** "
-                f"BL={d['bl']:.2f} m  BR={d['br']:.2f} m")
-            self._maybe_beep()
-        elif not new_r and prev_r:
-            self.get_logger().info("[SafetyShield] rear clear (ultrasonic)")
 
     # ── Velocity gate ──────────────────────────────────────────────────────────
 
@@ -519,21 +550,16 @@ class SafetyShield(Node):
             depth_dist_smooth = self._depth_fwd_dist_smooth if not depth_stale else math.inf
             us_front_dist        = min(self._us_dists['fl'], self._us_dists['fr']) if not us_stale else math.inf
             us_front_dist_smooth = self._us_front_dist_smooth if not us_stale else math.inf
-            us_rear_dist         = min(self._us_dists['bl'], self._us_dists['br']) if not us_stale else math.inf
-            us_rear_dist_smooth  = self._us_rear_dist_smooth if not us_stale else math.inf
 
         fwd_scale = min(
             _scale_for(lidar_dist, lidar_dist_smooth, LIDAR_STOP_DIST, LIDAR_SLOW_DIST),
             _scale_for(depth_dist, depth_dist_smooth, DEPTH_STOP_DIST, DEPTH_SLOW_DIST),
             _scale_for(us_front_dist, us_front_dist_smooth, US_FRONT_DIST, US_FRONT_SLOW_DIST),
         )
-        rear_scale = _scale_for(us_rear_dist, us_rear_dist_smooth, US_REAR_DIST, US_REAR_SLOW_DIST)
 
         lin = msg.linear.x
         if lin > 0.0:
             lin *= fwd_scale
-        if lin < 0.0:
-            lin *= rear_scale
 
         out = Twist()
         out.linear.x  = lin
@@ -542,11 +568,17 @@ class SafetyShield(Node):
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    def _maybe_beep(self):
+    def _maybe_beep(self, kind: str = "voice"):
         now = time.monotonic()
-        if now - self._last_beep >= BEEP_COOLDOWN:
+        if not SPOKEN_ALERT:
+            kind = "beep"   # every obstacle alert is the double beep
+        if kind == "beep":
+            cooldown = BEEP_COOLDOWN
+        else:
+            cooldown = VOICE_COOLDOWN if os.path.isfile(VOICE_FILE) else BEEP_COOLDOWN
+        if now - self._last_beep >= cooldown:
             self._last_beep = now
-            _beep()
+            _beep(kind)
 
 
 def main(args=None):

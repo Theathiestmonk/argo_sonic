@@ -1,0 +1,309 @@
+{
+  "bot_name": "Sonic",
+  "name": "ATSN Cafe",
+  "tagline": "Fresh Indian food, served by robots",
+  "about": "ATSN Cafe serves Indian favourites: tandoori starters, street-food chaat, South Indian tiffin, rich curries, Hyderabadi dum biryani, fresh breads, thalis, mithai and chai. Our robot waiters take your order at the table and the kitchen prepares everything fresh.",
+  "cuisine": [
+    "North Indian",
+    "South Indian",
+    "Hyderabadi",
+    "Street food",
+    "Indian desserts"
+  ],
+  "hours": "Open every day from 10 AM to 11 PM",
+  "address": "ATSN Cafe, Hyderabad",
+  "location": {
+    "lat": 17.385,
+    "lon": 78.4867,
+    "city": "Hyderabad"
+  },
+  "facilities": [
+    "Free Wi-Fi",
+    "Air conditioning",
+    "Family seating",
+    "Kids friendly"
+  ],
+  "payment": "We accept cash, cards and UPI. The bill is settled at the counter.",
+  "policies": "Vegetarian and non-vegetarian dishes are prepared separately. Prices are in rupees; 5 percent GST is added to the bill.",
+  "specials_today": [],
+  "famous_items": [],
+  "upsell_lines": [
+    "Now, are you ready to order?",
+    "Anyway, shall I take your order now?",
+    "That was all about that. Would you like to order something?",
+    "Okay, now are you ready to order?"
+  ],
+  "service_items": [
+    {
+      "name": "Towel",
+      "aliases": [
+        "towel",
+        "napkin",
+        "tissue",
+        "tissues",
+        "wet wipes"
+      ]
+    },
+    {
+      "name": "Water",
+      "aliases": [
+        "water",
+        "drinking water",
+        "water bottle",
+        "glass of water"
+      ]
+    },
+    {
+      "name": "Cutlery",
+      "aliases": [
+        "cutlery",
+        "fork",
+        "spoon",
+        "knife",
+        "forks",
+        "spoons"
+      ]
+    },
+    {
+      "name": "Mint Chutney",
+      "aliases": [
+        "mint chutney",
+        "green chutney",
+        "chutney"
+      ]
+    },
+    {
+      "name": "Pickle",
+      "aliases": [
+        "pickle",
+        "achar"
+      ]
+    },
+    {
+      "name": "Extra Papad",
+      "aliases": [
+        "papad",
+        "papadum",
+        "extra papad"
+      ]
+    },
+    {
+      "name": "Ketchup",
+      "aliases": [
+        "ketchup",
+        "tomato sauce",
+        "sauce"
+      ]
+    }
+  ],
+  "category_aliases": {
+    "snacks": [
+      "Chaat & Snacks",
+      "Starters"
+    ],
+    "snack": [
+      "Chaat & Snacks",
+      "Starters"
+    ],
+    "chaat": [
+      "Chaat & Snacks"
+    ],
+    "street food": [
+      "Chaat & Snacks"
+    ],
+    "starters": [
+      "Starters"
+    ],
+    "starter": [
+      "Starters"
+    ],
+    "appetizers": [
+      "Starters"
+    ],
+    "kebabs": [
+      "Starters"
+    ],
+    "tandoori": [
+      "Starters"
+    ],
+    "south indian": [
+      "South Indian"
+    ],
+    "dosa": [
+      "South Indian"
+    ],
+    "tiffin": [
+      "South Indian"
+    ],
+    "breakfast": [
+      "South Indian"
+    ],
+    "mains": [
+      "Curries",
+      "Biryani & Rice",
+      "Thali"
+    ],
+    "main course": [
+      "Curries",
+      "Biryani & Rice",
+      "Thali"
+    ],
+    "curry": [
+      "Curries"
+    ],
+    "gravy": [
+      "Curries"
+    ],
+    "biryani": [
+      "Biryani & Rice"
+    ],
+    "rice": [
+      "Biryani & Rice"
+    ],
+    "bread": [
+      "Breads"
+    ],
+    "breads": [
+      "Breads"
+    ],
+    "roti": [
+      "Breads"
+    ],
+    "naan": [
+      "Breads"
+    ],
+    "paratha": [
+      "Breads"
+    ],
+    "thali": [
+      "Thali"
+    ],
+    "combo": [
+      "Thali"
+    ],
+    "meals": [
+      "Thali"
+    ],
+    "beverages": [
+      "Beverages"
+    ],
+    "beverage": [
+      "Beverages"
+    ],
+    "drinks": [
+      "Beverages"
+    ],
+    "cold drinks": [
+      "Beverages"
+    ],
+    "juice": [
+      "Beverages"
+    ],
+    "tea": [
+      "Beverages"
+    ],
+    "coffee": [
+      "Beverages"
+    ],
+    "lassi": [
+      "Beverages"
+    ],
+    "sweets": [
+      "Desserts"
+    ],
+    "dessert": [
+      "Desserts"
+    ],
+    "desserts": [
+      "Desserts"
+    ],
+    "mithai": [
+      "Desserts"
+    ]
+  },
+  "variations": {
+    "by_category": {
+      "Curries": {
+        "label": "spice level",
+        "options": [
+          "Mild",
+          "Medium",
+          "Spicy"
+        ]
+      }
+    },
+    "by_item": {
+      "Hyderabadi Chicken Dum Biryani": {
+        "label": "spice level",
+        "options": [
+          "Mild",
+          "Medium",
+          "Spicy"
+        ]
+      },
+      "Mutton Dum Biryani": {
+        "label": "spice level",
+        "options": [
+          "Mild",
+          "Medium",
+          "Spicy"
+        ]
+      },
+      "Veg Dum Biryani": {
+        "label": "spice level",
+        "options": [
+          "Mild",
+          "Medium",
+          "Spicy"
+        ]
+      },
+      "Egg Biryani": {
+        "label": "spice level",
+        "options": [
+          "Mild",
+          "Medium",
+          "Spicy"
+        ]
+      },
+      "Sweet Lassi": {
+        "label": "size",
+        "options": [
+          "Regular",
+          "Large"
+        ]
+      },
+      "Mango Lassi": {
+        "label": "size",
+        "options": [
+          "Regular",
+          "Large"
+        ]
+      },
+      "Cold Coffee": {
+        "label": "size",
+        "options": [
+          "Regular",
+          "Large"
+        ]
+      },
+      "Thandai": {
+        "label": "size",
+        "options": [
+          "Regular",
+          "Large"
+        ]
+      }
+    }
+  },
+  "location_aliases": {
+    "base": "Docker",
+    "dock": "Docker",
+    "docking": "Docker",
+    "charging": "Docker",
+    "charging station": "Docker",
+    "home": "Docker",
+    "home base": "Docker",
+    "docker": "Docker",
+    "kitchen": "Kitchen"
+  }
+}

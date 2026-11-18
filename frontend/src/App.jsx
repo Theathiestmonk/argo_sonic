@@ -1,10 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ros } from './ros'
+import { loadSavedMap } from './mapLoader'
 import EnvironmentSelector from './components/EnvironmentSelector'
 import ExplorationPanel    from './components/ExplorationPanel'
 import TablesPanel         from './components/TablesPanel'
 import SettingsPanel       from './components/SettingsPanel'
 import DashboardHome       from './components/DashboardHome'
+import Shell, { useRestaurant } from './ui/Shell'
+import MenuPage from './ui/MenuPage'
+import OrdersPage from './ui/OrdersPage'
+import * as Ic from './ui/icons'
 
 // Golden theme styling
 if (typeof document !== 'undefined') {
@@ -63,6 +68,22 @@ const STEPS = [
   { label: 'Set Locations', short: 'Places' },
 ]
 
+// Last known robot pose per map, kept in the browser so the marker survives a page refresh.
+// (slam_toolbox's /pose only publishes when it processes a new scan, so a robot standing still sends nothing.)
+const POSE_KEY = 'argo_last_pose'
+function loadPose(map) {
+  try { const p = (JSON.parse(localStorage.getItem(POSE_KEY)) || {})[map]; return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y, theta: p.theta || 0 } : null } catch { return null }
+}
+function savePose(map, pose) {
+  try { const all = JSON.parse(localStorage.getItem(POSE_KEY)) || {}; all[map] = { x: pose.x, y: pose.y, theta: pose.theta, at: Date.now() }; localStorage.setItem(POSE_KEY, JSON.stringify(all)) } catch { /* private mode */ }
+}
+const yawOf = (q) => Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+function menuApiUrl(rosUrl) {
+  // menu service (backend/pos_api.py) listens on :8890 of the same host
+  return rosUrl.replace(/^ws/, 'http').replace(/:\d+$/, ':8890')
+}
+
 function launcherUrl(rosUrl) {
   // derive launcher HTTP URL from rosbridge ws URL
   // ws://192.168.1.5:9090  →  http://192.168.1.5:8888
@@ -89,19 +110,37 @@ export default function App() {
   const [navInitializing, setNavInitializing] = useState(false)
   const [navReady, setNavReady] = useState(false)
   const [navPoseSet, setNavPoseSet] = useState(false)
+  const [navPct, setNavPct] = useState(0)
   const [navProgress, setNavProgress] = useState(null)   // live step-by-step message (e.g. "Starting Serial Bridge"), shown on the Start Argo button while initializing
   const retryRef = useRef(null)
+  const [ordersCount, setOrdersCount] = useState(0)
+  const restaurant = useRestaurant()
+  useEffect(() => {                         // sidebar badge = open orders in the POS ledger (when its service is up)
+    let dead = false
+    const load = () => fetch(`${menuApiUrl(rosUrl)}/orders/summary`, { cache: 'no-store' }).then(r => r.json()).then(d => { if (!dead && typeof d.open === 'number') setOrdersCount(d.open) }).catch(() => {})
+    load(); const id = setInterval(load, 5000)
+    return () => { dead = true; clearInterval(id) }
+  }, [rosUrl])
 
   const [mapData, setMapData]     = useState(null)
   const [costmapData, setCostmapData] = useState(null)
-  const [robotPose, setRobotPose] = useState(null)
+  const [robotPose, setRobotPose] = useState(() => loadPose(localStorage.getItem('argo_selected_map') || 'office_map'))
+  const [poseStale, setPoseStale] = useState(true)       // true until a live pose has arrived (or after it stops arriving)
+  const lastLiveRef = useRef(0)
+  const lastSavedRef = useRef(0)
+  const mapOdomRef = useRef(null)                         // map→odom from /tf  {x, y, yaw}
+  const odomFullRef = useRef(null)                        // odom→base from /odom {x, y, yaw}
+  const selectedMapRef = useRef(null)
+  const runningMapRef = useRef(null)                      // the map navigation is actually running (poses are only valid in that map's frame)
   const [frontiers, setFrontiers] = useState([])
   const [plannedPath, setPlannedPath] = useState([])
   // Bottom-center telemetry card (DashboardHome) — speed/wheels from
   // serial_bridge.py, obstacle distances from safety_shield.py. Grouped
   // into two objects rather than ~8 separate useState hooks.
   const [driveTelemetry, setDriveTelemetry] = useState({ speed: null, angularVel: null, wheelLeft: null, wheelRight: null })
-  const [sensorDistances, setSensorDistances] = useState({ lidar: null, depth: null, usFrontLeft: null, usFrontRight: null, usBackLeft: null, usBackRight: null })
+  // /safety_shield/status: {shield,depth,lidar,us}; ts = last message time
+  const [shieldStatus, setShieldStatus] = useState({ ts: 0 })
+  const [sensorDistances, setSensorDistances] = useState({ lidar: null, depth: null, usFrontLeft: null, usFrontRight: null })
   // Same map-frame localized pose as robotPose above (slam_toolbox's
   // /pose) but kept in a ref too, not just state — arrival-checking polls
   // this on an interval and doesn't need a re-render on every tick the way
@@ -163,14 +202,36 @@ export default function App() {
       // this same correction) showed the right one. Drives both the
       // reactive robotPose state (marker rendering, MapCanvas.jsx) and
       // mapPoseRef (arrival-distance checks below).
+      const publish = (x, y, theta) => {
+        mapPoseRef.current = { x, y }
+        lastLiveRef.current = Date.now()
+        setRobotPose({ x, y, theta })
+        if (Date.now() - lastSavedRef.current > 1000 && runningMapRef.current) { lastSavedRef.current = Date.now(); savePose(runningMapRef.current, { x, y, theta }) }
+      }
       const t = ros.topic('/pose', 'geometry_msgs/msg/PoseWithCovarianceStamped', { throttle_rate: 200 })
       t?.subscribe(msg => {
         const { x, y } = msg.pose.pose.position
-        const q = msg.pose.pose.orientation
-        const theta = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        mapPoseRef.current = { x, y }
-        setRobotPose({ x, y, theta })
+        publish(x, y, yawOf(msg.pose.pose.orientation))
       })
+      // /pose is silent while the robot is stationary, so the marker also comes from the TF tree: the map→odom
+      // correction slam_toolbox keeps publishing, composed with the latest odometry. Live right after a refresh.
+      const compose = () => {
+        const mo = mapOdomRef.current, od = odomFullRef.current
+        if (!mo || !od) return
+        const c = Math.cos(mo.yaw), sn = Math.sin(mo.yaw)
+        publish(mo.x + c * od.x - sn * od.y, mo.y + sn * od.x + c * od.y, mo.yaw + od.yaw)
+      }
+      subRefs.current.composePose = compose
+      const tf = ros.topic('/tf', 'tf2_msgs/msg/TFMessage', { throttle_rate: 50, queue_length: 1 })
+      tf?.subscribe(msg => {
+        for (const tr of msg.transforms ?? []) {
+          if (tr.header?.frame_id === 'map' && tr.child_frame_id === 'odom') {
+            mapOdomRef.current = { x: tr.transform.translation.x, y: tr.transform.translation.y, yaw: yawOf(tr.transform.rotation) }
+            compose()
+          }
+        }
+      })
+      subRefs.current.tf = tf
       subRefs.current.pose = t
     }
     if (!subRefs.current.odom) {
@@ -183,6 +244,8 @@ export default function App() {
       t?.subscribe(msg => {
         setDriveTelemetry(d => ({ ...d, speed: msg.twist.twist.linear.x, angularVel: msg.twist.twist.angular.z }))
         odomPoseRef.current = { x: msg.pose.pose.position.x, y: msg.pose.pose.position.y }
+        odomFullRef.current = { x: msg.pose.pose.position.x, y: msg.pose.pose.position.y, yaw: yawOf(msg.pose.pose.orientation) }
+        subRefs.current.composePose?.()
       })
       subRefs.current.odom = t
     }
@@ -235,6 +298,13 @@ export default function App() {
       t?.subscribe(msg => setSensorDistances(d => ({ ...d, lidar: msg.data })))
       subRefs.current.safetyLidar = t
     }
+    if (!subRefs.current.safetyStatus) {
+      const t = ros.topic('/safety_shield/status', 'std_msgs/msg/String', { throttle_rate: 500 })
+      t?.subscribe(msg => {
+        try { setShieldStatus({ ...JSON.parse(msg.data), ts: Date.now() }) } catch { /* ignore malformed */ }
+      })
+      subRefs.current.safetyStatus = t
+    }
     if (!subRefs.current.safetyDepth) {
       const t = ros.topic('/safety_shield/depth_distance', 'std_msgs/msg/Float32', { throttle_rate: 200 })
       t?.subscribe(msg => setSensorDistances(d => ({ ...d, depth: msg.data })))
@@ -245,8 +315,6 @@ export default function App() {
     const US_TOPICS = [
       ['/us/front_left',  'usFrontLeft'],
       ['/us/front_right', 'usFrontRight'],
-      ['/us/back_left',   'usBackLeft'],
-      ['/us/back_right',  'usBackRight'],
     ]
     US_TOPICS.forEach(([topic, key]) => {
       const refKey = `us_${key}`
@@ -256,6 +324,39 @@ export default function App() {
         subRefs.current[refKey] = t
       }
     })
+  }, [])
+
+  useEffect(() => { selectedMapRef.current = selectedMap }, [selectedMap])
+  // /map is latched and only re-published on map changes, so after a reload
+  // the live subscription can stay empty. If nothing arrived shortly after
+  // load, show the saved map until a live one replaces it.
+  useEffect(() => {
+    if (demoMode) return
+    let dead = false
+    const id = setTimeout(() => {
+      setMapData(cur => {
+        if (!cur) {
+          loadSavedMap(launcherUrl(rosUrl), selectedMap)
+            .then(m => { if (m && !dead) setMapData(prev => prev ?? m) })
+            .catch(() => {})
+        }
+        return cur
+      })
+    }, 2500)
+    return () => { dead = true; clearTimeout(id) }
+  }, [selectedMap, rosUrl, demoMode])
+  useEffect(() => {                                       // which map is navigation running? (launcher /status)
+    let dead = false
+    const load = () => fetch(`${launcherUrl(rosUrl)}/status`).then(r => r.json()).then(d => { if (!dead) runningMapRef.current = d.running && d.map ? d.map : null }).catch(() => {})
+    load(); const id = setInterval(load, 10000)
+    return () => { dead = true; clearInterval(id) }
+  }, [rosUrl])
+  useEffect(() => {                                       // a different map → show that map's last known pose until a live one arrives
+    if (Date.now() - lastLiveRef.current > 4000) setRobotPose(loadPose(selectedMap))
+  }, [selectedMap])
+  useEffect(() => {
+    const id = setInterval(() => setPoseStale(Date.now() - lastLiveRef.current > 4000), 1000)
+    return () => clearInterval(id)
   }, [])
 
   const connect = useCallback(() => {
@@ -409,276 +510,129 @@ export default function App() {
         ],
       },
     })
+    setRobotPose({ x: wx, y: wy, theta })
+    if (runningMapRef.current || selectedMapRef.current) savePose(runningMapRef.current || selectedMapRef.current, { x: wx, y: wy, theta })
     showToast('Robot position set — localizing…', 'info')
   }, [showToast])
 
 
   const shared = { mapData, robotPose, frontiers, plannedPath, connected, showToast, launcherUrl: launcherUrl(rosUrl), startRetrying, stopRetrying }
 
+  const activeNav = showSettings ? 'settings' : view === 'menu' ? 'menu' : view === 'orders' ? 'orders' : view === 'wizard' ? (step === 2 ? 'tables' : 'map') : 'overview'
+  const goDashboard = () => { setShowSettings(false); setView('dashboard'); setStep(0) }
+  const onNav = (id) => {
+    if (id === 'overview') goDashboard()
+    else if (id === 'menu') { setShowSettings(false); setView('menu') }
+    else if (id === 'orders') { setShowSettings(false); setView('orders') }
+    else if (id === 'tables') { setShowSettings(false); setView('wizard'); setStep(2) }
+    else if (id === 'map') { setShowSettings(false); setView('wizard'); setStep(1) }
+    else if (id === 'settings') setShowSettings(true)
+  }
+
+  const topActions = (
+    <>
+      {editingUrl && (
+        <form onSubmit={e => { e.preventDefault(); connect(); setEditingUrl(false) }} style={{ display: 'flex', gap: 6 }}>
+          <input autoFocus value={rosUrl} onChange={e => setRosUrl(e.target.value)}
+            style={{ padding: '7px 12px', borderRadius: 10, fontSize: 12, border: '1px solid var(--a-line-strong)', width: 190 }} />
+          <button type="submit" className="a-btn ok">Connect</button>
+          <button type="button" onClick={() => setEditingUrl(false)} className="a-btn">✕</button>
+        </form>
+      )}
+      {navInitializing ? (
+        <button className="a-btn gold-soft" disabled title={navProgress || 'Starting Argo…'}><span className="a-spin" />Starting…</button>
+      ) : navReady ? (
+        <span className="a-pill" title="Navigation is up and ready"><i />Argo running</span>
+      ) : (
+        <button className="a-btn gold" onClick={() => { setNavInitializing(true); dashboardRef.current?.startNav?.() }}>▶ Start Argo</button>
+      )}
+      <button className="a-btn gold-outline" onClick={() => {
+        setNavInitializing(false); setNavReady(false); setNavPoseSet(false); setNavProgress(null)
+        dashboardRef.current?.stopNav?.(); dashboardRef.current?.estop?.()
+      }}>■ Stop Argo</button>
+      <button className="a-iconbtn" onClick={() => dashboardRef.current?.toggleActivityPanel?.()} title="Recent activity and alerts"><Ic.Bell width="22" height="22" /></button>
+    </>
+  )
+
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+    <Shell active={activeNav} onNav={onNav} badges={{ orders: ordersCount }} connected={connected} restaurant={restaurant} top={topActions}>
+      {view === null && <div style={{ textAlign: 'center', color: 'var(--a-muted)', padding: '80px 0' }}>Loading…</div>}
 
-      {/* Ambient blobs */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: -1, overflow: 'hidden', pointerEvents: 'none' }}>
-        {[
-          { top: '-8%',  left: '22%',  w: 600, h: 600, c: '#7b3fd4', d: '0s'  },
-          { bottom: '8%', right: '8%', w: 520, h: 520, c: '#e2962a', d: '-4s' },
-          { top: '42%',  left: '-4%', w: 400, h: 400, c: '#1d9962', d: '-8s'  },
-        ].map((b, i) => (
-          <div key={i} style={{
-            position: 'absolute', borderRadius: '50%', filter: 'blur(80px)', opacity: 0.38,
-            width: b.w, height: b.h, background: b.c,
-            top: b.top, left: b.left, bottom: b.bottom, right: b.right,
-            animation: 'float 12s infinite alternate ease-in-out',
-            animationDelay: b.d,
-          }} />
-        ))}
-      </div>
+      {view === 'dashboard' && !showSettings && (
+        <DashboardHome
+          ref={dashboardRef}
+          launcherUrl={launcherUrl(rosUrl)}
+          selectedMap={selectedMap}
+          connected={connected}
+          showToast={showToast}
+          onNavigate={sendNavGoal}
+          onSetInitialPose={sendInitialPose}
+          mapData={mapData}
+          costmapData={costmapData}
+          robotPose={robotPose}
+          poseStale={poseStale}
+          plannedPath={plannedPath}
+          driveTelemetry={driveTelemetry}
+          sensorDistances={sensorDistances}
+          shieldStatus={shieldStatus}
+          battery={battery}
+          onOpenSettings={() => setShowSettings(true)}
+          onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
+          onFreeRoam={() => { setView('wizard'); setStep(1) }}
+          onNavInitializing={setNavInitializing}
+          onNavReady={setNavReady}
+          onNavPoseSet={setNavPoseSet}
+          onNavProgress={(msg, pct) => { setNavProgress(msg); setNavPct(pct || 0) }}
+          onViewOrders={() => setView('orders')}
+          onSelectMap={setSelectedMap}
+          menuApi={menuApiUrl(rosUrl)}
+        />
+      )}
 
-      {/* Top navigation */}
-      <header style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap',
-        padding: '0 28px', gap: 16, height: 68,
-        background: '#121212',
-        backdropFilter: 'blur(30px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(30px) saturate(180%)',
-        borderBottom: '1px solid var(--border-glass)',
-        position: 'sticky', top: 0, zIndex: 30,
-      }}>
-        {/* Brand */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: '50%',
-            border: '2px solid var(--gold)',
-            background: 'transparent',
-            color: 'var(--gold)', fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 18,
-            display: 'grid', placeItems: 'center',
-          }}>A</div>
-          <div>
-            <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 800, fontSize: 16, letterSpacing: '-0.2px' }}>
-              ARGO SONIC{selectedEnv ? ` · ${selectedEnv.name}` : ''}
-            </div>
-            <div style={{ color: connected ? 'var(--ok)' : 'var(--muted)', fontSize: 11, letterSpacing: '0.05em', fontWeight: 600, marginTop: 3 }}>
-              {connected ? 'Connected' : 'Not connected'}
-            </div>
-          </div>
-        </div>
+      {view === 'orders' && !showSettings && <OrdersPage api={menuApiUrl(rosUrl)} launcherUrl={launcherUrl(rosUrl)} selectedMap={selectedMap} showToast={showToast} />}
+      {view === 'menu' && !showSettings && <MenuPage api={menuApiUrl(rosUrl)} showToast={showToast} />}
 
-
-        {/* Step indicator — only relevant while running the map/table wizard */}
-        {view === 'wizard' && !showSettings && (
-        <nav style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          {STEPS.map((s, i) => (
-            <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <button
-                onClick={() => i < step && setStep(i)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 7,
-                  padding: '7px 12px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-                  background: i === step
-                    ? 'rgba(226,179,92,0.12)'
-                    : i < step ? 'rgba(59,240,155,0.08)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${i === step ? 'rgba(226,179,92,0.38)' : i < step ? 'rgba(59,240,155,0.25)' : 'var(--border-glass)'}`,
-                  color: i === step ? 'var(--gold-bright)' : i < step ? 'var(--ok)' : 'var(--muted)',
-                  cursor: i < step ? 'pointer' : 'default',
-                  transition: 'all 0.25s',
-                }}
-              >
-                <span style={{
-                  width: 18, height: 18, borderRadius: 6, fontSize: 10, fontWeight: 800,
-                  background: i === step ? 'rgba(226,179,92,0.18)' : i < step ? 'rgba(59,240,155,0.18)' : 'rgba(255,255,255,0.05)',
-                  color: 'inherit', display: 'grid', placeItems: 'center', flexShrink: 0,
-                }}>
-                  {i < step ? '✓' : i + 1}
-                </span>
-                {s.label}
-              </button>
-              {i < STEPS.length - 1 && (
-                <div style={{ width: 18, height: 1, background: 'var(--border-glass)', flexShrink: 0 }} />
+      {view !== null && (showSettings || view === 'wizard') && (
+        <div className="argo-legacy">
+          {showSettings ? (
+            <SettingsPanel launcherUrl={launcherUrl(rosUrl)} selectedMap={selectedMap} onSelectMap={setSelectedMap}
+              onClose={() => setShowSettings(false)} showToast={showToast} />
+          ) : (
+            <>
+              <nav style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 22, flexWrap: 'wrap' }}>
+                {STEPS.map((st, i) => (
+                  <div key={st.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button onClick={() => i < step && setStep(i)} style={{
+                      display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
+                      background: i === step ? 'rgba(226,179,92,0.12)' : i < step ? 'rgba(59,240,155,0.08)' : 'rgba(255,255,255,0.03)',
+                      border: `1px solid ${i === step ? 'rgba(226,179,92,0.38)' : i < step ? 'rgba(59,240,155,0.25)' : 'var(--border-glass)'}`,
+                      color: i === step ? 'var(--gold-bright)' : i < step ? 'var(--ok)' : 'var(--muted)', cursor: i < step ? 'pointer' : 'default' }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 6, fontSize: 10, fontWeight: 800, background: 'rgba(255,255,255,0.06)', display: 'grid', placeItems: 'center' }}>{i < step ? '✓' : i + 1}</span>
+                      {st.label}
+                    </button>
+                    {i < STEPS.length - 1 && <div style={{ width: 18, height: 1, background: 'var(--border-glass)' }} />}
+                  </div>
+                ))}
+              </nav>
+              {step === 0 && <EnvironmentSelector onSelect={env => { setSelectedEnv(env); setStep(1) }} onNewMap={() => { setSelectedEnv(null); setStep(1) }} />}
+              {step === 1 && <ExplorationPanel {...shared} onDone={() => setStep(2)} />}
+              {step === 2 && (
+                <>
+                  <TablesPanel {...shared} selectedMap={selectedMap} onNavigate={sendNavGoal} />
+                  <div style={{ textAlign: 'center', marginTop: 28 }}>
+                    <button onClick={goDashboard} className="btn-primary" style={{ fontSize: 15, padding: '15px 32px', display: 'inline-flex' }}>
+                      Done — back to Overview
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </button>
+                  </div>
+                </>
               )}
-            </div>
-          ))}
-        </nav>
-        )}
-
-        {/* Connection Edit — hidden but accessible for rosbridge URL changes */}
-        {editingUrl && (
-        <div style={{ flexShrink: 0 }}>
-          <form
-            onSubmit={e => { e.preventDefault(); connect(); setEditingUrl(false) }}
-            style={{ display: 'flex', gap: 6 }}
-          >
-            <input
-              autoFocus value={rosUrl} onChange={e => setRosUrl(e.target.value)}
-              style={{
-                padding: '7px 12px', borderRadius: 9, fontSize: 12,
-                background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)',
-                color: '#fff', outline: 'none', width: 180,
-              }}
-            />
-            <button type="submit" className="btn-ok" style={{ padding: '7px 14px', fontSize: 12 }}>Connect</button>
-            <button type="button" onClick={() => setEditingUrl(false)} className="btn-ghost" style={{ padding: '7px 10px', fontSize: 12 }}>✕</button>
-          </form>
-        </div>
-        )}
-
-        {/* Right-aligned buttons */}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginLeft: 'auto' }}>
-          {/* Activity Bell */}
-          <button
-            onClick={() => dashboardRef.current?.toggleActivityPanel?.()}
-            title="View recent activity and alerts"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '7px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 600,
-              background: 'rgba(226,179,92,0.08)', border: '1px solid rgba(226,179,92,0.28)',
-              color: 'var(--gold-bright)', flexShrink: 0,
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-            </svg>
-            Activity
-          </button>
-
-          {/* Start/Stop Argo Buttons */}
-          <button
-            onClick={() => { setNavInitializing(true); dashboardRef.current?.startNav?.() }}
-            disabled={navInitializing}
-            title={navInitializing ? (navProgress || 'Starting Argo…') : undefined}
-            style={{
-              padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
-              background: navReady ? 'rgba(59,240,155,0.12)' : 'rgba(226,179,92,0.14)',
-              border: navReady ? '1px solid rgba(59,240,155,0.3)' : '1px solid rgba(226,179,92,0.4)',
-              color: navReady ? 'var(--ok)' : 'var(--gold-bright)',
-              display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
-              opacity: navInitializing ? 0.6 : 1,
-              cursor: navInitializing ? 'not-allowed' : 'pointer',
-              maxWidth: 240,
-            }}
-          >
-            {navInitializing ? (
-              <>
-                <span style={{ display: 'inline-block', animation: 'spin-slow 1s linear infinite', flexShrink: 0 }}>⏳</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {navProgress || 'Starting...'}
-                </span>
-              </>
-            ) : navReady ? (
-              <>✓ Nav Ready</>
-            ) : (
-              <>▶ Start Argo</>
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              setNavInitializing(false);
-              setNavReady(false);
-              setNavPoseSet(false);
-              setNavProgress(null);
-              dashboardRef.current?.stopNav?.();
-              dashboardRef.current?.estop?.()
-            }}
-            style={{
-              padding: '9px 16px', borderRadius: 14, fontSize: 12.5, fontWeight: 800,
-              background: 'rgba(255,65,65,0.12)', border: '1px solid rgba(255,65,65,0.45)', color: 'var(--danger)',
-              display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
-            }}
-          >
-            🛑 Stop Argo
-          </button>
-
-        </div>
-      </header>
-
-      {/* Content */}
-      <main style={{ flex: 1, padding: '28px 32px 56px' }}>
-        {view === null && (
-          <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '80px 0' }}>Loading…</div>
-        )}
-
-        {view !== null && showSettings && (
-          <SettingsPanel
-            launcherUrl={launcherUrl(rosUrl)}
-            selectedMap={selectedMap}
-            onSelectMap={setSelectedMap}
-            onClose={() => setShowSettings(false)}
-            showToast={showToast}
-          />
-        )}
-
-        {view === 'dashboard' && !showSettings && (
-          <DashboardHome
-            ref={dashboardRef}
-            launcherUrl={launcherUrl(rosUrl)}
-            selectedMap={selectedMap}
-            connected={connected}
-            showToast={showToast}
-            onNavigate={sendNavGoal}
-            onSetInitialPose={sendInitialPose}
-            mapData={mapData}
-            costmapData={costmapData}
-            robotPose={robotPose}
-            plannedPath={plannedPath}
-            driveTelemetry={driveTelemetry}
-            sensorDistances={sensorDistances}
-            battery={battery}
-            onOpenSettings={() => setShowSettings(true)}
-            onAddMap={() => { setView('wizard'); setStep(0); setSelectedEnv(null) }}
-            onFreeRoam={() => { setView('wizard'); setStep(1) }}
-            onNavInitializing={setNavInitializing}
-            onNavReady={setNavReady}
-            onNavPoseSet={setNavPoseSet}
-            onNavProgress={setNavProgress}
-          />
-        )}
-
-        {view === 'wizard' && !showSettings && (
-          <>
-            {step === 0 && (
-              <EnvironmentSelector
-                onSelect={env => { setSelectedEnv(env); setStep(1) }}
-                onNewMap={() => { setSelectedEnv(null); setStep(1) }}
-              />
-            )}
-            {step === 1 && <ExplorationPanel {...shared} onDone={() => setStep(2)} />}
-            {step === 2 && (
-              <>
-                <TablesPanel {...shared} selectedMap={selectedMap} onNavigate={sendNavGoal} />
-                <div style={{ textAlign: 'center', marginTop: 28, animation: 'slideUp 0.4s ease' }}>
-                  <button
-                    onClick={() => { setView('dashboard'); setStep(0) }}
-                    className="btn-primary"
-                    style={{ fontSize: 15, padding: '15px 32px', display: 'inline-flex' }}
-                  >
-                    Done — back to Dashboard
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                  </button>
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </main>
-
-      {/* Toast */}
-      {toast && (
-        <div style={{
-          position: 'fixed', bottom: 28, right: 28, zIndex: 100,
-          background: 'rgba(12,9,18,0.92)',
-          border: `1px solid ${toast.type === 'ok' ? 'rgba(59,240,155,0.3)' : toast.type === 'danger' ? 'rgba(255,94,94,0.3)' : 'rgba(226,179,92,0.2)'}`,
-          borderRadius: 14, padding: '13px 20px', fontSize: 13.5, fontWeight: 600,
-          backdropFilter: 'blur(20px)',
-          boxShadow: '0 16px 48px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.08)',
-          color: toast.type === 'ok' ? 'var(--ok)' : toast.type === 'danger' ? 'var(--danger)' : 'var(--gold-bright)',
-          animation: 'slideUp 0.3s ease',
-          maxWidth: 320,
-        }}>
-          {toast.msg}
+            </>
+          )}
         </div>
       )}
-    </div>
+
+      {toast && <div className={`a-toast ${toast.type}`}>{toast.msg}</div>}
+    </Shell>
   )
 }

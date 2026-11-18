@@ -3,13 +3,22 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Range
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Bool, Float32MultiArray
 from tf2_ros import TransformBroadcaster
 import serial
 import math
 import time
+import signal
 
-WHEEL_RADIUS    = 0.08255
+# Effective radius, not the measured one: a 10 s straight drive at 0.15 m/s
+# (2026-11-12) read 1.301 m on /odom while a tape measured 1.50 m, so
+# real/odom = 1.153. Scaling the radius fixes both directions at once —
+# odometry metres-per-tick goes up by that factor AND _v_to_rpm() asks the
+# motors for proportionally fewer RPM, so a commanded 0.15 m/s is really
+# 0.15 m/s. (Previously every command moved ~15% faster than asked.)
+# 0.08255 (nominal) * 1.5 / 1.301 = 0.09518. Single measurement: re-run the
+# straight-line test and re-tune if odom and tape still disagree.
+WHEEL_RADIUS    = 0.09518
 WHEEL_BASE      = 0.41
 POLE_PAIRS      = 10
 TICKS_PER_REV   = POLE_PAIRS * 6   # 60 ticks/rev (10 pole pairs ? 6 Hall edges)
@@ -20,7 +29,7 @@ METERS_PER_TICK = (2 * math.pi * WHEEL_RADIUS) / TICKS_PER_REV
 IMU_ALPHA = 0.95
 
 # Velocity limits
-VMAX   = 0.38    # m/s – cap wheel speed to match nav2 vx_max
+VMAX   = 3.0    # m/s – cap wheel speed (raised for teleop; nav2 vx_max is still 0.5; firmware DAC_MAX=135 is the real ceiling)
 
 
 class SerialBridge(Node):
@@ -32,7 +41,10 @@ class SerialBridge(Node):
         self.declare_parameter('forward_only', False)
         self.declare_parameter('left_tick_scale', 1.0)
         self.declare_parameter('disable_tank_turns', False)
-        self.declare_parameter('imu_flip_z', False)
+        # Default True: the MPU6050 is mounted such that a left (CCW) turn reads
+        # negative (verified 2026-11-12 by hand-turning left: gyro integrated -102 deg).
+        # Can't remount it, so the sign is corrected here.
+        self.declare_parameter('imu_flip_z', True)
         # Per-wheel direction flip for a motor wired/mounted backwards — flips
         # the RPM sent to the ESP32 AND the sign of that wheel's encoder ticks
         # (ticks are signed by real rotation direction, so a reversed motor
@@ -92,6 +104,25 @@ class SerialBridge(Node):
             self.create_publisher(Range, f'/us/{n}', 10) for n in _us_names
         ]
 
+        # Light relay on a back ultrasonic echo pin (GPIO5 = back-left slot,
+        # GPIO17 = back-right slot). std_msgs/Bool: true = light on. Not tied to
+        # the cmd_vel watchdog, so the light stays as set when driving stops.
+        self.create_subscription(
+            Bool, '/light/gpio5', lambda m: self._set_light(5, m.data), 10)
+        self.create_subscription(
+            Bool, '/light/gpio17', lambda m: self._set_light(17, m.data), 10)
+
+        # Auto light: on as soon as the bridge is up, off when it shuts down.
+        # Set auto_light_gpio to 0 to disable (then drive it via /light/gpio17).
+        self.declare_parameter('auto_light_gpio', 17)
+        # Relay wiring is inverted vs the firmware's "1 = light on": the light
+        # went OFF when ON was sent. Flip the level here (no reflash needed).
+        self.declare_parameter('light_invert', True)
+        self._light_invert = bool(self.get_parameter('light_invert').value)
+        self._auto_light = int(self.get_parameter('auto_light_gpio').value)
+        if self._auto_light:
+            self._set_light(self._auto_light, True)
+
         self.x          = 0.0
         self.y          = 0.0
         self.theta      = 0.0
@@ -111,6 +142,15 @@ class SerialBridge(Node):
         self.create_timer(0.10, self.watchdog)
 
         self.get_logger().info('SerialBridge ready (RPM mode).')
+
+    def _set_light(self, gpio: int, on: bool):
+        try:
+            level = (not on) if self._light_invert else on
+            self.ser.write(f"L{gpio} {1 if level else 0}\n".encode())
+            self.ser.flush()
+            self.get_logger().info(f'light gpio{gpio} -> {"ON" if on else "OFF"}')
+        except serial.SerialException as e:
+            self.get_logger().error(f'Light write error: {e}')
 
     def publish_tf(self):
         now = self.get_clock().now()
@@ -171,7 +211,7 @@ class SerialBridge(Node):
         self._last_watchdog_stop = False
         lin = msg.linear.x
         ang = msg.angular.z
-        self.get_logger().info(f'cmd_cb: lin={lin:.3f} ang={ang:.3f}')
+        self.get_logger().debug(f'cmd_cb: lin={lin:.3f} ang={ang:.3f}')
 
         if self.forward_only and lin < 0.0:
             lin = 0.0
@@ -213,7 +253,7 @@ class SerialBridge(Node):
 
         try:
             cmd_str = f"V {rpm_l:.2f} {rpm_r:.2f}\n"
-            self.get_logger().info(f'Sending: {cmd_str.strip()}')
+            self.get_logger().debug(f'Sending: {cmd_str.strip()}')
             self.ser.write(cmd_str.encode())
             self.ser.flush()
         except serial.SerialException as e:
@@ -377,8 +417,15 @@ class SerialBridge(Node):
         self.wheel_speed_pub.publish(wheel_msg)
 
 
+def _on_sigterm(signum, frame):
+    # Route SIGTERM (launcher / systemd / pkill stop) through the same clean
+    # shutdown path as Ctrl+C so the light is switched off.
+    raise KeyboardInterrupt
+
+
 def main():
     rclpy.init()
+    signal.signal(signal.SIGTERM, _on_sigterm)
     node = SerialBridge()
     try:
         rclpy.spin(node)
@@ -388,6 +435,8 @@ def main():
         try:
             node.ser.write(b"S\n")
             node.ser.flush()
+            if node._auto_light:
+                node._set_light(node._auto_light, False)
             node.destroy_node()
         except Exception:
             pass

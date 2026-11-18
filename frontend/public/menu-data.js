@@ -90,7 +90,7 @@ function categoryIcon(category) {
 }
 
 function isImageSrc(src) {
-  return /^(data:|https?:)/.test(src || '')
+  return /^(data:|https?:|\/(?!\/))/.test(src || '')
 }
 
 // Renders a real <img> when a photo was uploaded; otherwise a small icon

@@ -112,7 +112,7 @@ def generate_launch_description():
             parameters=[{
                 'port':            '/dev/esp32',
                 'baud':            115200,
-                'left_tick_scale': 2.1714,
+                'left_tick_scale': 0.51,
             }],
         ),
 

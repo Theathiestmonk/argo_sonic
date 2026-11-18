@@ -196,7 +196,23 @@ def _telem_reader(proc, logf=None):
                 telem['rpm_r'] = float(m.group(2))
 
 PROGRESS_FILE = "/tmp/argo_nav_progress"
+# Every startup step (not just the latest one) as kind|epoch|message lines, so
+# the dashboard can list all of them below the battery until Nav2 is ready.
+HISTORY_FILE = "/tmp/argo_nav_progress_history"
 _progress_locked = False
+
+def _history_reset():
+    try:
+        open(HISTORY_FILE, "w").close()
+    except OSError:
+        pass
+
+def _history_add(kind, message):
+    try:
+        with open(HISTORY_FILE, "a") as f:
+            f.write(f"{kind}|{int(time.time())}|{message}\n")
+    except OSError:
+        pass
 
 def report_progress(status, message):
     global _progress_locked
@@ -215,6 +231,8 @@ def log(msg, kind="info"):
     line  = f"  {DIM}{GRAY}{ts}{RS}  {icon}  {color}{msg}{RS}"
     with log_lock:
         log_lines.append(line)
+    if kind in ("run", "ok", "warn", "fail"):
+        _history_add(kind, msg)
     if kind == "fail":
         global _last_error
         _last_error = msg
@@ -356,7 +374,49 @@ def launch_with_telem(name, cmd, env):
     threading.Thread(target=_telem_reader, args=(p, node_log(name)), daemon=True).start()
     return p
 
-def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
+def wake_lidar(port="/dev/lidar", baud=115200):
+    """Put the RPLIDAR A1 into a known-clean state before the ROS node opens it.
+
+    Measured on this robot: right after boot (or after the node was killed
+    mid-start) rplidar_ros fails with OPERATION_TIMEOUT / 'Can not start scan:
+    8000800x' even though the motor spins and the serial link is fine; raw
+    protocol access works at once. One clean handshake (motor on, STOP, INFO,
+    short scan, STOP) makes every later node start succeed, so do that here.
+    DTR low = motor on for the A1's CP210x adapter.
+    """
+    try:
+        import serial
+        ser = serial.Serial(port, baud, timeout=0.5)
+        try:
+            ser.dtr = False
+            # Linux drops DTR when the last fd closes (HUPCL), which switches
+            # the A1 motor OFF right as rplidar_ros opens the port, so the node
+            # then asks for a scan from a stopped/slow motor -> 8000800x. Clear
+            # HUPCL so the motor keeps spinning across close -> node open.
+            try:
+                import termios
+                attrs = termios.tcgetattr(ser.fd)
+                attrs[2] &= ~termios.HUPCL
+                termios.tcsetattr(ser.fd, termios.TCSANOW, attrs)
+            except Exception as e:
+                log(f"Lidar HUPCL clear skipped: {e}", "warn")
+            time.sleep(2.0)                      # motor spin-up
+            ser.write(b"\xA5\x25"); time.sleep(0.5)   # STOP
+            ser.reset_input_buffer()
+            ser.write(b"\xA5\x50"); time.sleep(0.4); ser.read(64)   # GET_INFO
+            ser.write(b"\xA5\x20"); time.sleep(0.8); ser.read(400)  # short scan
+            # STOP only halts the scan; the motor stays on (DTR low, HUPCL
+            # cleared above), so the node opens the port on a warm motor.
+            ser.write(b"\xA5\x25"); time.sleep(0.5)   # STOP
+            ser.reset_input_buffer()
+        finally:
+            ser.close()
+        return True
+    except Exception as e:
+        log(f"Lidar pre-wake skipped: {e}", "warn")
+        return False
+
+def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4, wake=None):
     """Launch a node, and if it dies or never publishes ready_topic within
     `settle` seconds, kill it and retry with growing backoff.
 
@@ -373,6 +433,8 @@ def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
     for attempt in range(1, attempts + 1):
         tag = f"  (attempt {attempt}/{attempts})" if attempts > 1 else ""
         log(f"Starting  {name}{tag}", "run")
+        if wake:
+            wake()
         p = subprocess.Popen(
             cmd, shell=True, env=env,
             stdout=node_log(name), stderr=subprocess.STDOUT,
@@ -391,13 +453,23 @@ def launch_with_retry(name, cmd, env, ready_topic, attempts=3, settle=4):
             time.sleep(0.5)
 
         log(f"{name} did not come up cleanly (attempt {attempt}/{attempts})", "warn")
+        # SIGINT first so the lidar node can send STOP and spin the motor
+        # down; a straight SIGKILL leaves the A1 half-started with stale UART
+        # bytes, which made the *next* attempt fail too (first start after
+        # boot failed all 3 attempts, the second start worked).
         try:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            pgid = os.getpgid(p.pid)
+            os.killpg(pgid, signal.SIGINT)
+            for _ in range(30):
+                if p.poll() is not None:
+                    break
+                time.sleep(0.1)
+            os.killpg(pgid, signal.SIGKILL)
         except Exception:
             pass
         pids.pop(name, None)
         if attempt < attempts:
-            time.sleep(2 * attempt)  # let the motor/port fully settle before respin
+            time.sleep(3 + 2 * attempt)  # let the motor spin down / port settle before respin
 
     log(f"FAILED to bring up {name} after {attempts} attempts", "fail")
     return None
@@ -668,7 +740,7 @@ def lc_ntfields(node, env, model_path=None):
                    post_action=("/compute_path_to_pose:nav2_msgs/action/ComputePathToPose",))
 
 SERIAL_BRIDGE_CMD = ("ros2 run argo_mini serial_bridge --ros-args "
-                     "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.66 -p invert_right:=true")
+                     "-p port:=/dev/esp32 -p baud:=115200 -p left_tick_scale:=0.51 -p invert_right:=true")
 
 def start_serial_bridge(env):
     return launch_with_telem("Serial Bridge", SERIAL_BRIDGE_CMD, env)
@@ -894,6 +966,7 @@ def main():
     parser.add_argument("--no-rviz", action="store_true", help="Headless (run via the web UI) — no DISPLAY on the robot")
     parser.add_argument("--map", default=None, help="Map base path or name (no extension). Omit to get a selector.")
     args = parser.parse_args()
+    _history_reset()
 
     home    = str(Path.home())
     no_cam  = args.no_cam
@@ -1034,7 +1107,7 @@ def main():
            ("ros2 run rplidar_ros rplidar_composition --ros-args "
             "-p serial_port:=/dev/lidar -p serial_baudrate:=115200 "
             "-p frame_id:=lidar_link -p angle_compensate:=true -p scan_mode:=Boost"),
-           env, ready_topic="/scan", attempts=3, settle=10)
+           env, ready_topic="/scan", attempts=6, settle=10, wake=wake_lidar)
     if rplidar_ok is None:
         report_progress("ERROR", "RPLidar failed to come up - no obstacle data for SLAM/safety_shield")
     step_done("RPLidar A1")
@@ -1121,7 +1194,7 @@ def main():
         "states " + " ".join(NAV2_LIFECYCLE_NODES), env, timeout=60)
     if not all_ok:
         abort_startup(f"Nav2 not fully active at final check: {bad}")
-    report_progress("READY", "Nav2 fully activated - ready for goals")
+    log("Nav2 lifecycle nodes active - starting camera and safety layers", "sys")
 
     # ── 12. Depth Camera ──────────────────────────────────────────────────────
     if not no_cam:
@@ -1148,7 +1221,25 @@ def main():
 
     # ── 14. Safety Shield ─────────────────────────────────────────────────────
     launch("Safety Shield", "ros2 run argo_mini safety_shield", env)
-    time.sleep(3); step_done("Safety Shield")
+    # Verify the shield is up AND its depth gate is actually receiving camera
+    # data. A shield with a dead depth feed passes depth through fail-open, so
+    # the robot would drive with no depth protection and nothing would say so.
+    if not no_cam:
+        depth_ok = False
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            r = runcmd("timeout 4 ros2 topic echo /safety_shield/status --once --no-daemon 2>/dev/null",
+                       env, timeout=7)
+            if '"depth": true' in r.stdout:
+                depth_ok = True
+                break
+            time.sleep(1)
+        if depth_ok:
+            log("Depth safety shield ACTIVE (camera data reaching the shield)", "ok")
+        else:
+            log("DEPTH SAFETY SHIELD NOT ACTIVE - shield has no camera data; "
+                "robot has lidar/ultrasonic protection only", "warn")
+    time.sleep(1); step_done("Safety Shield")
 
     # ── 14.5 Patrol Manager ─────────────────────────────────────────────────────
     # Runs the goal <-> home shuttle the dashboard's Patrol tool starts. The
@@ -1171,6 +1262,14 @@ def main():
         launch("RViz", "rviz2", env)
     else:
         log("RViz skipped  (--no-rviz)", "warn")
+
+    # READY only now: every node is launched and verified alive. Reporting it
+    # right after Nav2 activated (before camera / safety shield / patrol) let
+    # the UI say "Nav ready" while half the stack was still starting. A step
+    # that failed above (log kind "fail" -> ERROR) must not be overwritten.
+    if _last_error is None:
+        _history_add("ready", "Nav2 fully activated - ready for goals")
+        report_progress("READY", "Nav2 fully activated - ready for goals")
 
     step_name = f"{GREEN}All Systems Nominal{RS}"
     log("----------------------------------------------------", "sys")

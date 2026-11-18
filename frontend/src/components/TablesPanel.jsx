@@ -172,7 +172,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
               style={{
                 width: '100%', padding: '11px 14px', borderRadius: 12,
                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(226,179,92,0.3)',
-                color: '#fff', outline: 'none', marginBottom: 12, boxSizing: 'border-box',
+                color: 'var(--text)', outline: 'none', marginBottom: 12, boxSizing: 'border-box',
               }}
             />
             <div style={{ display: 'flex', gap: 8 }}>
@@ -195,7 +195,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
             }}
           >
             <div style={{ textAlign: 'left' }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: showDrive ? 'var(--blue)' : '#fff' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: showDrive ? 'var(--blue)' : 'var(--text)' }}>
                 Drive Argo to a spot
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 3 }}>
@@ -228,7 +228,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
                   style={{
                     width: '100%', padding: '11px 14px', borderRadius: 12, fontSize: 13,
                     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(127,168,232,0.25)',
-                    color: '#fff', outline: 'none', marginBottom: 10, boxSizing: 'border-box',
+                    color: 'var(--text)', outline: 'none', marginBottom: 10, boxSizing: 'border-box',
                   }}
                 />
                 <button
@@ -303,7 +303,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
                         style={{
                           flex: 1, padding: '8px 11px', borderRadius: 9, fontSize: 13,
                           background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)',
-                          color: '#fff', outline: 'none',
+                          color: 'var(--text)', outline: 'none',
                         }}
                       />
                       <button onClick={() => renameTable(key)} style={{ color: 'var(--ok)', fontWeight: 700, padding: '0 8px', fontSize: 14 }}>✓</button>

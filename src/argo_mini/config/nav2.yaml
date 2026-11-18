@@ -82,16 +82,16 @@
         vx_std: 0.2
         vy_std: 0.2
         # Kept matched 1:1 with wz_max above
-        wz_std: 0.4
-        vx_max: 0.38
+        wz_std: 0.9
+        vx_max: 0.5
         vx_min: 0.0
         vy_max: 0.0
         vy_min: 0.0
         # Increased to 0.4 for faster turns
-        wz_max: 0.4
+        wz_max: 0.6
         # Raised to 0.40 for faster acceleration
-        ax_max: 0.40
-        ax_min: -0.15
+        ax_max: 0.2
+        ax_min: -0.4
         ay_min: 0.0
         ay_max: 0.0
         # Wheel-level (slip-relevant) tangential accel from rotating is
@@ -103,7 +103,7 @@
         # that ax_max is 0.30 (see above), this comparison is stale; az_max
         # itself is untouched for now (only ax_max was asked for), but
         # revisit this math if az_max ever changes too.
-        az_max: 0.3
+        az_max: 0.5
         # Raised from 1 - a second refinement pass per control cycle on top
         # of the larger batch_size above, for better-quality candidate
         # trajectories when working around an obstacle. Same GPU-headroom
@@ -172,7 +172,7 @@
         PathFollowCritic:
           enabled: true
           cost_power: 1
-          cost_weight: 10.0
+          cost_weight: 5.0
           offset_from_furthest: 5
           threshold_to_consider: 1.4
         PathAngleCritic:
@@ -236,16 +236,16 @@
       # did it.
       smoothing_frequency: 30.0
       feedback: "OPEN_LOOP"
-      max_velocity: [0.38, 0.0, 0.3]
-      min_velocity: [-0.38, 0.0, -0.3]
+      max_velocity: [0.5, 0.0, 0.6]
+      min_velocity: [-0.5, 0.0, -0.6]
       # Matched to the MPPI controller's ax_max/az_max above — the smoother
       # sits downstream and must never allow a sharper ramp than the
       # controller was already tuned for, or its output would just get
       # clamped there anyway. Linear (index 0) raised 0.15 -> 0.30 to match
       # ax_max's own raise above — braking (max_decel) deliberately left
       # alone, only acceleration is being tested faster here, not stopping.
-      max_accel: [0.30, 0.0, 0.3]
-      max_decel: [-0.15, 0.0, -0.3]
+      max_accel: [0.2, 0.0, 0.5]
+      max_decel: [-0.4, 0.0, -0.5]
       odom_topic: /odom
       velocity_timeout: 1.0
 
@@ -267,9 +267,9 @@
         plugin: "nav2_behaviors/Wait"
       simulate_ahead_time: 2.0
       # Increased to 0.4 to match FollowPath's wz_max
-      max_rotational_vel: 0.4
+      max_rotational_vel: 0.6
       # Lowered along with max_rotational_vel above - left at the old 0.15
       # this would equal the new max exactly, leaving Spin zero ramp range
       # (jumps straight to full speed with no gradual start).
       min_rotational_vel: 0.05
-      rotational_acc_lim: 1.5
+      rotational_acc_lim: 1.0

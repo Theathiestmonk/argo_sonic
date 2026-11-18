@@ -1,6 +1,94 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import MapPreviewThumb from './MapPreviewThumb'
 import MapWaypointViewer from './MapWaypointViewer'
+
+// One labelled range slider; calls onCommit(value) 400 ms after the last change
+// so dragging doesn't fire a request (and a ros2 param set) per pixel.
+function RangeRow({ label, hint, value, range, onCommit, disabled }) {
+  const [v, setV] = useState(value)
+  const timer = useRef(null)
+  useEffect(() => { if (value != null) setV(value) }, [value])
+  useEffect(() => () => clearTimeout(timer.current), [])
+  if (!range) return null
+  const decimals = range.step < 1 ? 2 : 0
+  return (
+    <div style={{ marginBottom: 20, opacity: disabled ? 0.5 : 1 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <span style={{ fontWeight: 700, fontSize: 14 }}>{label}</span>
+        <span style={{ color: 'var(--gold-bright)', fontWeight: 700, fontSize: 14 }}>
+          {Number(v).toFixed(decimals)} {range.unit}
+        </span>
+      </div>
+      <input
+        type="range" min={range.min} max={range.max} step={range.step} value={v ?? range.min}
+        disabled={disabled}
+        onChange={e => {
+          const n = Number(e.target.value)
+          setV(n)
+          clearTimeout(timer.current)
+          timer.current = setTimeout(() => onCommit(n), 400)
+        }}
+        style={{ width: '100%', marginTop: 8, accentColor: 'var(--gold)' }}
+        aria-label={label}
+      />
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}>
+        <span>{range.min}</span><span>{hint}</span><span>{range.max}</span>
+      </div>
+    </div>
+  )
+}
+
+function RobotControls({ launcherUrl, showToast }) {
+  const [cfg, setCfg] = useState(null)
+  const [err, setErr] = useState(false)
+
+  useEffect(() => {
+    fetch(`${launcherUrl}/settings`).then(r => r.json()).then(setCfg).catch(() => setErr(true))
+  }, [launcherUrl])
+
+  const post = (path, body, okMsg) =>
+    fetch(`${launcherUrl}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok === false) { showToast?.(d.errors?.join(', ') || 'Could not apply setting'); return }
+        setCfg(c => ({ ...c, ...d }))
+        showToast?.(d.note || okMsg)
+      })
+      .catch(() => showToast?.('Launcher not reachable'))
+
+  const card = { padding: 22 }
+  const title = { fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 17, marginBottom: 4 }
+  const sub = { color: 'var(--muted)', fontSize: 13, marginBottom: 18 }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 36 }}>
+      <div className="glass-card" style={card}>
+        <div style={title}>Navigation speed</div>
+        <p style={sub}>Limits for autonomous driving. Applied live if the nav stack is running, and remembered for next start.</p>
+        {err && <div style={{ color: 'var(--muted)' }}>Launcher not reachable.</div>}
+        {!cfg && !err && <div style={{ color: 'var(--muted)' }}>Loading…</div>}
+        {cfg && <>
+          <RangeRow label="Max driving speed" hint="forward" value={cfg.max_linear} range={cfg.ranges?.max_linear}
+            onCommit={n => post('/settings/motion', { max_linear: n }, 'Driving speed updated')} />
+          <RangeRow label="Max turning speed" hint="rotation" value={cfg.max_angular} range={cfg.ranges?.max_angular}
+            onCommit={n => post('/settings/motion', { max_angular: n }, 'Turning speed updated')} />
+        </>}
+      </div>
+      <div className="glass-card" style={card}>
+        <div style={title}>Audio</div>
+        <p style={sub}>Speaker and microphone levels on the robot's USB audio device.</p>
+        {cfg && <>
+          <RangeRow label="Speaker volume" hint="output" value={cfg.speaker} range={cfg.ranges?.speaker} disabled={cfg.speaker == null}
+            onCommit={n => post('/settings/audio', { speaker: n }, 'Speaker volume updated')} />
+          <RangeRow label="Microphone volume" hint="input gain" value={cfg.mic} range={cfg.ranges?.mic} disabled={cfg.mic == null}
+            onCommit={n => post('/settings/audio', { mic: n }, 'Microphone volume updated')} />
+        </>}
+      </div>
+    </div>
+  )
+}
 
 export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, onClose, showToast }) {
   const [maps, setMaps] = useState(null) // null = loading
@@ -36,6 +124,8 @@ export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, o
         <button onClick={onClose} className="btn-ghost" style={{ fontSize: 13 }}>Close</button>
       </div>
 
+      <RobotControls launcherUrl={launcherUrl} showToast={showToast} />
+
       {maps === null && (
         <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '40px 0' }}>Loading maps…</div>
       )}
@@ -68,7 +158,7 @@ export default function SettingsPanel({ launcherUrl, selectedMap, onSelectMap, o
                 <MapPreviewThumb launcherUrl={launcherUrl} mapName={name} width="100%" height={130} />
                 <div style={{
                   fontFamily: 'var(--font-heading)', fontWeight: 700, fontSize: 15,
-                  color: sel ? '#fff' : 'rgba(255,255,255,0.85)', marginTop: 14,
+                  color: 'var(--text)', marginTop: 14,
                 }}>
                   {name}
                 </div>

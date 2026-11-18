@@ -180,7 +180,7 @@ export default function TeleopPad({ connected, compact = false }) {
     )
   }
 
-  const speedLabel = speed < 0.4 ? 'Slow' : speed < 0.72 ? 'Normal' : 'Fast'
+  const speedLabel = speed < 0.4 ? 'Slow' : speed < 1.5 ? 'Normal' : 'Fast'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18 }}>
@@ -222,10 +222,10 @@ export default function TeleopPad({ connected, compact = false }) {
         </div>
         <div style={{ position: 'relative', paddingBottom: 4 }}>
           <div style={{ height: 5, borderRadius: 99, background: 'rgba(255,255,255,0.07)' }}>
-            <div style={{ height: '100%', width: `${((speed - 0.2) / 0.8) * 100}%`, background: 'linear-gradient(90deg,var(--gold),var(--gold-bright))', borderRadius: 99, transition: 'width 0.08s' }} />
+            <div style={{ height: '100%', width: `${((speed - 0.2) / 2.8) * 100}%`, background: 'linear-gradient(90deg,var(--gold),var(--gold-bright))', borderRadius: 99, transition: 'width 0.08s' }} />
           </div>
           <input
-            type="range" min={0.2} max={1.0} step={0.05} value={speed}
+            type="range" min={0.2} max={3.0} step={0.05} value={speed}
             onChange={e => setSpeed(Number(e.target.value))}
             style={{ position: 'absolute', top: -8, left: 0, width: '100%', margin: 0, opacity: 0, cursor: 'pointer', height: 24 }}
           />

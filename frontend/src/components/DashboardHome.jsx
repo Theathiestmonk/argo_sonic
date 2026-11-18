@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import { ros } from '../ros'
-import RadialNav from './RadialNav'
-import MapCanvas from './MapCanvas'
+import LiveMap from './LiveMap'
 import TeleopPad from './TeleopPad'
 import { friendlyNavMessage, TELEOP_BADGE } from '../friendlyNames'
-import TelemetryCard from './TelemetryCard'
-import BatteryViewer from './BatteryViewer'
+import { Hero, TableCards, TelemetryStrip, RobotStatusCard, ActiveOrdersCard, PosMenuCard, normalizeOrders, usePosMenu } from '../ui/cards'
+import * as Ic from '../ui/icons'
+import { money } from '../ui/format'
 import FreeRoamPanel from './FreeRoamPanel'
-import Map3DViewer from './Map3DViewer'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
@@ -17,7 +16,6 @@ import Map3DViewer from './Map3DViewer'
 // component only displays status polled back from those. Same plain
 // '$'-prefixed formatting TablesPanel.jsx uses for the same reason — no
 // shared access to menu-data.js's currency/tax settings here.
-const money = (n) => '$' + Number(n || 0).toFixed(2)
 
 
 // A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
@@ -35,11 +33,8 @@ function tableNumberFromName(name, fallbackKey) {
   return m ? m[0] : fallbackKey
 }
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, poseStale, plannedPath, driveTelemetry, sensorDistances, shieldStatus, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onViewOrders, onSelectMap, menuApi }, ref) => {
   const [tables, setTables]         = useState({})
-  const [view3d, setView3d] = useState(() => {
-    try { return localStorage.getItem('argo_map_view3d') === '1' } catch { return false }
-  })
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [goalSetMode, setGoalSetMode] = useState(false)
   const [patrolSetMode, setPatrolSetMode] = useState(false)
@@ -87,6 +82,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     stopNav: stopNav,
     estop: estop,
     setPoseMode: setPoseMode,
+    scrollToOrders: () => document.getElementById('a-orders')?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
   }))
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
@@ -172,7 +168,17 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     return () => { cancelled = true; clearInterval(id) }
   }, [navState, navMap, selectedMap, connected])
 
-  const navReady = navState === 'running' && navMap === selectedMap && navActionReady
+  // The map navigation is actually running is the source of truth: waypoints, orders and the table layout
+  // must all come from it (a stale selection in localStorage would show another map's tables on this map).
+  useEffect(() => {
+    if (navState === 'running' && navMap && navMap !== selectedMap) onSelectMap?.(navMap)
+  }, [navState, navMap, selectedMap, onSelectMap])
+
+  // READY only once the launch script itself reports every node up (/nav_progress
+  // status READY). The /navigate_to_pose action server alone appears long before
+  // the camera, safety shield and patrol manager are launched.
+  const [navProgress, setNavProgress] = useState({ status: null, message: null, percent: 0 })
+  const navReady = navState === 'running' && navMap === selectedMap && navActionReady && navProgress.status === 'READY'
 
   // Update parent about nav readiness state
   useEffect(() => {
@@ -203,18 +209,17 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // partway through the ~90s+ startup looked identical to it just still
   // being slow: an indefinite "Waiting for Nav2" spinner with no way to
   // tell which node broke or that it broke at all, short of SSHing in.
-  const [navProgress, setNavProgress] = useState({ status: null, message: null })
   useEffect(() => {
     if (navState !== 'running' || navMap !== selectedMap) {
-      setNavProgress({ status: null, message: null })
-      onNavProgress?.(null)
+      setNavProgress({ status: null, message: null, percent: 0 })
+      onNavProgress?.(null, 0)
       return
     }
     let cancelled = false
     const check = () => {
       fetch(`${launcherUrl}/nav_progress`)
         .then(r => r.json())
-        .then(d => { if (!cancelled) { setNavProgress({ ...d, message: friendlyNavMessage(d.message) }); onNavProgress?.(friendlyNavMessage(d.message) || null) } })
+        .then(d => { if (!cancelled) { setNavProgress({ ...d, message: friendlyNavMessage(d.message) }); onNavProgress?.(friendlyNavMessage(d.message) || null, d.percent || 0) } })
         .catch(() => {})
     }
     check()
@@ -285,10 +290,14 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   }
 
   useEffect(() => {
+    // A slow response for a map we've already switched away from must never overwrite the current one.
+    let stale = false
+    setTables({})
     fetch(`${launcherUrl}/waypoints/${selectedMap}`)
       .then(r => r.json())
-      .then(d => setTables(d || {}))
-      .catch(() => setTables({}))
+      .then(d => { if (!stale) setTables(d || {}) })
+      .catch(() => { if (!stale) setTables({}) })
+    return () => { stale = true }
   }, [launcherUrl, selectedMap])
 
   // Full-overwrite save, same semantics as TablesPanel.jsx's own persist()
@@ -350,40 +359,48 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
 
-  // Orders Sonic has taken — same poll TablesPanel.jsx uses, so a finished
-  // order shows up here on the Dashboard too, not only on the Tables page.
+  // Open orders per table + today's totals come from the POS order ledger (backend/pos_api.py); when that service
+  // isn't running, fall back to the launcher's database-backed /orders so the card still works.
+  const [today, setToday] = useState(null)
   useEffect(() => {
     let cancelled = false
-    const load = () => {
-      fetch(`${launcherUrl}/orders/${selectedMap}`)
-        .then(r => r.json())
-        .then(d => { if (!cancelled) setOrders(d || {}) })
-        .catch(() => {})
+    const day0 = new Date(); day0.setHours(0, 0, 0, 0)
+    const load = async () => {
+      try {
+        const [bt, sm] = await Promise.all([
+          fetch(`${menuApi}/orders/by-table`, { cache: 'no-store' }).then(r => r.json()),
+          fetch(`${menuApi}/orders/summary?from=${encodeURIComponent(day0.toISOString())}&to=${encodeURIComponent(new Date(day0.getTime() + 86400000).toISOString())}`, { cache: 'no-store' }).then(r => r.json()),
+        ])
+        if (!cancelled) { setOrders(bt || {}); setToday(sm) }
+      } catch {
+        try { const d = await fetch(`${launcherUrl}/orders/${selectedMap}`).then(r => r.json()); if (!cancelled) { setOrders(d || {}); setToday(null) } } catch { /* offline */ }
+      }
     }
     load()
     const id = setInterval(load, 3000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [launcherUrl, selectedMap])
+  }, [launcherUrl, selectedMap, menuApi])
 
   const clearOrder = (key) => {
-    // Optimistic — drop it locally right away rather than waiting on the
-    // next poll tick, then confirm against the backend's per-table delete.
-    setOrders(prev => {
-      const next = { ...prev }
-      delete next[key]
-      return next
-    })
-    fetch(`${launcherUrl}/orders/${selectedMap}/${key}`, { method: 'DELETE' })
-      .then(r => r.json())
-      .then(d => { if (!d.ok) showToast('Could not clear order', 'danger') })
-      .catch(() => showToast('Could not reach launcher to clear order', 'danger'))
+    setOrders(prev => { const next = { ...prev }; delete next[key]; return next })            // optimistic
+    fetch(`${menuApi}/orders/clear-table`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ table: String(key), actor: 'staff' }) })
+      .then(r => { if (!r.ok) throw new Error(); return r.json() })
+      .catch(() => fetch(`${launcherUrl}/orders/${selectedMap}/${key}`, { method: 'DELETE' }).then(r => r.json()).then(d => { if (!d.ok) throw new Error() }).catch(() => showToast('Could not clear order', 'danger')))
+  }
+
+  // "Dispatch": mark the table's ready order as out for delivery in the ledger, then send the robot there.
+  const dispatchOrder = (tableName) => {
+    const num = String(parseInt((tableName.match(/\d+/) || [''])[0], 10))
+    const ids = orders[num]?.ids
+    if (ids?.length) fetch(`${menuApi}/orders/${ids[ids.length - 1]}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'out_for_delivery', actor: 'staff' }) }).catch(() => {})
+    goToDestination(tableName)
   }
 
   useEffect(() => {
     const tick = () => {
       const now = new Date()
       const h = now.getHours()
-      setGreeting(h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening')
+      setGreeting(h >= 5 && h < 12 ? 'Good Morning' : h >= 12 && h < 17 ? 'Good Afternoon' : h >= 17 && h < 21 ? 'Good Evening' : 'Good Night')
       setTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
     }
     tick()
@@ -496,523 +513,201 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     .filter(([key]) => key !== '0')
     .map(([key, t]) => ({ key, name: t.name || `Table ${key}`, x: t.x, y: t.y }))
   // Goal/Patrol/Pose are click-on-the-2D-canvas tools.
-  const canvasTools = connected && !view3d
-  const chooseView = (to3d) => {
-    if (to3d) { setGoalSetMode(false); setPatrolSetMode(false); setPoseMode(false) }
-    setView3d(to3d)
-    try { localStorage.setItem('argo_map_view3d', to3d ? '1' : '0') } catch { /* private mode */ }
-  }
+  const canvasTools = connected
 
-  const radialPages = [
-    { id: 'overview', label: 'Overview', action: () => document.getElementById('dash-overview')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg> },
-    { id: 'places', label: 'Places', action: () => document.getElementById('dash-places')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg> },
-    { id: 'activity', label: 'Activity', action: () => document.getElementById('dash-activity')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2 8 4-16 2 8h6"/></svg> },
-    { id: 'order', label: 'Order', href: '/order.html',
-      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18M16 10a4 4 0 0 1-8 0"/></svg> },
-    { id: 'menu', label: 'Menu', href: '/menu.html',
-      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg> },
-    { id: 'settings', label: 'Settings', action: onOpenSettings,
-      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg> },
+  // ───────────────────────── live data for the cards ─────────────────────────
+  const menu = usePosMenu(launcherUrl, menuApi)
+  const orderList = normalizeOrders(orders)
+  const tableCount = tableMarkerList.filter(m => /table/i.test(m.name)).length
+  const busyTables = new Set(orderList.map(o => String(parseInt(o.table, 10))))
+  const orderTables = [...busyTables]
+  const orderValue = orderList.reduce((sum, o) => sum + Number(o.total || 0), 0)
+  const itemCount = orderList.reduce((n, o) => n + o.items.reduce((s, i) => s + (i.qty || 1), 0), 0)
+  const delivering = orderList.filter(o => o.meta.tab === 'delivering').length
+
+  const trip = navGotoStatus.running
+    ? { title: 'Navigating', sub: navGotoStatus.destination ? `To ${navGotoStatus.destination}` : (navGotoStatus.phase_text || 'On a trip'), busy: true }
+    : goalMarker || (plannedPath && plannedPath.length > 1)
+      ? { title: 'Navigating', sub: 'To the selected goal', busy: true }
+      : { title: 'Idle', sub: navReady ? 'Ready for a task' : 'Navigation not ready', busy: false }
+
+  const hour = new Date().getHours()
+  const subtitle = !connected ? 'Not connected to Argo — live data is unavailable.'
+    : estopped ? 'Emergency stop is active — motors are cut.'
+    : orderList.length === 0 ? 'No active orders right now.'
+    : `${orderList.length} active order${orderList.length === 1 ? '' : 's'}${delivering ? ` · ${delivering} delivering` : ''}.`
+  const kpis = today ? [
+    { label: "Today's Revenue", icon: <Ic.Cutlery />, value: money(today.sales, menu.currency), note: today.open ? `${money(today.open_value, menu.currency)} open` : null },
+    { label: 'Total Orders', icon: <Ic.Doc />, value: today.orders, note: today.cancelled ? `${today.cancelled} cancelled` : null },
+    { label: 'Active Tables', icon: <Ic.TableIc />, value: tableCount ? `${busyTables.size} / ${tableCount}` : `${busyTables.size}`, bar: tableCount ? busyTables.size / tableCount : null },
+  ] : [
+    { label: 'Open Orders Value', icon: <Ic.Cutlery />, value: money(orderValue, menu.currency), note: itemCount ? `${itemCount} item${itemCount === 1 ? '' : 's'}` : null },
+    { label: 'Active Orders', icon: <Ic.Doc />, value: orderList.length },
+    { label: 'Active Tables', icon: <Ic.TableIc />, value: tableCount ? `${busyTables.size} / ${tableCount}` : `${busyTables.size}`, bar: tableCount ? busyTables.size / tableCount : null },
   ]
 
+  // Per-map furniture layout (tables / serve table / printer / …): /layouts/<map>.json, optional.
+  const [layout, setLayout] = useState(null)
+  useEffect(() => {
+    let stale = false
+    setLayout(null)
+    fetch(`/layouts/${selectedMap}.json`).then(r => (r.ok ? r.json() : null)).then(d => { if (!stale) setLayout(d?.objects ? d : null) }).catch(() => {})
+    return () => { stale = true }
+  }, [selectedMap])
+  const mapWrapRef = useRef(null)
+  const [panel, setPanel] = useState(() => { try { return localStorage.getItem('argo_live_panel') === 'tables' ? 'tables' : 'map' } catch { return 'map' } })
+  const choosePanel = (p) => { setPanel(p); try { localStorage.setItem('argo_live_panel', p) } catch { /* private mode */ } }
+  const goalTableName = goalMarker ? (tableMarkerList.find(m => Math.hypot(m.x - goalMarker.x, m.y - goalMarker.y) < 0.7)?.name ?? null) : null
+  const [mapKey, setMapKey] = useState(0)
+  const fullscreen = () => { const el = mapWrapRef.current; if (!el) return; document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.() }
+
+  const toolBtn = (label, on, onClick, { disabled = !canvasTools, title, cls = '' } = {}) => (
+    <button className={`a-btn ${cls} ${on ? 'on' : ''}`} onClick={onClick} disabled={disabled} title={title}>{label}</button>
+  )
+
   return (
-    <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', gridTemplateColumns: '100%', animation: 'slideUp 0.35s ease', height: '100vh', overflow: 'hidden', gap: 0 }}>
+    <div className="a-content fit" >
+      <Hero greeting={greeting} night={hour >= 19 || hour < 5} subtitle={subtitle} kpis={kpis} />
 
-      {/* ── Greeting (Full Width) ── */}
-      <section id="dash-overview" style={{ padding: '16px 20px', backgroundColor: 'rgba(0,0,0,0.08)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <div style={{ minWidth: 'auto' }}>
-            <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 28, fontWeight: 800, letterSpacing: '-0.5px', marginBottom: 2 }}>{greeting} ☀️</h2>
-            <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>Here's what's happening in your restaurant.</p>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, flex: 1 }}>
-            {[
-              ['Location', curPos, '#fff', 18],
-              ['Status', curStatus, curStatus === 'Moving' ? 'var(--gold)' : 'var(--ok)', 18],
-              ["Today's Revenue", '₹18,240', 'var(--gold-bright)', 18],
-              ['Total Orders', '56', 'var(--gold-bright)', 18],
-            ].map(([k, v, color, valueSize]) => (
-              <div key={k} className="glass-card" style={{ padding: '18px 16px' }}>
-                <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700, marginBottom: 6 }}>{k}</div>
-                <div style={{ fontSize: valueSize, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
-              </div>
+      {/* ── Live map ── */}
+      <section className="a-card a-mapcard" id="dash-activity">
+        <div className="a-maphead">
+          <h3>{panel === 'map' ? 'Live Map' : 'Tables'}</h3>
+          <div className="a-seg">
+            {[['map', 'Map'], ['tables', 'Tables']].map(([id, label]) => (
+              <button key={id} className={panel === id ? 'on' : ''} onClick={() => choosePanel(id)} title={id === 'map' ? 'Floor plan with the robot' : 'One card per table with its live order'}>{label}</button>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* ── Main Content + Robot (70% / 30%) ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '70% 30%', gap: 0, overflow: 'hidden', height: '100%' }}>
-
-      {/* ── Main Content (70%) ── */}
-      <main style={{ display: 'flex', flexDirection: 'column', gap: 0, padding: 0, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.08)', height: '100%' }}>
-
-
-        {/* Live Map */}
-        <section id="dash-activity" style={{ height: 'calc(100vh - 140px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 12px 8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 14, fontWeight: 700 }}>Location Map</div>
-              <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.16)' }}>
-                {[['2D', false], ['3D', true]].map(([label, to3d]) => (
-                  <button
-                    key={label}
-                    onClick={() => chooseView(to3d)}
-                    title={to3d ? 'View the map as a 3D building' : 'Flat map with click-to-set tools'}
-                    style={{
-                      padding: '5px 11px', fontSize: 12, fontWeight: 700, color: '#fff', cursor: 'pointer', border: 'none',
-                      background: view3d === to3d ? 'rgba(226,179,92,0.32)' : 'rgba(255,255,255,0.05)',
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {/* Goal Mode */}
-              <button
-                onClick={() => canvasTools && setGoalSetMode(v => !v)}
-                  disabled={!canvasTools}
-                  title={view3d ? 'Switch to the 2D map to set a goal' : goalSetMode ? 'Cancel goal setting' : 'Click on map to set goal'}
-                  style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                    background: goalSetMode ? 'rgba(127,168,232,0.2)' : 'rgba(127,168,232,0.08)',
-                    border: `1px solid ${goalSetMode ? 'rgba(127,168,232,0.6)' : 'rgba(127,168,232,0.3)'}`,
-                    color: '#ffffff',
-                    cursor: canvasTools ? 'pointer' : 'not-allowed',
-                    opacity: canvasTools ? 1 : 0.5,
-                  }}
-                >
-                  Goal
-                </button>
-
-                {/* Patrol Mode */}
-                <button
-                  onClick={() => canvasTools && setPatrolSetMode(v => !v)}
-                  disabled={!canvasTools}
-                  title={view3d ? 'Switch to the 2D map to set a patrol' : patrolSetMode ? 'Cancel patrol setting' : 'Set patrol route'}
-                  style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                    background: patrolSetMode ? 'rgba(185,140,245,0.2)' : 'rgba(185,140,245,0.08)',
-                    border: `1px solid ${patrolSetMode ? 'rgba(185,140,245,0.6)' : 'rgba(185,140,245,0.3)'}`,
-                    color: '#ffffff',
-                    cursor: canvasTools ? 'pointer' : 'not-allowed',
-                    opacity: canvasTools ? 1 : 0.5,
-                  }}
-                >
-                  Patrol
-                </button>
-
-                {/* Stop Patrol */}
-                <button
-                  onClick={() => {
-                    if (connected) {
-                      ros.publish('/patrol/stop', 'std_msgs/Empty', {})
-                      showToast?.('Patrol stopped', 'ok')
-                    }
-                  }}
-                  disabled={!connected}
-                  title="Stop patrol route"
-                  style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                    background: 'rgba(240,59,59,0.08)',
-                    border: '1px solid rgba(240,59,59,0.3)',
-                    color: '#ffffff',
-                    cursor: connected ? 'pointer' : 'not-allowed',
-                    opacity: connected ? 1 : 0.5,
-                  }}
-                >
-                  Stop Patrol
-                </button>
-
-                {/* Free Roam */}
-                <button
-                  onClick={() => {
-                    if (connected) {
-                      setFreeRoamActive(v => !v)
-                      showToast?.(freeRoamActive ? 'Free Roam closed' : 'Free Roam panel opened', 'ok')
-                    }
-                  }}
-                  disabled={!connected}
-                  title={freeRoamActive ? 'Close Free Roam' : 'Start autonomous free roam exploration'}
-                  style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                    background: freeRoamActive ? 'rgba(147,112,219,0.2)' : 'rgba(147,112,219,0.08)',
-                    border: `1px solid ${freeRoamActive ? 'rgba(147,112,219,0.6)' : 'rgba(147,112,219,0.3)'}`,
-                    color: '#ffffff',
-                    cursor: connected ? 'pointer' : 'not-allowed',
-                    opacity: connected ? 1 : 0.5,
-                  }}
-                >
-                  Free Roam
-                </button>
-
-                {/* Pose Mode */}
-                <button
-                  onClick={() => canvasTools && setPoseMode(v => !v)}
-                  disabled={!canvasTools}
-                  title={view3d ? 'Switch to the 2D map to set a pose' : !connected
-                    ? "Can't set pose — not connected to Argo"
-                    : (poseMode ? 'Cancel' : "Click where Argo is standing, then drag toward where it's facing")}
-                  style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                    background: poseMode ? 'rgba(59,240,155,0.2)' : 'rgba(59,240,155,0.08)',
-                    border: `1px solid ${poseMode ? 'rgba(59,240,155,0.6)' : 'rgba(59,240,155,0.3)'}`,
-                    color: '#ffffff',
-                    cursor: canvasTools ? 'pointer' : 'not-allowed',
-                    opacity: canvasTools ? 1 : 0.5,
-                  }}
-                >
-                  {poseMode ? 'Cancel Pose' : 'Pose'}
-                </button>
-              </div>
+          <div className="a-tools">
+            <select className="a-select" value={selectedMap} disabled={navReady || availableMaps.length === 0}
+              title={navReady ? 'Locked — stop navigation to switch maps' : 'Select the map to load'}
+              onChange={(e) => { if (!navReady) { localStorage.setItem('argo_selected_map', e.target.value); window.location.reload() } }}>
+              {availableMaps.length === 0 ? <option>{selectedMap}</option> : availableMaps.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            {panel === 'map' && <>
+            {toolBtn('Goal', goalSetMode, () => setGoalSetMode(v => !v), { title: 'Click the map to send Argo somewhere' })}
+            {toolBtn('Patrol', patrolSetMode, () => setPatrolSetMode(v => !v), { title: 'Set a patrol route' })}
+            {toolBtn('Stop', false, () => { if (connected) { ros.publish('/patrol/stop', 'std_msgs/Empty', {}); showToast?.('Patrol stopped', 'ok') } }, { disabled: !connected, cls: 'danger', title: 'Stop the patrol route' })}
+            {toolBtn('Free Roam', freeRoamActive, () => { if (connected) { setFreeRoamActive(v => !v) } }, { disabled: !connected, title: 'Autonomous free-roam exploration' })}
+            {toolBtn(poseMode ? 'Cancel Pose' : 'Pose', poseMode, () => setPoseMode(v => !v), { title: !connected ? "Can't set pose — not connected" : 'Click where Argo is standing, then drag toward where it faces' })}
+            </>}
+            {toolBtn('Drive', showTeleopPad, () => (showTeleopPad ? stopTeleop() : startTeleop()), { disabled: false, title: 'Open the manual drive pad' })}
+            {panel === 'map' && <button className="a-btn sq" onClick={fullscreen} title="Full screen"><Ic.Expand width="19" height="19" /></button>}
+            {panel === 'map' && <button className="a-btn sq" onClick={() => { setMapKey(k => k + 1); showToast?.('Map view reset', 'info') }} title="Reset the map view"><Ic.Refresh width="19" height="19" /></button>}
           </div>
-          <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-            {view3d ? (
-              <Map3DViewer
-                launcherUrl={launcherUrl}
-                mapName={selectedMap}
-                robotPose={robotPose}
-                goalPose={goalMarker}
-                plannedPath={plannedPath}
-                markers={tableMarkerList}
-                showToast={showToast}
-              />
-            ) : (
-            <MapCanvas
-              mapData={mapData}
-              robotPose={robotPose}
-              goalPose={goalMarker}
-              plannedPath={plannedPath}
-              poseEstimateMode={poseMode}
-              goalSetMode={goalSetMode}
-              patrolSetMode={patrolSetMode}
-              driveTelemetry={driveTelemetry}
-              sensorDistances={sensorDistances}
-              onPoseEstimate={({ wx, wy, theta }) => {
-                onSetInitialPose?.(wx, wy, theta)
-                onNavPoseSet?.(true)
-                setPoseMode(false)
-                showToast?.('Pose set', 'ok')
-              }}
-              onGoalSet={({ wx, wy }) => {
-                setGoalMarker({ x: wx, y: wy })
-                setGoalSetMode(false)
-                // Publish goal to /goal_pose topic
+        </div>
+        <div className="a-mapwrap" ref={mapWrapRef}>
+          {panel === 'tables' ? (
+            <TableCards tables={tableMarkerList} orders={orders} currency={menu.currency} goalTable={goalTableName}
+              onSend={goToDestination} onClear={clearOrder} />
+          ) :
+            <LiveMap key={mapKey}
+              mapData={mapData} robotPose={robotPose} robotStale={poseStale} goalPose={goalMarker} plannedPath={plannedPath}
+              tableMarkers={tableMarkerList} orderTables={orderTables} layout={layout} connected={connected}
+              poseEstimateMode={poseMode} goalSetMode={goalSetMode} patrolSetMode={patrolSetMode}
+              onPoseEstimate={({ wx, wy, theta }) => { onSetInitialPose?.(wx, wy, theta); onNavPoseSet?.(true); setPoseMode(false); showToast?.('Pose set', 'ok') }}
+              onGoalSet={({ wx, wy, theta }) => {
+                setGoalMarker({ x: wx, y: wy }); setGoalSetMode(false)
                 ros.publish('/goal_pose', 'geometry_msgs/PoseStamped', {
                   header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
-                  pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
+                  pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: Math.sin((theta ?? 0) / 2), w: Math.cos((theta ?? 0) / 2) } },
                 })
                 showToast?.('Navigating to goal', 'ok')
               }}
               onPatrolSet={({ wx, wy, theta }) => {
                 setPatrolSetMode(false)
-                // Publish patrol start goal
                 ros.publish('/patrol/start', 'geometry_msgs/PoseStamped', {
                   header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
                   pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: Math.sin(theta / 2), w: Math.cos(theta / 2) } },
                 })
                 showToast?.('Patrol route set', 'ok')
               }}
-              // Table markers for integrated display
-              tableMarkers={tableMarkerList}
-              onTableMarkerClick={(table) => setSelectedTable(table)}
+              onTableMarkerClick={(t, at) => setSelectedTable({ ...t, at })}
             />
-            )}
-          </div>
-          {!mapData && (
-            <div style={{ fontSize: 11, color: connected ? 'var(--muted)' : 'var(--danger)', padding: '12px', textAlign: 'center', lineHeight: 1.5 }}>
-              {connected
-                ? 'Waiting for map data from Argo…'
-                : "Not connected to Argo — the map can't load until the connection is back."}
-            </div>
-          )}
-        </section>
-
-      </main>
-
-      {/* ── Right Sidebar: Robot + Battery (30%) ── */}
-      <aside style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 10px', borderLeft: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', background: 'rgba(0,0,0,0.1)' }}>
-
-        {/* Robot Preview & Battery in Single Row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr auto', gap: 16, alignItems: 'center', minHeight: '520px' }}>
-
-          {/* Robot Image (left) - Larger */}
-          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
-            {modelLoading ? (
-              <div style={{ textAlign: 'center', color: 'var(--gold-bright)' }}>
-                <div style={{ fontSize: 24, marginBottom: 8 }}>⟳</div>
-                <div style={{ fontSize: 11, fontWeight: 600 }}>Loading...</div>
-              </div>
-            ) : (
-              <img
-                src="/models/argo.png"
-                alt="Argo Robot"
-                onLoad={() => setModelLoading(false)}
-                onError={() => setModelLoading(false)}
-                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', filter: 'drop-shadow(0 8px 20px rgba(0,0,0,0.6))' }}
-              />
-            )}
-          </div>
-
-          {/* Battery Viewer (right) */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
-            <BatteryViewer battery={battery} />
-          </div>
-
+          }
         </div>
+        <TelemetryStrip drive={driveTelemetry} sensors={sensorDistances} shield={shieldStatus} />
+      </section>
 
-        {/* Map Selector Dropdown */}
-        <div style={{ padding: 12, background: 'rgba(255,255,255,0.02)', borderRadius: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.03em', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            Select Map
-            {navReady && selectedMap && <span title="Locked - running on this map">🔒</span>}
-          </div>
-          <select
-            value={selectedMap}
-            onChange={(e) => {
-              if (!navReady) {
-                localStorage.setItem('argo_selected_map', e.target.value)
-                window.location.reload()
-              }
-            }}
-            disabled={navReady}
-            title={navReady ? 'Locked - stop nav to switch maps' : 'Select a map to load'}
-            style={{
-              width: '100%',
-              padding: '10px 12px',
-              borderRadius: 8,
-              fontSize: 11,
-              fontWeight: 600,
-              background: 'rgba(255,255,255,0.05)',
-              border: `1px solid ${navReady ? 'rgba(147,112,219,0.4)' : 'rgba(255,255,255,0.1)'}`,
-              color: navReady ? '#b98cf5' : '#ffffff',
-              cursor: navReady ? 'not-allowed' : 'pointer',
-              opacity: navReady ? 0.6 : 1,
-              transition: 'all 0.2s',
-            }}
-          >
-            {availableMaps.length === 0 ? (
-              <option>No maps available</option>
-            ) : (
-              availableMaps.map(map => (
-                <option key={map} value={map}>
-                  {map}
-                </option>
-              ))
-            )}
-          </select>
+      {freeRoamActive && (
+        <div className="argo-legacy" style={{ position: 'fixed', top: 70, right: 24, zIndex: 70, width: 400, maxHeight: '78vh', overflowY: 'auto', margin: 0, minHeight: 0, padding: 16, boxShadow: '0 20px 60px rgba(0,0,0,.35)' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}><button onClick={() => setFreeRoamActive(false)} style={{ color: 'var(--muted)', fontSize: 18 }}>✕</button></div>
+          <FreeRoamPanel mapData={mapData} robotPose={robotPose} connected={connected} showToast={showToast}
+            launcherUrl={launcherUrl} mapName={selectedMap || 'office_map'} />
         </div>
+      )}
 
-        {/* Free Roam Panel */}
-        {freeRoamActive && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <FreeRoamPanel
-              mapData={mapData}
-              robotPose={robotPose}
-              connected={connected}
-              showToast={showToast}
-              launcherUrl={launcherUrl}
-              mapName={selectedMap || 'office_map'}
-            />
-          </div>
-        )}
-
-      </aside>
-
+      {/* ── Robot / orders / menu ── */}
+      <div className="a-row3">
+        <RobotStatusCard connected={connected} battery={battery} task={trip} estopped={estopped} onResume={estopResume}
+          navSteps={navState === 'stopped' || navState === 'unknown' || navReady ? null : (navProgress.steps || [])} navPercent={navProgress.percent || 0} />
+        <ActiveOrdersCard list={orderList} currency={menu.currency} onDispatch={dispatchOrder} onClear={clearOrder} onViewAll={onViewOrders} />
+        <PosMenuCard menu={menu} />
       </div>
 
-      <RadialNav pages={radialPages} activePage="overview" />
-
-      {/* Floating Activity/Alerts Panel — top right corner */}
+      {/* Activity / alerts popover (bell in the top bar) */}
       {showActivityPanel && (
-        <div style={{ position: 'fixed', top: 80, right: 380, zIndex: 100 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, maxWidth: 640 }}>
-            <div className="glass-card" style={{ padding: 20 }}>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Recent Activity</div>
-              <div style={{ color: 'var(--muted)', fontSize: 11, margin: '0 0 12px' }}>What Argo has done today.</div>
-              <ul style={{ listStyle: 'none' }}>
-                {activity.length === 0 ? (
-                  <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
-                    <div style={{ fontSize: 12 }}>No activity yet<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 2 }}>Argo is ready to start</small></div>
-                  </li>
-                ) : activity.map((a, i) => (
-                  <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: i < activity.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
-                    <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(255,255,255,0.03)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 10, flexShrink: 0 }}>{a.dest.slice(0, 3)}</div>
-                    <div style={{ fontSize: 12 }}>{a.task} → {a.dest}<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>{a.time}</small></div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="glass-card" style={{ padding: 20 }}>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Alerts</div>
-              <div style={{ color: 'var(--muted)', fontSize: 11, margin: '0 0 12px' }}>Things that may need attention.</div>
-              <ul style={{ listStyle: 'none' }}>
-                <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }} />
-                  <div style={{ fontSize: 12 }}>All systems normal<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>Argo is online and ready</small></div>
-                </li>
-                <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--gold)', flexShrink: 0 }} />
-                  <div style={{ fontSize: 12 }}>No pending tasks<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>Choose a destination and confirm</small></div>
-                </li>
-              </ul>
-            </div>
+        <div className="a-float" style={{ top: 70, right: 28, width: 340, padding: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <b style={{ fontFamily: 'var(--font-heading)', fontSize: 16 }}>Recent Activity</b>
+            <button onClick={() => setShowActivityPanel(false)} style={{ color: 'var(--a-muted)', fontSize: 18 }}>✕</button>
+          </div>
+          {activity.length === 0
+            ? <div style={{ color: 'var(--a-muted)', fontSize: 13 }}>No dashboard-initiated trips yet.</div>
+            : activity.map((a, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: i ? '1px solid var(--a-line)' : 'none', fontSize: 13 }}>
+                <span>{a.task} → <b>{a.dest}</b></span><span style={{ color: 'var(--a-muted)' }}>{a.time}</span>
+              </div>))}
+          <div style={{ borderTop: '1px solid var(--a-line)', marginTop: 10, paddingTop: 10, fontSize: 13, color: estopped || !connected ? 'var(--a-danger)' : 'var(--a-ok)', fontWeight: 600 }}>
+            {!connected ? 'Not connected to Argo' : estopped ? 'Emergency stop active' : 'Argo is online'}
           </div>
         </div>
       )}
 
-      {/* Floating Teleop Pad — bottom right corner */}
-      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 100 }}>
-        {!showTeleopPad && (
-        <button
-          onClick={startTeleop}
-          title="Toggle drive controls"
-          style={{
-            padding: '12px 14px', borderRadius: 12, fontSize: 16,
-            background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)',
-            color: 'var(--gold-bright)', cursor: 'pointer', fontWeight: 700,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transition: 'all 0.2s',
-          }}
-        >
-          {/* Joystick icon */}
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="6" cy="6" r="4"/>
-            <path d="M6 10v8"/>
-            <path d="M2 6h8"/>
-            <circle cx="18" cy="18" r="3"/>
-            <path d="M18 21v2"/>
-            <path d="M15 18h6"/>
-          </svg>
-        </button>
-        )}
-        {showTeleopPad && (
-          <div className="glass-card" style={{ padding: 20, marginTop: 12, minWidth: 220 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div className="label-xs">Drive Controls</div>
-                {teleopStatus && (() => {
-                  const m = TELEOP_BADGE[teleopStatus] || [teleopStatus, 'var(--muted)']
-                  return <span style={{ fontSize: 9.5, fontWeight: 700, color: m[1] }}>● {m[0]}</span>
-                })()}
-              </div>
-              <button
-                onClick={stopTeleop}
-                title="Minimize drive controls"
-                style={{
-                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
-                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 16,
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
+      {/* Drive pad — floats bottom-right while open (opened from the Drive button in the map toolbar) */}
+      {showTeleopPad && (
+        <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 60, background: '#17140f', color: '#fff', borderRadius: 18, padding: 20, minWidth: 220, boxShadow: '0 16px 48px rgba(0,0,0,.35)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="label-xs">Drive Controls</div>
+              {teleopStatus && (() => { const m = TELEOP_BADGE[teleopStatus] || [teleopStatus, 'var(--muted)']; return <span style={{ fontSize: 9.5, fontWeight: 700, color: m[1] }}>● {m[0]}</span> })()}
             </div>
-            <TeleopPad connected={connected} compact />
+            <button onClick={stopTeleop} title="Close drive controls" style={{ color: 'var(--muted)', padding: 4, fontSize: 16 }}>✕</button>
           </div>
-        )}
-      </div>
-
-
-      {/* Table Card Overlay - Displayed when a table is clicked on the map */}
-      {selectedTable && mapData && (() => {
-        // Calculate marker position on screen
-        const W = 760, H = 520  // Canvas dimensions
-        const scale = Math.min(W / mapData.width, H / mapData.height) * 1  // zoom = 1
-        const offX = (W - mapData.width * scale) / 2
-        const offY = (H - mapData.height * scale) / 2
-
-        const col = (selectedTable.x - mapData.origin.x) / mapData.resolution
-        const row = mapData.height - 1 - (selectedTable.y - mapData.origin.y) / mapData.resolution
-        const markerCanvasX = offX + col * scale
-        const markerCanvasY = offY + row * scale
-
-        // Convert to screen coordinates (approximate - the map takes up 70% of left side)
-        const mapContainerLeft = 0
-        const mapContainerWidth = window.innerWidth * 0.7
-        const screenX = mapContainerLeft + (markerCanvasX / W) * mapContainerWidth
-        const screenY = 80 + (markerCanvasY / H) * (window.innerHeight - 80)  // 80px for header
-
-        return (
-          <div style={{ position: 'fixed', top: screenY + 40, left: screenX + 20, zIndex: 200 }}>
-          <div style={{ padding: '20px 24px', maxWidth: '400px', animation: 'slideUp 0.3s ease', backgroundColor: 'rgba(0,0,0,0.9)', borderRadius: '8px', border: '1px solid rgba(128,0,0,0.3)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 18, fontWeight: 800 }}>{selectedTable.name}</div>
-              <button
-                onClick={() => setSelectedTable(null)}
-                title="Close"
-                style={{
-                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
-                  padding: '4px', fontSize: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-              📍 {Number(selectedTable.x).toFixed(1)}m, {Number(selectedTable.y).toFixed(1)}m
-            </div>
-
-            {(() => {
-              const orderTableNo = tableNumberFromName(selectedTable.name, selectedTable.key)
-              const orderRaw = orders[orderTableNo]
-              const order = orderRaw && orderRaw.items && orderRaw.items.length ? orderRaw : null
-
-              return (
-                <>
-                  {order && (
-                    <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px dashed rgba(226,179,92,0.2)' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Order</div>
-                      {order.items.slice(0, 3).map((it, i) => (
-                        <div key={it.id || i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 2 }}>
-                          <span>{it.qty}×{it.name}</span>
-                          <span style={{ fontFamily: 'monospace', fontSize: 11 }}>₹{(it.qty * it.price).toFixed(2)}</span>
-                        </div>
-                      ))}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.06)', fontWeight: 700, fontSize: 12 }}>
-                        <span>Total</span>
-                        <span style={{ fontFamily: 'monospace' }}>₹{order.total.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={() => { goToDestination(selectedTable.name); setSelectedTable(null) }}
-                    title="Navigate to this table"
-                    style={{
-                      width: '100%', padding: '8px 6px', borderRadius: 6, fontSize: 11, fontWeight: 700,
-                      background: 'rgba(255,255,255,0.05)',
-                      border: '1px solid rgba(255,255,255,0.14)',
-                      color: 'rgba(255,255,255,0.75)',
-                      cursor: 'pointer',
-                      marginBottom: 12,
-                    }}
-                  >
-                    Navigate
-                  </button>
-                </>
-              )
-            })()}
-          </div>
-
-          {/* Overlay backdrop */}
-          <div onClick={() => setSelectedTable(null)} style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.1)', zIndex: -1
-          }} />
+          <TeleopPad connected={connected} compact />
         </div>
+      )}
+
+      {/* Table popover — opens where the table was clicked on the map */}
+      {selectedTable && (() => {
+        const orderTableNo = tableNumberFromName(selectedTable.name, selectedTable.key)
+        const raw = orders[orderTableNo]
+        const order = raw && raw.items && raw.items.length ? raw : null
+        const x = Math.min((selectedTable.at?.x ?? 300) + 18, window.innerWidth - 330)
+        const y = Math.min((selectedTable.at?.y ?? 200) + 12, window.innerHeight - 260)
+        return (
+          <>
+            <div onClick={() => setSelectedTable(null)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
+            <div className="a-float" style={{ left: Math.max(12, x), top: Math.max(12, y), width: 300, padding: 18, zIndex: 60 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <b style={{ fontFamily: 'var(--font-heading)', fontSize: 18 }}>{selectedTable.name}</b>
+                <button onClick={() => setSelectedTable(null)} style={{ color: 'var(--a-muted)', fontSize: 18 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--a-muted)', marginBottom: 12 }}>📍 {Number(selectedTable.x).toFixed(1)} m, {Number(selectedTable.y).toFixed(1)} m</div>
+              {order ? (
+                <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px dashed var(--a-line-strong)' }}>
+                  {order.items.slice(0, 4).map((it, i) => (
+                    <div key={it.id || i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 3 }}>
+                      <span>{it.qty}× {it.name}</span><span>{money(it.qty * it.price, menu.currency)}</span>
+                    </div>))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontWeight: 700, fontSize: 13.5 }}><span>Total</span><span>{money(order.total, menu.currency)}</span></div>
+                </div>
+              ) : <div style={{ fontSize: 13, color: 'var(--a-muted)', marginBottom: 12 }}>No open order.</div>}
+              <button className="a-btn gold" style={{ width: '100%', justifyContent: 'center' }} onClick={() => { goToDestination(selectedTable.name); setSelectedTable(null) }}>Navigate here</button>
+            </div>
+          </>
         )
       })()}
-
     </div>
   )
 })

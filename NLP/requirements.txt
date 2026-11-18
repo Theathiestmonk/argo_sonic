@@ -1,0 +1,11 @@
+langgraph>=1.0
+openai>=1.50,<2
+websockets>=13
+numpy
+sounddevice
+webrtcvad
+openwakeword
+httpx
+python-dotenv
+psycopg2-binary   # optional: order sink -> Postgres (same DB the dashboard reads)
+# ROS 2 Humble (rclpy, nav2_msgs, ...) comes from the sourced ROS environment, not pip.
