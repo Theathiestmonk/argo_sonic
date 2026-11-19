@@ -408,7 +408,16 @@ export default function LiveMap({
     for (const m of L.tableMarkers) { if (objs && /table/i.test(m.name)) continue; const [x, y] = toS(g, m.x, m.y); if (Math.hypot(sx - x, sy - y) < 30) return m }
     return null
   }
+  // Small screens: map is read-only by default so the page can be scrolled with a finger; tool modes or the Interact button unlock it
+  const [small, setSmall] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches)
+  const [interact, setInteract] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 900px)'); const f = () => setSmall(mq.matches)
+    mq.addEventListener?.('change', f); return () => mq.removeEventListener?.('change', f)
+  }, [])
+  const locked = small && !interact && !dragMode
   const onDown = (e) => {
+    if (locked) return
     const g = geom(); if (!g) return
     const [sx, sy] = rectXY(e)
     canvasRef.current.setPointerCapture?.(e.pointerId)
@@ -463,7 +472,10 @@ export default function LiveMap({
     <div ref={wrapRef} style={{ position: 'absolute', inset: 0 }}>
       <canvas ref={canvasRef}
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={() => { if (dragRef.current?.tool) dragRef.current = null }}
-        style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none', background: 'radial-gradient(ellipse at 50% 40%, #fffefb, #f7f3ea)' }} />
+        style={{ width: '100%', height: '100%', display: 'block', touchAction: locked ? 'auto' : 'none', background: 'radial-gradient(ellipse at 50% 40%, #fffefb, #f7f3ea)' }} />
+      {small && !dragMode && (
+        <button className="a-btn a-mapinteract" onClick={() => setInteract(v => !v)}>{interact ? 'Lock map' : 'Move map'}</button>
+      )}
       <div className="a-mapzoom">
         <button onClick={() => zoomBy(1.25)} title="Zoom in">+</button>
         <button onClick={() => zoomBy(0.8)} title="Zoom out">−</button>

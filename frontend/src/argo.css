@@ -657,11 +657,16 @@ html, body { background: var(--a-bg); }
   .o-head, .m-head { padding: 10px 12px; gap: 8px; }
   .o-title h2, .m-head h2 { font-size: 19px; }
   .o-head .a-search { max-width: none; width: 100%; margin: 0; order: 9; }
-  .o-bar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; -webkit-overflow-scrolling: touch; }
-  .o-bar > * { flex-shrink: 0; }
-  .o-board { grid-template-columns: repeat(5, minmax(78vw, 78vw)); scroll-snap-type: x mandatory; max-height: none; }
-  .o-col { scroll-snap-align: start; }
-  .o-cards { overflow-y: visible; }
+  .o-bar { flex-wrap: wrap; gap: 8px; }
+  .o-bar > span { flex: 0 0 100%; height: 0; }                     /* line break: view toggles row 1, filters row 2 */
+  .o-bar .a-select { flex: 1 1 0; min-width: 0; }
+  .o-chips { flex: 1 1 100%; overflow-x: auto; flex-wrap: nowrap; }
+  .o-chips .a-tab { flex-shrink: 0; }
+  .a-content.o-fit { display: flex; flex-direction: column; height: auto; overflow: visible; }
+  .o-board { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; overflow: visible; max-height: none; height: auto; }
+  .o-col { min-height: 0; height: auto; overflow: visible; }
+  .o-cards { overflow: visible; flex: none; }
+  .o-none { padding: 4px 0 8px; }
   .o-list { overflow-x: auto; }
   .o-list .it { max-width: 180px; }
 
@@ -688,3 +693,44 @@ html, body { background: var(--a-bg); }
   .argo-legacy input, .argo-legacy select, .argo-legacy textarea { font-size: 16px; }   /* stops iOS zoom-on-focus */
   .a-toast { left: 12px; right: 12px; bottom: 76px; transform: none; max-width: none; }
 }
+
+/* Settings → waypoints: map on top, list below, one column (also on tablets) */
+@media (max-width: 900px) {
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] { grid-template-columns: minmax(0, 1fr) !important; }
+  .argo-legacy canvas { height: auto !important; max-height: 70vh; aspect-ratio: 900 / 620; }
+}
+@media (max-width: 900px) {
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] > * { min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] > [style*="overflow-y"] { max-height: none !important; overflow: visible !important; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] canvas { width: 100% !important; max-width: 100%; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] input { min-width: 0; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] .glass-dense { padding: 10px !important; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] [style*="justify-content: space-between"] { flex-wrap: wrap; row-gap: 6px; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] span, .argo-legacy [style*="grid-template-columns: 1fr 280px"] div { overflow-wrap: anywhere; }
+}
+
+/* Phones: make the main column its own scroller so long pages (Settings → waypoints) are never clipped at the bottom/right */
+@media (max-width: 640px) {
+  .argo { height: 100dvh; overflow: hidden; }
+  .a-main { height: 100dvh; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .argo-legacy { box-sizing: border-box; width: 100%; max-width: 100vw; min-width: 0; }
+  .argo-legacy > div { min-width: 0; max-width: 100%; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] { display: flex !important; flex-direction: column; gap: 12px !important; width: 100%; }
+  .argo-legacy [style*="grid-template-columns: 1fr 280px"] > * { width: 100%; flex: none; }
+}
+
+/* Phones: pages inside the scrolling column must keep their full height (they were shrunk by the flex column,
+   so the end of Settings → waypoints spilled out under the bottom tab bar) */
+@media (max-width: 640px) {
+  .a-main > * { flex-shrink: 0; }
+  .a-main > .argo-legacy { height: auto; min-height: 0; padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  .a-main::after { flex: 0 0 8px; }
+}
+
+/* Phones: Orders filter dropdowns – let the label show fully */
+@media (max-width: 640px) {
+  .o-bar .a-select { flex: 1 1 calc(50% - 8px); min-width: 120px; width: auto; font-size: 13px; line-height: 1.3; text-overflow: clip; white-space: nowrap;
+    padding: 9px 26px 9px 12px; background-position: right 9px center; background-size: 12px; }
+}
+
+.a-mapinteract { position: absolute; left: 10px; bottom: 10px; z-index: 5; padding: 6px 12px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
