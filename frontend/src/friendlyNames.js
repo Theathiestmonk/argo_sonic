@@ -58,3 +58,22 @@ export const TELEOP_BADGE = {
   estopped:        ['Emergency stop active', 'var(--danger)'],
   error:           ['Can\'t reach the robot', 'var(--danger)'],
 }
+
+// Ordered startup checklist: [script step name, label shown, "ready" wording].
+export const STARTUP_CHECKLIST = [
+  ['Robot State Publisher', 'Robot body model',   'Robot model is loaded'],
+  ['Camera TF Bridge',      'Camera position',    'Camera position is set'],
+  ['Serial Bridge',         'Motors',             'Motors are on'],
+  ['RPLidar A1',            'Lidar',              'Lidar is ready'],
+  ['Scan Relay',            'Lidar data',         'Lidar data is flowing'],
+  ['SLAM Toolbox',          'Map & localization', 'Localization is ready'],
+  ['NTFields Planner',      'Route planner',      'Route planner is ready'],
+  ['Controller Server',     'Path follower',      'Path follower is ready'],
+  ['Velocity Smoother',     'Smooth driving',     'Smooth driving is ready'],
+  ['Behavior Server',       'Recovery behaviours','Recovery behaviours are ready'],
+  ['BT Navigator',          'Navigation',         'Navigation is ready'],
+  ['Depth Camera',          'Depth camera',       'Depth camera is ready'],
+  ['PC Restamper',          'Depth camera data',  'Depth camera data is ready'],
+  ['Safety Shield',         'Safety system',      'Safety system is on'],
+  ['Patrol Manager',        'Patrol manager',     'Patrol manager is ready'],
+]

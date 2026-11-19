@@ -33,7 +33,7 @@ function tableNumberFromName(name, fallbackKey) {
   return m ? m[0] : fallbackKey
 }
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, poseStale, plannedPath, driveTelemetry, sensorDistances, shieldStatus, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onViewOrders, onSelectMap, menuApi }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, poseStale, plannedPath, driveTelemetry, sensorDistances, shieldStatus, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onNavRunning, onViewOrders, onSelectMap, menuApi }, ref) => {
   const [tables, setTables]         = useState({})
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [goalSetMode, setGoalSetMode] = useState(false)
@@ -116,6 +116,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [navMap, setNavMap]     = useState(() => readNavStateCache().navMap)
   const navPollRef = useRef(null)
   const navFailRef = useRef(0)
+  // Start/Stop race guard. Every Start/Stop bumps the epoch; a /status reply
+  // that was requested before the latest transition (or arrives while a stop is
+  // in flight) is discarded, so a late "running" can't undo a Stop or a late
+  // "stopped" can't undo a Start.
+  const navEpochRef = useRef(0)
+  const navStoppingRef = useRef(false)
 
   // Keep the cache in sync with every state change, live-poll-driven or
   // user-triggered alike — write-through, not a separate save step.
@@ -178,7 +184,27 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // status READY). The /navigate_to_pose action server alone appears long before
   // the camera, safety shield and patrol manager are launched.
   const [navProgress, setNavProgress] = useState({ status: null, message: null, percent: 0 })
+  // App passes an inline arrow (new identity every render); keep it in a ref so the
+  // polling effect below isn't torn down and restarted on every progress update.
+  const onNavProgressRef = useRef(onNavProgress)
+  useEffect(() => { onNavProgressRef.current = onNavProgress })
   const navReady = navState === 'running' && navMap === selectedMap && navActionReady && navProgress.status === 'READY'
+
+  // Show "Getting ready" only while a start is genuinely in flight: the launcher
+  // reports status OK (in progress) with a recent update. A leftover OK from a
+  // run that was stopped/killed outside the UI goes stale and must not show.
+  // Age comes from the robot's own clock (the browser clock may differ and made the
+  // panel vanish). Between steps the progress file can briefly be empty (status null),
+  // so treat null like "in progress" while the stack process is up — otherwise the
+  // panel hides after a step and reappears on the next one.
+  const progAgeS = navProgress.age ?? 0
+  const startupBusy = navProgress.status === 'OK' || navProgress.status === null
+  const showStartup = !navReady && (
+    navState === 'starting' ||
+    (navState === 'running' && navMap === selectedMap && startupBusy && progAgeS < 180))
+
+  // Tell the parent whether a stack exists at all, so Stop Argo is only clickable when there is something to stop.
+  useEffect(() => { onNavRunning?.(navState !== 'stopped') }, [navState, onNavRunning])
 
   // Update parent about nav readiness state
   useEffect(() => {
@@ -197,12 +223,14 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     // in-progress state instead of inviting a redundant Start click.
     if (navState === 'stopped') {
       onNavInitializing?.(false)
-    } else if (navReady) {
+    } else if (navReady || navProgress.status === 'ERROR') {
+      // ERROR: the launch script gave up — release the Start button so the
+      // user can retry instead of staring at a disabled "Starting…" forever.
       onNavInitializing?.(false)
     } else {
       onNavInitializing?.(true)
     }
-  }, [navReady, onNavReady, navState, onNavInitializing])
+  }, [navReady, onNavReady, navState, navProgress.status, onNavInitializing])
 
   // Real step-by-step progress from sh/start_argo_nav_ui.sh itself (see
   // backend/launcher.py's GET /nav_progress) — without this, a failure
@@ -212,30 +240,34 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   useEffect(() => {
     if (navState !== 'running' || navMap !== selectedMap) {
       setNavProgress({ status: null, message: null, percent: 0 })
-      onNavProgress?.(null, 0)
+      onNavProgressRef.current?.(null, 0)
       return
     }
     let cancelled = false
     const check = () => {
       fetch(`${launcherUrl}/nav_progress`)
         .then(r => r.json())
-        .then(d => { if (!cancelled) { setNavProgress({ ...d, message: friendlyNavMessage(d.message) }); onNavProgress?.(friendlyNavMessage(d.message) || null, d.percent || 0) } })
+        .then(d => { if (!cancelled) { setNavProgress({ ...d, message: friendlyNavMessage(d.message) }); onNavProgressRef.current?.(friendlyNavMessage(d.message) || null, d.percent || 0) } })
         .catch(() => {})
     }
     check()
     const id = setInterval(check, 2000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [navState, navMap, selectedMap, launcherUrl, onNavProgress])
+  }, [navState, navMap, selectedMap, launcherUrl])
 
   const checkNav = useCallback(() => {
+    const epoch = navEpochRef.current
+    const stale = () => epoch !== navEpochRef.current || navStoppingRef.current
     fetch(`${launcherUrl}/status`)
       .then(r => r.json())
       .then(d => {
+        if (stale()) return
         navFailRef.current = 0
         setNavState(d.running ? 'running' : 'stopped')
         setNavMap(d.running ? d.map : null)
       })
       .catch(() => {
+        if (stale()) return
         // Same debounce as ExplorationPanel's polling — one dropped request
         // shouldn't flip a genuinely-running stack to "stopped".
         navFailRef.current += 1
@@ -257,18 +289,25 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   }, [navState])
 
   const startNav = async () => {
+    if (navStoppingRef.current) { showToast('Still stopping — try again in a moment', 'info'); onNavInitializing?.(false); return false }
+    navEpochRef.current += 1
     setNavState('starting')
     showToast(`Starting navigation on ${selectedMap}…`, 'info')
     try {
-      await fetch(`${launcherUrl}/start`, {
+      const r = await fetch(`${launcherUrl}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'navigate', map: selectedMap }),
       })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      if (navPollRef.current) clearInterval(navPollRef.current)
       navPollRef.current = setInterval(checkNav, 3000)
-    } catch {
+      return true
+    } catch (e) {
       setNavState('stopped')
-      showToast('Could not reach launcher — is launcher.py running on the robot?', 'danger')
+      onNavInitializing?.(false)
+      showToast(e?.message?.startsWith('HTTP') ? `Launcher refused to start (${e.message})` : 'Could not reach launcher — is launcher.py running on the robot?', 'danger')
+      return false
     }
   }
 
@@ -279,13 +318,26 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     // button — so a single misclick (e.g. tapping the "waiting for
     // Nav2" spinner out of impatience) used to kill the stack instantly,
     // including mid-startup before it ever had a chance to finish.
-    if (!window.confirm('Stop the navigation stack now?')) return
+    if (!window.confirm('Stop Argo now? Motors and navigation will be switched off.')) return false
+    // Freeze status polling and drop any in-flight replies until the stop settles.
+    navStoppingRef.current = true
+    navEpochRef.current += 1
+    if (navPollRef.current) { clearInterval(navPollRef.current); navPollRef.current = null }
     try {
-      await fetch(`${launcherUrl}/stop`, { method: 'POST' })
-      setNavState('stopped'); setNavMap(null)
-      showToast('Navigation stopped', 'info')
-    } catch {
-      showToast('Could not reach launcher', 'danger')
+      const r = await fetch(`${launcherUrl}/stop`, { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setNavState('stopped'); setNavMap(null); setEstopped(false)
+      setNavProgress({ status: null, message: null, percent: 0 })
+      onNavInitializing?.(false); onNavReady?.(false); onNavPoseSet?.(false); onNavProgress?.(null, 0)
+      showToast('Argo stopped', 'info')
+      return true
+    } catch (e) {
+      showToast(e?.message?.startsWith('HTTP') ? `Stop failed (${e.message})` : 'Could not reach launcher', 'danger')
+      return false
+    } finally {
+      navStoppingRef.current = false
+      navEpochRef.current += 1
+      checkNav()   // resync with what the launcher really reports
     }
   }
 
@@ -467,7 +519,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const estop = () => {
     sendZeroVelocity()
     fetch(`${launcherUrl}/estop`, { method: 'POST' })
-      .then(() => { setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
+      .then(r => { if (!r.ok) throw new Error(r.status); setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
       .catch(() => showToast('Could not reach launcher for E-STOP', 'danger'))
   }
 
@@ -504,7 +556,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
   const estopResume = () => {
     fetch(`${launcherUrl}/estop/resume`, { method: 'POST' })
-      .then(() => { setEstopped(false); showToast('Motors resumed', 'ok') })
+      .then(r => { if (!r.ok) throw new Error(r.status); setEstopped(false); showToast('Motors resumed', 'ok') })
       .catch(() => showToast('Could not reach launcher to resume motors', 'danger'))
   }
 
@@ -559,6 +611,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const choosePanel = (p) => { setPanel(p); try { localStorage.setItem('argo_live_panel', p) } catch { /* private mode */ } }
   const goalTableName = goalMarker ? (tableMarkerList.find(m => Math.hypot(m.x - goalMarker.x, m.y - goalMarker.y) < 0.7)?.name ?? null) : null
   const [mapKey, setMapKey] = useState(0)
+  const [actionsOpen, setActionsOpen] = useState(false)
   const fullscreen = () => { const el = mapWrapRef.current; if (!el) return; document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.() }
 
   const toolBtn = (label, on, onClick, { disabled = !canvasTools, title, cls = '' } = {}) => (
@@ -584,16 +637,27 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
               onChange={(e) => { if (!navReady) { localStorage.setItem('argo_selected_map', e.target.value); window.location.reload() } }}>
               {availableMaps.length === 0 ? <option>{selectedMap}</option> : availableMaps.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
-            {panel === 'map' && <>
-            {toolBtn('Goal', goalSetMode, () => setGoalSetMode(v => !v), { title: 'Click the map to send Argo somewhere' })}
-            {toolBtn('Patrol', patrolSetMode, () => setPatrolSetMode(v => !v), { title: 'Set a patrol route' })}
-            {toolBtn('Stop', false, () => { if (connected) { ros.publish('/patrol/stop', 'std_msgs/Empty', {}); showToast?.('Patrol stopped', 'ok') } }, { disabled: !connected, cls: 'danger', title: 'Stop the patrol route' })}
-            {toolBtn('Free Roam', freeRoamActive, () => { if (connected) { setFreeRoamActive(v => !v) } }, { disabled: !connected, title: 'Autonomous free-roam exploration' })}
-            {toolBtn(poseMode ? 'Cancel Pose' : 'Pose', poseMode, () => setPoseMode(v => !v), { title: !connected ? "Can't set pose — not connected" : 'Click where Argo is standing, then drag toward where it faces' })}
-            </>}
-            {toolBtn('Drive', showTeleopPad, () => (showTeleopPad ? stopTeleop() : startTeleop()), { disabled: false, title: 'Open the manual drive pad' })}
-            {panel === 'map' && <button className="a-btn sq" onClick={fullscreen} title="Full screen"><Ic.Expand width="19" height="19" /></button>}
-            {panel === 'map' && <button className="a-btn sq" onClick={() => { setMapKey(k => k + 1); showToast?.('Map view reset', 'info') }} title="Reset the map view"><Ic.Refresh width="19" height="19" /></button>}
+            <div className="a-actwrap">
+              <button className={`a-btn ${actionsOpen || goalSetMode || patrolSetMode || poseMode || freeRoamActive || showTeleopPad ? 'on' : ''}`}
+                onClick={() => setActionsOpen(v => !v)} aria-expanded={actionsOpen} title="Map actions">Actions ▾</button>
+              {actionsOpen && <>
+                <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 58 }} />
+                <div className="a-actpop" role="menu" onClick={() => setActionsOpen(false)}>
+                  {panel === 'map' && <>
+                    {toolBtn('Goal', goalSetMode, () => setGoalSetMode(v => !v), { title: 'Click the map to send Argo somewhere' })}
+                    {toolBtn('Patrol', patrolSetMode, () => setPatrolSetMode(v => !v), { title: 'Set a patrol route' })}
+                    {toolBtn('Stop patrol', false, () => { if (connected) { ros.publish('/patrol/stop', 'std_msgs/Empty', {}); showToast?.('Patrol stopped', 'ok') } }, { disabled: !connected, cls: 'danger', title: 'Stop the patrol route' })}
+                    {toolBtn('Free Roam', freeRoamActive, () => { if (connected) { setFreeRoamActive(v => !v) } }, { disabled: !connected, title: 'Autonomous free-roam exploration' })}
+                    {toolBtn(poseMode ? 'Cancel Pose' : 'Pose', poseMode, () => setPoseMode(v => !v), { title: !connected ? "Can't set pose — not connected" : 'Click where Argo is standing, then drag toward where it faces' })}
+                  </>}
+                  {toolBtn('Drive', showTeleopPad, () => (showTeleopPad ? stopTeleop() : startTeleop()), { disabled: false, title: 'Open the manual drive pad' })}
+                  {panel === 'map' && <>
+                    {toolBtn('Full screen', false, fullscreen, { disabled: false, title: 'Full screen' })}
+                    {toolBtn('Reset view', false, () => { setMapKey(k => k + 1); showToast?.('Map view reset', 'info') }, { disabled: false, title: 'Reset the map zoom and position' })}
+                  </>}
+                </div>
+              </>}
+            </div>
           </div>
         </div>
         <div className="a-mapwrap" ref={mapWrapRef}>
@@ -640,7 +704,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       {/* ── Robot / orders / menu ── */}
       <div className="a-row3">
         <RobotStatusCard connected={connected} battery={battery} task={trip} estopped={estopped} onResume={estopResume}
-          navSteps={navState === 'stopped' || navState === 'unknown' || navReady ? null : (navProgress.steps || [])} navPercent={navProgress.percent || 0} />
+          navSteps={showStartup ? (navProgress.steps || []) : null} navPercent={showStartup ? (navProgress.percent || 0) : 0} />
         <ActiveOrdersCard list={orderList} currency={menu.currency} onDispatch={dispatchOrder} onClear={clearOrder} onViewAll={onViewOrders} />
         <PosMenuCard menu={menu} />
       </div>

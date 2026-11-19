@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { friendlyNavMessage } from '../friendlyNames'
+import { friendlyNavMessage, STARTUP_CHECKLIST } from '../friendlyNames'
 import * as Ic from './icons'
 import { money, ageText, hoursText, fmtDist, distClass } from './format'
 
@@ -76,13 +76,30 @@ export function TelemetryStrip({ drive = {}, sensors = {}, shield = {} }) {
 }
 
 // ───────────────────────── Robot status ─────────────────────────
-// Nav2 startup progress, shown under the battery until navigation is ready:
-// just the percentage and a progress bar (no per-step list).
-function StartupSteps({ percent = 0 }) {
+// Nav2 startup progress: percentage, bar and a per-component checklist
+// ("Lidar is ready", "Motors are on"…) derived from the launcher's step history.
+function StartupSteps({ percent = 0, steps = [] }) {
+  const done = new Set(), failed = new Set()
+  let active = null
+  for (const st of steps) {
+    const m = st.message || ''
+    let r
+    if ((r = m.match(/^Ready\s*>>\s*(.+)$/))) { done.add(r[1].trim()); if (active === r[1].trim()) active = null }
+    else if ((r = m.match(/^Starting\s+(.+?)(\s+\(attempt.*\))?$/i))) { if (!done.has(r[1].trim())) active = r[1].trim() }
+    else if ((r = m.match(/^FAILED\s*>>\s*(.+?) exited/)) || (r = m.match(/^FAILED to bring up (.+?) after/))) failed.add(r[1].trim())
+  }
+  // One line: the component currently being brought up, else the last one that finished.
+  const info = k => STARTUP_CHECKLIST.find(c => c[0] === k)
+  const lastDone = [...done].pop()
+  const failedKey = [...failed].pop()
+  const label = failedKey ? `${info(failedKey)?.[1] || failedKey} failed`
+    : active ? `Starting ${(info(active)?.[1] || active).toLowerCase()}…`
+    : lastDone ? (info(lastDone)?.[2] || `${lastDone} is ready`)
+    : 'Getting ready'
   return (
     <div className="a-box">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <small>Getting ready</small>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+        <small style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</small>
         <b style={{ fontFamily: 'var(--font-heading)', fontSize: 15 }}>{percent}%</b>
       </div>
       <div className="a-loadbar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
@@ -116,7 +133,7 @@ export function RobotStatusCard({ connected, battery, task, estopped, onResume, 
                 : `Runtime: ${hoursText(battery.estimated_remaining_hours)}`}
             </small>
           </div>
-          {navSteps && <StartupSteps percent={navPercent} />}
+          {navSteps && <StartupSteps percent={navPercent} steps={navSteps} />}
           <div className="a-box" style={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 12, alignItems: 'center' }}>
             <div className="ic" style={{ width: 40, height: 40, borderRadius: 11, background: estopped ? 'var(--a-danger-soft)' : 'var(--a-gold-wash)', display: 'grid', placeItems: 'center' }}>
               <Ic.Bag width="22" height="22" style={{ color: estopped ? 'var(--a-danger)' : 'var(--a-gold)' }} />

@@ -109,8 +109,10 @@ export default function App() {
   const [selectedMap, setSelectedMap] = useState(() => localStorage.getItem('argo_selected_map') || 'office_map')
   const [navInitializing, setNavInitializing] = useState(false)
   const [navReady, setNavReady] = useState(false)
+  const [navRunning, setNavRunning] = useState(true)   // false once the launcher reports the stack stopped → Stop button disabled
   const [navPoseSet, setNavPoseSet] = useState(false)
   const [navPct, setNavPct] = useState(0)
+  const [navBusy, setNavBusy] = useState(false)   // a Start/Stop request is in flight — ignore extra clicks
   const [navProgress, setNavProgress] = useState(null)   // live step-by-step message (e.g. "Starting Serial Bridge"), shown on the Start Argo button while initializing
   const retryRef = useRef(null)
   const [ordersCount, setOrdersCount] = useState(0)
@@ -544,11 +546,16 @@ export default function App() {
       ) : navReady ? (
         <span className="a-pill" title="Navigation is up and ready"><i />Argo running</span>
       ) : (
-        <button className="a-btn gold" onClick={() => { setNavInitializing(true); dashboardRef.current?.startNav?.() }}>▶ Start Argo</button>
+        <button className="a-btn gold" disabled={navBusy} onClick={async () => {
+          if (navBusy) return
+          setNavBusy(true); setNavInitializing(true)
+          try { await dashboardRef.current?.startNav?.() } finally { setNavBusy(false) }
+        }}>▶ Start Argo</button>
       )}
-      <button className="a-btn gold-outline" onClick={() => {
-        setNavInitializing(false); setNavReady(false); setNavPoseSet(false); setNavProgress(null)
-        dashboardRef.current?.stopNav?.(); dashboardRef.current?.estop?.()
+      <button className="a-btn gold-outline" disabled={navBusy || !navRunning} title={navRunning ? 'Stop Argo' : 'Argo is already stopped'} onClick={async () => {
+        if (navBusy || !navRunning) return
+        setNavBusy(true)
+        try { await dashboardRef.current?.stopNav?.() } finally { setNavBusy(false) }
       }}>■ Stop Argo</button>
       <button className="a-iconbtn" onClick={() => dashboardRef.current?.toggleActivityPanel?.()} title="Recent activity and alerts"><Ic.Bell width="22" height="22" /></button>
     </>
@@ -581,6 +588,7 @@ export default function App() {
           onFreeRoam={() => { setView('wizard'); setStep(1) }}
           onNavInitializing={setNavInitializing}
           onNavReady={setNavReady}
+          onNavRunning={setNavRunning}
           onNavPoseSet={setNavPoseSet}
           onNavProgress={(msg, pct) => { setNavProgress(msg); setNavPct(pct || 0) }}
           onViewOrders={() => setView('orders')}

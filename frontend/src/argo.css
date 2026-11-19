@@ -95,6 +95,10 @@ html, body { background: var(--a-bg); }
 .a-seg button { padding: 7px 18px; border-radius: 9px; font-weight: 700; font-size: 13.5px; color: #5a5043; }
 .a-seg button.on { background: var(--a-gold); color: #fff; box-shadow: 0 1px 3px rgba(120, 80, 10, .35); }
 .a-tools { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.a-actwrap { position: relative; }
+.a-actpop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 59; min-width: 180px; display: grid; gap: 6px; padding: 10px;
+  background: var(--a-surface); border: 1px solid var(--a-line); border-radius: 14px; box-shadow: 0 16px 40px rgba(0,0,0,.18); }
+.a-actpop .a-btn { width: 100%; justify-content: flex-start; }
 .a-tools .a-btn.on { background: var(--a-gold); color: #fff; border-color: var(--a-gold-strong); }
 .a-tools .a-btn.danger.on { background: var(--a-danger); color: #fff; }
 .a-select { appearance: none; padding: 9px 30px 9px 14px; border-radius: 12px; border: 1px solid var(--a-line-strong); background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%238b8274' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 11px center; font: 600 13px var(--font-body); color: var(--a-text); max-width: 190px; }

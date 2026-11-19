@@ -1307,7 +1307,9 @@ class Handler(BaseHTTPRequestHandler):
                 percent = 0
             else:
                 percent = min(95, 5 + round(90 * done / NAV_STARTUP_STEPS))
-            self._json({'status': status, 'message': message, 'timestamp': timestamp, 'steps': steps, 'percent': percent})
+            self._json({'status': status, 'message': message, 'timestamp': timestamp,
+                        'age': (time.time() - timestamp) if timestamp else None,   # robot-clock age: browser clock may differ
+                        'steps': steps, 'percent': percent})
 
         elif self.path == '/nav_log':
             log = ''
