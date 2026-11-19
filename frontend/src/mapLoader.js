@@ -28,6 +28,27 @@ function parsePGM(buffer) {
   return { width, height, pixels: bytes.subarray(pos, pos + width * height) }
 }
 
+// Last saved map per name, kept compactly in localStorage so a hard refresh can paint the
+// map on the very first render instead of waiting for network + rosbridge.
+const CACHE_PREFIX = 'argo_map_cache_'
+const ENC = { 100: 'o', 0: 'f', '-1': 'u' }   // occupied / free / unknown
+export function readCachedMap(name) {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_PREFIX + name))
+    if (!c || !c.cells || c.cells.length !== c.width * c.height) return null
+    const data = new Array(c.cells.length)
+    for (let i = 0; i < data.length; i++) { const ch = c.cells[i]; data[i] = ch === 'o' ? 100 : ch === 'f' ? 0 : -1 }
+    return { width: c.width, height: c.height, resolution: c.resolution, origin: c.origin, data, saved: true }
+  } catch { return null }
+}
+function writeCachedMap(name, m) {
+  try {
+    let cells = ''
+    for (let i = 0; i < m.data.length; i++) cells += ENC[m.data[i]] ?? 'u'
+    localStorage.setItem(CACHE_PREFIX + name, JSON.stringify({ width: m.width, height: m.height, resolution: m.resolution, origin: m.origin, cells }))
+  } catch { /* quota / private mode — cache is optional */ }
+}
+
 // Resolves to the same shape App.jsx's /map subscriber produces, or null.
 export async function loadSavedMap(launcherUrl, mapName) {
   const [metaRes, pgmRes] = await Promise.all([
@@ -50,10 +71,13 @@ export async function loadSavedMap(launcherUrl, mapName) {
       data[y * width + x] = v <= 80 ? 100 : v >= 240 ? 0 : -1
     }
   }
-  return {
+  const map = {
     width, height,
     resolution: meta.resolution,
     origin: { x: meta.origin[0], y: meta.origin[1] },
     data,
+    saved: true,
   }
+  writeCachedMap(mapName, map)
+  return map
 }

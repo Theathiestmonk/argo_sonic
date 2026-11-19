@@ -1608,6 +1608,7 @@ class Handler(BaseHTTPRequestHandler):
             # Motors first (silence velocity sources, ramp to zero, kill
             # serial_bridge), THEN tear down the rest of the stack — the
             # teardown can take 10+ s and must not leave the wheels live.
+            _voice_set(False)   # silence the voice agent first
             with _serial_lock:
                 _halt_motors_locked()
                 _serial_estop_manual = False   # full teardown, not an operator e-stop
@@ -1842,6 +1843,49 @@ class Handler(BaseHTTPRequestHandler):
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
+
+# ── Voice agent ("Hi Sonic") follows the nav stack ───────────────────────────
+# sonic-nlp is a user systemd service that used to run all the time, so the
+# robot answered "Hi Sonic" (and could try to drive) with navigation stopped.
+# Now it runs only while the stack reports READY and is stopped otherwise.
+VOICE_UNIT = 'sonic-nlp.service'
+_voice_env = dict(os.environ, XDG_RUNTIME_DIR=f'/run/user/{os.getuid()}')
+
+
+def _voice_active():
+    r = subprocess.run(['systemctl', '--user', 'is-active', VOICE_UNIT],
+                       capture_output=True, text=True, env=_voice_env)
+    return r.stdout.strip() in ('active', 'activating')
+
+
+def _voice_set(want):
+    try:
+        if want == _voice_active():
+            return
+        subprocess.run(['systemctl', '--user', 'start' if want else 'stop', VOICE_UNIT],
+                       capture_output=True, timeout=15, env=_voice_env)
+        print(f'[launcher] voice agent {"started" if want else "stopped"} (follows nav stack)')
+    except Exception as e:   # never let voice gating break the launcher
+        print(f'[launcher] voice agent gating failed: {e}')
+
+
+def _nav_ready_now():
+    with _lock:
+        up = _proc is not None and _proc.poll() is None
+    if not up:
+        return False
+    try:
+        with open(NAV_PROGRESS_PATH, 'r') as f:
+            return f.read().startswith('READY|')
+    except OSError:
+        return False
+
+
+def _voice_follow_nav():
+    while True:
+        _voice_set(_nav_ready_now())
+        time.sleep(2)
+
 if __name__ == '__main__':
     print(f'[launcher] manual script   → {SLAM_SCRIPT}')
     print(f'[launcher] auto script     → {EXPLORE_SCRIPT}')
@@ -1859,6 +1903,7 @@ if __name__ == '__main__':
     if not DATABASE_URL:
         print('[launcher] WARNING: DATABASE_URL not set (sonic/.env) — /menu and /orders will return empty')
     threading.Thread(target=run_bms_thread, daemon=True).start()
+    threading.Thread(target=_voice_follow_nav, daemon=True).start()
     server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
     server.daemon_threads = True
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')

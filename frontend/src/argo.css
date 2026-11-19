@@ -487,3 +487,123 @@ html, body { background: var(--a-bg); }
 .a-info-pop .r small { display: block; font-size: 11.5px; color: var(--a-muted); line-height: 1.3; }
 .a-info-pop .r b { font-family: var(--font-heading); font-size: 15px; color: var(--a-gold); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .a-info-pop .r b.ok { color: var(--a-ok); } .a-info-pop .r b.warn { color: var(--a-warn); } .a-info-pop .r b.bad { color: var(--a-danger); } .a-info-pop .r b.dim { color: #b9b1a2; }
+
+.a-modehint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 12px;
+  max-width: calc(100% - 24px); padding: 8px 8px 8px 16px; border-radius: 99px; background: var(--a-gold); color: #fff; font-size: 13px; font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+.a-modehint .a-btn { padding: 4px 12px; border-radius: 99px; font-size: 12px; }
+.a-actpop .a-btn { min-height: 44px; }
+
+.a-side-top { margin-bottom: 14px; }
+.a-estop { width: 100%; padding: 12px 14px; border-radius: 12px; font-size: 14px; font-weight: 700; letter-spacing: .2px; cursor: pointer;
+  background: var(--a-danger); color: #fff; border: 1px solid var(--a-danger); box-shadow: 0 4px 14px rgba(200,40,30,.25); }
+.a-estop:hover { filter: brightness(1.08); }
+.a-estop.on { background: var(--a-ok); border-color: var(--a-ok); box-shadow: 0 4px 14px rgba(30,140,70,.25); animation: a-pulse 1.4s ease-in-out infinite; }
+@keyframes a-pulse { 50% { filter: brightness(1.15); } }
+@media (max-width: 980px) { .a-estop { padding: 10px 2px; font-size: 10.5px; line-height: 1.15; white-space: normal; } }
+.a-estop:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.6); box-shadow: none; }
+
+/* E-stop now sits in the header next to Start/Stop Argo */
+.a-top .a-estop { width: auto; padding: 8px 16px; font-size: 13px; border-radius: 12px; box-shadow: none; white-space: nowrap; }
+
+/* Robot card: task status is a small chip floating on the picture (not a box in the side column) */
+.a-statusrow { padding: 8px 22px 0; } .fit .a-statusrow { padding: 6px 18px 0; }
+.a-taskchip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  padding: 6px 12px 6px 10px; border-radius: 99px; background: var(--a-surface); border: 1px solid var(--a-line);
+  box-shadow: 0 4px 14px rgba(40,25,5,.10); font-size: 12.5px; line-height: 1.2; }
+.a-taskchip i { width: 9px; height: 9px; border-radius: 50%; background: #b9b0a0; flex-shrink: 0; }
+.a-taskchip.busy i { background: var(--a-gold); animation: a-pulse-dot 1.2s ease-in-out infinite; }
+.a-taskchip.ready i { background: var(--a-ok); }
+.a-taskchip.stop { border-color: #efc3be; background: var(--a-danger-soft); color: var(--a-danger); }
+.a-taskchip.stop i { background: var(--a-danger); }
+.a-taskchip b { font-family: var(--font-heading); font-weight: 700; }
+.a-taskchip span { color: var(--a-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes a-pulse-dot { 50% { transform: scale(1.5); opacity: .55; } }
+
+/* Robot picture always fits whatever height the card has left (never cropped at the bottom) */
+.fit .a-robot .pic { position: relative; overflow: hidden; }
+.fit .a-robot .pic img { position: absolute; inset: 0; width: 100%; height: 100%; max-height: none; max-width: none; object-fit: contain; object-position: center bottom; }
+
+/* 1101–1350px wide: keep the one-screen layout (the 1350px stacking rule above would wrap the KPI row
+   and the bottom cards, squashing the map and cutting the robot card). */
+@media (min-width: 1101px) and (max-width: 1350px) {
+  .fit .a-hero { grid-template-columns: minmax(170px, 1fr) repeat(3, minmax(120px, 1fr)); }
+  .fit .a-hello { grid-column: auto; }
+  .fit .a-row3 { grid-template-columns: minmax(250px, .95fr) minmax(260px, 1fr) minmax(260px, 1fr); }
+  .fit .a-row3 > :first-child { grid-column: auto; }
+  .fit .a-kpi { padding: 8px 12px; gap: 8px; } .fit .a-kpi .ic { width: 32px; height: 32px; }
+}
+
+/* Robot picture a little smaller, with clear space under the wheels so the base is never at the card edge */
+.fit .a-robot .pic img { inset: 6px 0 22px 0; width: 100%; height: calc(100% - 28px); transform: scale(.88); transform-origin: center bottom; object-position: center bottom; }
+
+/* Robot picture: bigger again now that the status row is gone */
+.fit .a-robot .pic img { inset: 2px 0 12px 0; height: calc(100% - 14px); transform: scale(.97); }
+/* Connection dot blinks; hover/click opens the robot status popover */
+.a-pillbtn { background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; color: inherit; }
+.a-pill i.blink { animation: a-blink 1.3s ease-in-out infinite; }
+@keyframes a-blink { 50% { opacity: .25; transform: scale(.8); } }
+.a-statuswrap { position: relative; }
+.a-statuspop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 210px; display: grid; gap: 6px; padding: 10px 12px;
+  background: var(--a-surface); border: 1px solid var(--a-line); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.16); }
+.a-statuspop small { color: var(--a-muted); }
+.a-statuspop .a-taskchip { box-shadow: none; justify-self: start; }
+
+/* ═════════ Customisable dashboard board (drag / resize) ═════════ */
+.a-content.fit { display: block; grid-template-rows: none; height: calc(100vh - 54px); overflow-x: hidden; overflow-y: auto; }
+.a-board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px;
+  /* 19 rows share the screen height, so the default layout still fits one screen exactly */
+  grid-auto-rows: max(20px, calc((100vh - 54px - 14px - 18 * 12px) / 19)); }
+.a-slot { position: relative; display: flex; grid-column: span var(--w); grid-row: span var(--h); min-width: 0; min-height: 0; container-type: inline-size; }
+.a-slot > .a-hero, .a-slot > .a-card { flex: 1; min-width: 0; min-height: 0; }
+.a-slot > .a-hero { align-items: stretch; }
+.fit .a-slot > .a-card:not(.a-mapcard) { display: flex; flex-direction: column; overflow: hidden; }
+
+/* hero inside a narrow slot: 2 columns instead of 4 */
+@container (max-width: 640px) {
+  .a-hero { grid-template-columns: 1fr 1fr !important; }
+  .a-hello { grid-column: 1 / -1 !important; }
+}
+
+/* edit mode */
+.a-custombar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 22px; padding: 8px 14px; border-radius: 12px;
+  background: var(--a-gold-wash); border: 1px solid #ead7a6; font-size: 13px; }
+.a-custombar span { color: var(--a-muted); flex: 1; min-width: 200px; }
+.a-custombar .a-btn { padding: 6px 14px; font-size: 12.5px; }
+.a-slot.edit { outline: 2px dashed var(--a-gold); outline-offset: 3px; border-radius: 16px; }
+.a-slot.edit > .a-hero, .a-slot.edit > .a-card { pointer-events: none; user-select: none; }
+.a-slot.dragging { opacity: .6; outline-style: solid; z-index: 5; }
+.a-slot-bar { position: absolute; top: -15px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 6px;
+  padding: 2px 5px; border-radius: 99px; background: var(--a-gold); color: #fff; font-size: 12px; font-weight: 700;
+  cursor: grab; touch-action: none; user-select: none; box-shadow: 0 4px 14px rgba(0,0,0,.25); white-space: nowrap; }
+.a-slot.dragging .a-slot-bar { cursor: grabbing; }
+.a-slot-bar em { font-style: normal; opacity: .8; font-weight: 600; margin-left: 4px; }
+.a-slot-bar button { width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.25); color: #fff; font-size: 11px; padding: 0; cursor: pointer; }
+.a-slot-bar button:disabled { opacity: .35; cursor: default; }
+.a-slot-grip { position: absolute; right: 2px; bottom: 2px; z-index: 6; width: 30px; height: 30px; cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 52%, var(--a-gold) 52%); border-bottom-right-radius: 14px; }
+
+/* narrow screens: single column, sizes ignored (order kept), page scrolls */
+@media (max-width: 1100px) {
+  .a-content.fit { height: auto; overflow: visible; }
+  .a-board { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
+  .a-slot { grid-column: 1 / -1; grid-row: auto; height: auto; }
+  .a-slot[data-slot="robot"] { height: 320px; }
+  .a-slot[data-slot="orders"], .a-slot[data-slot="menu"] { height: 380px; }
+  .fit .a-slot > .a-card:not(.a-mapcard) { max-height: none; }
+  .a-slot-grip { display: none; }
+  .a-slot-bar em { display: none; }
+}
+
+/* short screens: the header cards need at least 3 rows or they overlap the map */
+@media (max-height: 800px) and (min-width: 1101px) {
+  .a-slot[data-slot="overview"] { grid-row: span max(var(--h), 3); }
+}
+/* icon-only sidebar on narrow screens (labels and restaurant card were squashed) */
+@media (max-width: 980px) {
+  .a-nav button span, .a-rest { display: none; }
+  .a-side-foot { display: none; }
+}
+
+/* press-and-hold on touch must not start text selection / the iOS callout */
+@media (pointer: coarse) { .a-board:not(.editing) .a-slot { -webkit-touch-callout: none; user-select: none; } }

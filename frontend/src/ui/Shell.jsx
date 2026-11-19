@@ -18,11 +18,12 @@ const ITEMS = [
   ['settings', 'Settings', Ic.Gear],
 ]
 
-export default function Shell({ active, onNav, badges = {}, connected, restaurant, top, sideActions, children }) {
+export default function Shell({ active, onNav, badges = {}, connected, restaurant, top, sideActions, sideTop, children }) {
   const open = restaurant ? openNow(restaurant.hours) : null
   return (
     <div className="argo">
       <aside className="a-side">
+        {sideTop && <div className="a-side-top">{sideTop}</div>}
         <nav className="a-nav">
           {ITEMS.map(([id, label, Icon]) => (
             <button key={id} className={active === id ? 'on' : ''} onClick={() => onNav(id)} title={label}>

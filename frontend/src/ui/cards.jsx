@@ -109,17 +109,35 @@ function StartupSteps({ percent = 0, steps = [] }) {
   )
 }
 
-export function RobotStatusCard({ connected, battery, task, estopped, onResume, navSteps, navPercent }) {
+export function RobotStatusCard({ connected, battery, task, estopped, onResume, navSteps, navPercent, navError, onRetry, navStopping }) {
   const pct = battery?.connected ? Math.max(0, Math.min(100, Math.round(battery.battery_percent))) : null
   const charging = !!battery?.charging
+  const [hoverOpen, setHoverOpen] = useState(false)   // hover previews the status…
+  const [pinOpen, setPinOpen] = useState(false)       // …a click pins it open (touch screens), click again to close
+  const statusOpen = hoverOpen || pinOpen
   return (
     <section className="a-card">
       <div className="a-ch">
         <h3>Robot Status</h3>
-        <span className={`a-pill ${connected ? '' : 'off'}`}><i />{connected ? 'Connected' : 'Disconnected'} <Ic.Wifi width="18" height="18" style={{ color: connected ? 'var(--a-ok)' : 'var(--a-danger)' }} /></span>
+        <span className="a-statuswrap" onMouseEnter={() => setHoverOpen(true)} onMouseLeave={() => { setHoverOpen(false); setPinOpen(false) }}>
+          <button className={`a-pill a-pillbtn ${connected ? '' : 'off'}`} onClick={() => setPinOpen(v => !v)} aria-expanded={statusOpen} title="Robot status">
+            <i className="blink" />{connected ? 'Connected' : 'Disconnected'} <Ic.Wifi width="18" height="18" style={{ color: connected ? 'var(--a-ok)' : 'var(--a-danger)' }} />
+          </button>
+          {statusOpen && (
+            <div className="a-statuspop" role="status">
+              <div className={`a-taskchip ${estopped ? 'stop' : task.busy ? 'busy' : task.sub === 'Ready for a task' ? 'ready' : ''}`}>
+                <i /><b>{estopped ? 'Emergency stop' : task.title}</b>
+              </div>
+              <small>{estopped ? 'Motors are cut' : task.sub}</small>
+              <small>{connected ? 'Connected to Argo' : 'Not connected to Argo'}</small>
+            </div>
+          )}
+        </span>
       </div>
       <div className="a-robot">
-        <div className="pic"><img src="/models/argo-robot.webp" alt="Argo robot" /></div>
+        <div className="pic">
+          <img src="/models/argo-robot.webp" alt="Argo robot" />
+        </div>
         <div className="side">
           <div className="a-box">
             <small>Battery{charging ? ' · charging' : ''}</small>
@@ -128,26 +146,24 @@ export function RobotStatusCard({ connected, battery, task, estopped, onResume, 
               <div className="a-meter"><i style={{ width: `${pct ?? 0}%`, background: pct != null && pct < 20 ? 'var(--a-danger)' : undefined }} /></div>
             </div>
             <small style={{ color: 'var(--a-muted)' }}>
-              {pct == null ? 'Battery monitor offline'
+              {pct == null ? 'Checking battery…'
                 : charging ? `Full in ${hoursText(battery.estimated_charge_remaining_hours)}`
                 : `Runtime: ${hoursText(battery.estimated_remaining_hours)}`}
             </small>
           </div>
-          {navSteps && <StartupSteps percent={navPercent} steps={navSteps} />}
-          <div className="a-box" style={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: 12, alignItems: 'center' }}>
-            <div className="ic" style={{ width: 40, height: 40, borderRadius: 11, background: estopped ? 'var(--a-danger-soft)' : 'var(--a-gold-wash)', display: 'grid', placeItems: 'center' }}>
-              <Ic.Bag width="22" height="22" style={{ color: estopped ? 'var(--a-danger)' : 'var(--a-gold)' }} />
+          {navStopping && (
+            <div className="a-box">
+              <small>Stopping Argo…</small>
+              <div className="a-meter ind" style={{ marginTop: 8 }}><i /></div>
             </div>
-            <div style={{ minWidth: 0 }}>
-              <b style={{ fontFamily: 'var(--font-heading)', fontSize: 16, color: estopped ? 'var(--a-danger)' : undefined }}>{estopped ? 'Emergency stop' : task.title}</b>
-              <small style={{ display: 'block', color: 'var(--a-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{estopped ? 'Motors are cut' : task.sub}</small>
+          )}
+          {!navStopping && navSteps && <StartupSteps percent={navPercent} steps={navSteps} />}
+          {!navStopping && !navSteps && navError && (
+            <div className="a-box" style={{ borderColor: '#efc3be', background: 'var(--a-danger-soft)' }}>
+              <small style={{ color: 'var(--a-danger)', display: 'block', marginBottom: 8 }}>{navError}</small>
+              <button className="a-btn gold" style={{ width: '100%', justifyContent: 'center' }} onClick={onRetry}>Retry start</button>
             </div>
-            <div style={{ gridColumn: '1 / -1' }}>
-              {estopped
-                ? <button className="a-btn ok" style={{ width: '100%', justifyContent: 'center' }} onClick={onResume}>Resume motors</button>
-                : <div className={`a-meter ${task.busy ? 'ind' : ''}`}><i style={{ width: task.busy ? undefined : '0%' }} /></div>}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </section>

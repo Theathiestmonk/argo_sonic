@@ -7,6 +7,7 @@ import { Hero, TableCards, TelemetryStrip, RobotStatusCard, ActiveOrdersCard, Po
 import * as Ic from '../ui/icons'
 import { money } from '../ui/format'
 import FreeRoamPanel from './FreeRoamPanel'
+import { DashBoard, useDashLayout } from '../ui/DashBoard'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
@@ -33,8 +34,18 @@ function tableNumberFromName(name, fallbackKey) {
   return m ? m[0] : fallbackKey
 }
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, poseStale, plannedPath, driveTelemetry, sensorDistances, shieldStatus, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onNavRunning, onViewOrders, onSelectMap, menuApi }, ref) => {
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, poseStale, plannedPath, driveTelemetry, sensorDistances, shieldStatus, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onNavRunning, onNavStopping, customizing, onCustomizeStart, onCustomizeDone, onViewOrders, onSelectMap, menuApi }, ref) => {
   const [tables, setTables]         = useState({})
+  const lay = useDashLayout()   // card order + sizes (per device)
+  useEffect(() => {             // one-time hint: customizing has no button, it is a gesture
+    try {
+      if (localStorage.getItem('argo_layout_tip')) return
+      localStorage.setItem('argo_layout_tip', '1')
+      const touch = window.matchMedia?.('(pointer: coarse)').matches
+      const id = setTimeout(() => showToast?.(touch ? 'Tip: press and hold a card for 3 seconds to rearrange the dashboard' : 'Tip: double-click a card to rearrange or resize the dashboard', 'info'), 2500)
+      return () => clearTimeout(id)
+    } catch { /* storage blocked — skip the tip */ }
+  }, [])
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
   const [goalSetMode, setGoalSetMode] = useState(false)
   const [patrolSetMode, setPatrolSetMode] = useState(false)
@@ -122,6 +133,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // "stopped" can't undo a Start.
   const navEpochRef = useRef(0)
   const navStoppingRef = useRef(false)
+  const [stopping, setStopping] = useState(false)   // Stop in flight (takes 10+ s): hide the startup loader, show "Stopping…"
 
   // Keep the cache in sync with every state change, live-poll-driven or
   // user-triggered alike — write-through, not a separate save step.
@@ -199,9 +211,16 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // panel hides after a step and reappears on the next one.
   const progAgeS = navProgress.age ?? 0
   const startupBusy = navProgress.status === 'OK' || navProgress.status === null
-  const showStartup = !navReady && (
+  const showStartup = !navReady && !stopping && (
     navState === 'starting' ||
     (navState === 'running' && navMap === selectedMap && startupBusy && progAgeS < 180))
+
+  // One "ready" toast when navigation comes up, for anyone who looked away during startup.
+  const wasReadyRef = useRef(false)
+  useEffect(() => {
+    if (navReady && !wasReadyRef.current) showToast?.('Argo is ready — you can send goals now', 'ok')
+    wasReadyRef.current = navReady
+  }, [navReady, showToast])
 
   // Tell the parent whether a stack exists at all, so Stop Argo is only clickable when there is something to stop.
   useEffect(() => { onNavRunning?.(navState !== 'stopped') }, [navState, onNavRunning])
@@ -221,7 +240,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     // Treating 'unknown'/'starting'/'running'-but-not-yet-ready as
     // "initializing" closes that gap: the button shows the real
     // in-progress state instead of inviting a redundant Start click.
-    if (navState === 'stopped') {
+    if (navState === 'stopped' || stopping) {
       onNavInitializing?.(false)
     } else if (navReady || navProgress.status === 'ERROR') {
       // ERROR: the launch script gave up — release the Start button so the
@@ -230,7 +249,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     } else {
       onNavInitializing?.(true)
     }
-  }, [navReady, onNavReady, navState, navProgress.status, onNavInitializing])
+  }, [navReady, onNavReady, navState, navProgress.status, onNavInitializing, stopping])
 
   // Real step-by-step progress from sh/start_argo_nav_ui.sh itself (see
   // backend/launcher.py's GET /nav_progress) — without this, a failure
@@ -238,7 +257,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   // being slow: an indefinite "Waiting for Nav2" spinner with no way to
   // tell which node broke or that it broke at all, short of SSHing in.
   useEffect(() => {
-    if (navState !== 'running' || navMap !== selectedMap) {
+    if (navState !== 'running' || navMap !== selectedMap || stopping) {
       setNavProgress({ status: null, message: null, percent: 0 })
       onNavProgressRef.current?.(null, 0)
       return
@@ -253,7 +272,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     check()
     const id = setInterval(check, 2000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [navState, navMap, selectedMap, launcherUrl])
+  }, [navState, navMap, selectedMap, launcherUrl, stopping])
 
   const checkNav = useCallback(() => {
     const epoch = navEpochRef.current
@@ -291,6 +310,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const startNav = async () => {
     if (navStoppingRef.current) { showToast('Still stopping — try again in a moment', 'info'); onNavInitializing?.(false); return false }
     navEpochRef.current += 1
+    const myEpoch = navEpochRef.current
     setNavState('starting')
     showToast(`Starting navigation on ${selectedMap}…`, 'info')
     try {
@@ -300,6 +320,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         body: JSON.stringify({ mode: 'navigate', map: selectedMap }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      if (myEpoch !== navEpochRef.current || navStoppingRef.current) return false   // Stop was pressed while /start was in flight
       if (navPollRef.current) clearInterval(navPollRef.current)
       navPollRef.current = setInterval(checkNav, 3000)
       return true
@@ -322,6 +343,9 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     // Freeze status polling and drop any in-flight replies until the stop settles.
     navStoppingRef.current = true
     navEpochRef.current += 1
+    // Immediately leave the startup UI: no more loader/progress while the (slow) teardown runs.
+    setStopping(true); onNavStopping?.(true); onNavInitializing?.(false)
+    setNavProgress({ status: null, message: null, percent: 0 }); onNavProgressRef.current?.(null, 0)
     if (navPollRef.current) { clearInterval(navPollRef.current); navPollRef.current = null }
     try {
       const r = await fetch(`${launcherUrl}/stop`, { method: 'POST' })
@@ -336,6 +360,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
       return false
     } finally {
       navStoppingRef.current = false
+      setStopping(false); onNavStopping?.(false)
       navEpochRef.current += 1
       checkNav()   // resync with what the launcher really reports
     }
@@ -581,7 +606,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     ? { title: 'Navigating', sub: navGotoStatus.destination ? `To ${navGotoStatus.destination}` : (navGotoStatus.phase_text || 'On a trip'), busy: true }
     : goalMarker || (plannedPath && plannedPath.length > 1)
       ? { title: 'Navigating', sub: 'To the selected goal', busy: true }
-      : { title: 'Idle', sub: navReady ? 'Ready for a task' : 'Navigation not ready', busy: false }
+      : { title: 'Idle', sub: navReady ? 'Ready for a task' : 'Start Argo to begin', busy: false }
 
   const hour = new Date().getHours()
   const subtitle = !connected ? 'Not connected to Argo — live data is unavailable.'
@@ -612,6 +637,18 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const goalTableName = goalMarker ? (tableMarkerList.find(m => Math.hypot(m.x - goalMarker.x, m.y - goalMarker.y) < 0.7)?.name ?? null) : null
   const [mapKey, setMapKey] = useState(0)
   const [actionsOpen, setActionsOpen] = useState(false)
+  const modeHint = goalSetMode ? { text: 'Click the map where Argo should go (drag to set facing)', cancel: () => setGoalSetMode(false) }
+    : patrolSetMode ? { text: 'Click the map to set the patrol route', cancel: () => setPatrolSetMode(false) }
+    : poseMode ? { text: 'Click where Argo is standing, then drag toward where it faces', cancel: () => setPoseMode(false) }
+    : null
+  // Nav went down: leave no half-active mode behind
+  useEffect(() => { if (!navReady) { setGoalSetMode(false); setPatrolSetMode(false); setPoseMode(false); setFreeRoamActive(false) } }, [navReady])
+  // Esc cancels whichever map mode is active
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') { setActionsOpen(false); modeHint?.cancel() } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
   const fullscreen = () => { const el = mapWrapRef.current; if (!el) return; document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.() }
 
   const toolBtn = (label, on, onClick, { disabled = !canvasTools, title, cls = '' } = {}) => (
@@ -620,9 +657,17 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
   return (
     <div className="a-content fit" >
-      <Hero greeting={greeting} night={hour >= 19 || hour < 5} subtitle={subtitle} kpis={kpis} />
-
-      {/* ── Live map ── */}
+      {customizing && (
+        <div className="a-custombar" role="status">
+          <b>Customize layout</b>
+          <span>Drag a card’s gold handle to move it · drag its corner to resize · Esc or Done to finish · saved on this device</span>
+          <button className="a-btn" onClick={lay.reset}>Reset layout</button>
+          <button className="a-btn gold" onClick={onCustomizeDone}>Done</button>
+        </div>
+      )}
+      <DashBoard lay={lay} editing={!!customizing} onRequestEdit={onCustomizeStart} onRequestExit={onCustomizeDone} items={{
+        overview: { title: 'Overview', node: <Hero greeting={greeting} night={hour >= 19 || hour < 5} subtitle={subtitle} kpis={kpis} /> },
+        map: { title: 'Live map', node: (
       <section className="a-card a-mapcard" id="dash-activity">
         <div className="a-maphead">
           <h3>{panel === 'map' ? 'Live Map' : 'Tables'}</h3>
@@ -644,11 +689,11 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
                 <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 58 }} />
                 <div className="a-actpop" role="menu" onClick={() => setActionsOpen(false)}>
                   {panel === 'map' && <>
-                    {toolBtn('Goal', goalSetMode, () => setGoalSetMode(v => !v), { title: 'Click the map to send Argo somewhere' })}
-                    {toolBtn('Patrol', patrolSetMode, () => setPatrolSetMode(v => !v), { title: 'Set a patrol route' })}
-                    {toolBtn('Stop patrol', false, () => { if (connected) { ros.publish('/patrol/stop', 'std_msgs/Empty', {}); showToast?.('Patrol stopped', 'ok') } }, { disabled: !connected, cls: 'danger', title: 'Stop the patrol route' })}
-                    {toolBtn('Free Roam', freeRoamActive, () => { if (connected) { setFreeRoamActive(v => !v) } }, { disabled: !connected, title: 'Autonomous free-roam exploration' })}
-                    {toolBtn(poseMode ? 'Cancel Pose' : 'Pose', poseMode, () => setPoseMode(v => !v), { title: !connected ? "Can't set pose — not connected" : 'Click where Argo is standing, then drag toward where it faces' })}
+                    {toolBtn('Goal', goalSetMode, () => setGoalSetMode(v => !v), { disabled: !canvasTools || !navReady, title: navReady ? 'Click the map to send Argo somewhere' : 'Start Argo first — this needs navigation running' })}
+                    {toolBtn('Patrol', patrolSetMode, () => setPatrolSetMode(v => !v), { disabled: !canvasTools || !navReady, title: navReady ? 'Set a patrol route' : 'Start Argo first — this needs navigation running' })}
+                    {toolBtn('Stop patrol', false, () => { if (connected) { ros.publish('/patrol/stop', 'std_msgs/Empty', {}); showToast?.('Patrol stopped', 'ok') } }, { disabled: !connected || !navReady, cls: 'danger', title: navReady ? 'Stop the patrol route' : 'Start Argo first — this needs navigation running' })}
+                    {toolBtn('Free Roam', freeRoamActive, () => { if (connected) { setFreeRoamActive(v => !v) } }, { disabled: !connected || !navReady, title: navReady ? 'Autonomous free-roam exploration' : 'Start Argo first — this needs navigation running' })}
+                    {toolBtn(poseMode ? 'Cancel Pose' : 'Pose', poseMode, () => setPoseMode(v => !v), { disabled: !canvasTools || !navReady, title: !connected ? "Can't set pose — not connected" : !navReady ? 'Start Argo first — this needs navigation running' : 'Click where Argo is standing, then drag toward where it faces' })}
                   </>}
                   {toolBtn('Drive', showTeleopPad, () => (showTeleopPad ? stopTeleop() : startTeleop()), { disabled: false, title: 'Open the manual drive pad' })}
                   {panel === 'map' && <>
@@ -661,6 +706,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
           </div>
         </div>
         <div className="a-mapwrap" ref={mapWrapRef}>
+          {panel === 'map' && modeHint && (
+            <div className="a-modehint" role="status">
+              <span>{modeHint.text}</span>
+              <button className="a-btn" onClick={modeHint.cancel}>Cancel</button>
+            </div>
+          )}
           {panel === 'tables' ? (
             <TableCards tables={tableMarkerList} orders={orders} currency={menu.currency} goalTable={goalTableName}
               onSend={goToDestination} onClear={clearOrder} />
@@ -692,6 +743,15 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
         </div>
         <TelemetryStrip drive={driveTelemetry} sensors={sensorDistances} shield={shieldStatus} />
       </section>
+        ) },
+        robot: { title: 'Robot status', node: (
+          <RobotStatusCard connected={connected} battery={battery} task={trip} estopped={estopped} onResume={estopResume}
+          navSteps={showStartup ? (navProgress.steps || []) : null} navPercent={showStartup ? (navProgress.percent || 0) : 0}
+          navError={navState === 'running' && navProgress.status === 'ERROR' ? (navProgress.message || 'Startup failed') : null} onRetry={startNav} navStopping={stopping} />
+        ) },
+        orders: { title: 'Active orders', node: <ActiveOrdersCard list={orderList} currency={menu.currency} onDispatch={dispatchOrder} onClear={clearOrder} onViewAll={onViewOrders} /> },
+        menu: { title: 'POS menu', node: <PosMenuCard menu={menu} /> },
+      }} />
 
       {freeRoamActive && (
         <div className="argo-legacy" style={{ position: 'fixed', top: 70, right: 24, zIndex: 70, width: 400, maxHeight: '78vh', overflowY: 'auto', margin: 0, minHeight: 0, padding: 16, boxShadow: '0 20px 60px rgba(0,0,0,.35)' }}>
@@ -700,14 +760,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
             launcherUrl={launcherUrl} mapName={selectedMap || 'office_map'} />
         </div>
       )}
-
-      {/* ── Robot / orders / menu ── */}
-      <div className="a-row3">
-        <RobotStatusCard connected={connected} battery={battery} task={trip} estopped={estopped} onResume={estopResume}
-          navSteps={showStartup ? (navProgress.steps || []) : null} navPercent={showStartup ? (navProgress.percent || 0) : 0} />
-        <ActiveOrdersCard list={orderList} currency={menu.currency} onDispatch={dispatchOrder} onClear={clearOrder} onViewAll={onViewOrders} />
-        <PosMenuCard menu={menu} />
-      </div>
 
       {/* Activity / alerts popover (bell in the top bar) */}
       {showActivityPanel && (

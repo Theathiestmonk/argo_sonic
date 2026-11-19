@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ros } from './ros'
-import { loadSavedMap } from './mapLoader'
+import { loadSavedMap, readCachedMap } from './mapLoader'
 import EnvironmentSelector from './components/EnvironmentSelector'
 import ExplorationPanel    from './components/ExplorationPanel'
 import TablesPanel         from './components/TablesPanel'
@@ -95,7 +95,12 @@ export default function App() {
   const [step, setStep]           = useState(0)
   const [view, setView]           = useState(null) // null (loading) | 'dashboard' | 'wizard'
   const [connected, setConnected] = useState(false)
-  const [battery, setBattery] = useState({ connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 })
+  // Start from the last real reading (localStorage) so the battery card shows values on the first
+  // frame after a refresh; the live fetch below replaces it within milliseconds.
+  const [battery, setBattery] = useState(() => {
+    try { const c = JSON.parse(localStorage.getItem('argo_battery_cache')); if (c && c.connected) return c } catch { /* no cache */ }
+    return { connected: false, charging: false, battery_percent: 0, estimated_remaining_hours: 0, estimated_charge_remaining_hours: 0 }
+  })
   const [demoMode] = useState(() => new URLSearchParams(window.location.search).get('demo') === 'true')
   const [rosUrl, setRosUrl]       = useState(() => {
     // Auto-use the same host the page was served from.
@@ -109,6 +114,8 @@ export default function App() {
   const [selectedMap, setSelectedMap] = useState(() => localStorage.getItem('argo_selected_map') || 'office_map')
   const [navInitializing, setNavInitializing] = useState(false)
   const [navReady, setNavReady] = useState(false)
+  const [navStopping, setNavStopping] = useState(false)
+  const [customizing, setCustomizing] = useState(false)   // dashboard drag/resize layout mode
   const [navRunning, setNavRunning] = useState(true)   // false once the launcher reports the stack stopped → Stop button disabled
   const [navPoseSet, setNavPoseSet] = useState(false)
   const [navPct, setNavPct] = useState(0)
@@ -124,7 +131,7 @@ export default function App() {
     return () => { dead = true; clearInterval(id) }
   }, [rosUrl])
 
-  const [mapData, setMapData]     = useState(null)
+  const [mapData, setMapData]     = useState(() => readCachedMap(localStorage.getItem('argo_selected_map') || 'office_map'))   // cached → map paints on first frame after a hard refresh
   const [costmapData, setCostmapData] = useState(null)
   const [robotPose, setRobotPose] = useState(() => loadPose(localStorage.getItem('argo_selected_map') || 'office_map'))
   const [poseStale, setPoseStale] = useState(true)       // true until a live pose has arrived (or after it stops arriving)
@@ -335,17 +342,12 @@ export default function App() {
   useEffect(() => {
     if (demoMode) return
     let dead = false
-    const id = setTimeout(() => {
-      setMapData(cur => {
-        if (!cur) {
-          loadSavedMap(launcherUrl(rosUrl), selectedMap)
-            .then(m => { if (m && !dead) setMapData(prev => prev ?? m) })
-            .catch(() => {})
-        }
-        return cur
-      })
-    }, 2500)
-    return () => { dead = true; clearTimeout(id) }
+    // No delay: fetch the saved map right away. Replaces only a cached/saved map or an empty one —
+    // never a live /map message, which is newer.
+    loadSavedMap(launcherUrl(rosUrl), selectedMap)
+      .then(m => { if (m && !dead) setMapData(prev => (!prev || prev.saved ? m : prev)) })
+      .catch(() => {})
+    return () => { dead = true }
   }, [selectedMap, rosUrl, demoMode])
   useEffect(() => {                                       // which map is navigation running? (launcher /status)
     let dead = false
@@ -411,18 +413,24 @@ export default function App() {
 
   // Live BMS reading (GET /battery, backend/launcher.py) — drives the top
   // header's battery pill, next to the Argo Sonic brand/connection status.
-  // 10s is plenty; the pack's own state doesn't change meaningfully faster.
+  // Polled every 3 s (+ on tab focus) so the value never looks stale.
   useEffect(() => {
     let cancelled = false
     const load = () => {
       fetch(`${launcherUrl(rosUrl)}/battery`)
         .then(r => r.json())
-        .then(d => { if (!cancelled) setBattery(d) })
+        .then(d => {
+          if (cancelled) return
+          setBattery(d)
+          if (d.connected) { try { localStorage.setItem('argo_battery_cache', JSON.stringify(d)) } catch { /* optional */ } }
+        })
         .catch(() => {})
     }
     load()
-    const id = setInterval(load, 10000)
-    return () => { cancelled = true; clearInterval(id) }
+    const id = setInterval(load, 3000)
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }   // fresh value the moment the tab is shown
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { cancelled = true; clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
   }, [rosUrl])
 
 
@@ -531,6 +539,45 @@ export default function App() {
     else if (id === 'settings') setShowSettings(true)
   }
 
+  useEffect(() => { if (view !== 'dashboard' || showSettings) setCustomizing(false) }, [view, showSettings])
+
+  const stopArgo = async () => {
+    if (navBusy) return
+    setNavBusy(true)
+    try { await dashboardRef.current?.stopNav?.() } finally { setNavBusy(false) }
+  }
+
+  // Emergency stop — motors only (nav stack keeps running). Second press resumes.
+  // Lives at the top of the sidebar so it is reachable from every page.
+  const [estopped, setEstopped] = useState(false)
+  useEffect(() => {
+    let dead = false
+    const load = () => fetch(`${launcherUrl(rosUrl)}/estop/status`).then(r => r.json()).then(d => { if (!dead) setEstopped(!!d.estopped) }).catch(() => {})
+    load()
+    const id = setInterval(load, 3000)
+    return () => { dead = true; clearInterval(id) }
+  }, [rosUrl])
+  const toggleEstop = () => {
+    const base = launcherUrl(rosUrl)
+    if (!estopped) {
+      try { if (ros?.connection?.isConnected) ros.topic('/cmd_vel', 'geometry_msgs/Twist')?.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } }) } catch { /* launcher cut below */ }
+      setEstopped(true)   // optimistic; the 3 s poll corrects it if the launcher disagrees
+      fetch(`${base}/estop`, { method: 'POST' })
+        .then(r => { if (!r.ok) throw new Error(r.status); showToast('Emergency stop — motors cut', 'danger') })
+        .catch(() => { setEstopped(false); showToast('Could not reach launcher for emergency stop', 'danger') })
+    } else {
+      fetch(`${base}/estop/resume`, { method: 'POST' })
+        .then(r => { if (!r.ok) throw new Error(r.status); setEstopped(false); showToast('Motors resumed', 'ok') })
+        .catch(() => showToast('Could not resume motors', 'danger'))
+    }
+  }
+  const estopButton = (
+    <button className={`a-estop ${estopped ? 'on' : ''}`} onClick={toggleEstop} disabled={!navRunning && !estopped}
+      title={estopped ? 'Motors are cut — click to resume' : navRunning ? 'Cut the motors immediately (navigation keeps running)' : 'Argo is stopped — nothing to emergency-stop'}>
+      {estopped ? '▶ Resume motors' : '⏻ E-Stop'}
+    </button>
+  )
+
   const topActions = (
     <>
       {editingUrl && (
@@ -541,10 +588,14 @@ export default function App() {
           <button type="button" onClick={() => setEditingUrl(false)} className="a-btn">✕</button>
         </form>
       )}
-      {navInitializing ? (
-        <button className="a-btn gold-soft" disabled title={navProgress || 'Starting Argo…'}><span className="a-spin" />Starting…</button>
+      {estopButton}
+      {/* One element for the whole Argo lifecycle: Start → Starting (click to cancel) → Stop → Stopping */}
+      {navStopping ? (
+        <button className="a-btn gold-soft" disabled><span className="a-spin" />Stopping…</button>
+      ) : navInitializing && navRunning ? (
+        <button className="a-btn gold-soft" disabled={navBusy} title={(navProgress || 'Starting Argo…') + ' — click to cancel'} onClick={stopArgo}><span className="a-spin" />Starting… ✕</button>
       ) : navReady ? (
-        <span className="a-pill" title="Navigation is up and ready"><i />Argo running</span>
+        <button className="a-btn gold-outline" disabled={navBusy} title="Stop navigation and motors" onClick={stopArgo}>■ Stop Argo</button>
       ) : (
         <button className="a-btn gold" disabled={navBusy} onClick={async () => {
           if (navBusy) return
@@ -552,11 +603,6 @@ export default function App() {
           try { await dashboardRef.current?.startNav?.() } finally { setNavBusy(false) }
         }}>▶ Start Argo</button>
       )}
-      <button className="a-btn gold-outline" disabled={navBusy || !navRunning} title={navRunning ? 'Stop Argo' : 'Argo is already stopped'} onClick={async () => {
-        if (navBusy || !navRunning) return
-        setNavBusy(true)
-        try { await dashboardRef.current?.stopNav?.() } finally { setNavBusy(false) }
-      }}>■ Stop Argo</button>
       <button className="a-iconbtn" onClick={() => dashboardRef.current?.toggleActivityPanel?.()} title="Recent activity and alerts"><Ic.Bell width="22" height="22" /></button>
     </>
   )
@@ -589,6 +635,15 @@ export default function App() {
           onNavInitializing={setNavInitializing}
           onNavReady={setNavReady}
           onNavRunning={setNavRunning}
+          onNavStopping={setNavStopping}
+          customizing={customizing}
+          onCustomizeStart={() => setCustomizing(true)}
+          onCustomizeDone={() => {
+            // Finish = leave edit mode, then reload so no drag/resize leftovers stay on screen.
+            // The layout is already saved in localStorage on every change; the short delay lets the last write land.
+            setCustomizing(false)
+            setTimeout(() => window.location.reload(), 150)
+          }}
           onNavPoseSet={setNavPoseSet}
           onNavProgress={(msg, pct) => { setNavProgress(msg); setNavPct(pct || 0) }}
           onViewOrders={() => setView('orders')}
