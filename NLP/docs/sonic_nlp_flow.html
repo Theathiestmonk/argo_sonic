@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonic Voice Flow</title>
+<style>
+/* Self-contained (no network): open the file directly in any browser, light or dark. */
+:root{
+  --bg:#f5f6f7; --surface:#fff; --fg:#14181c; --muted:#5b6670; --line:#b9c2c9;
+  --accent:#0b7a75; --accent-soft:#d8efed; --warn:#a15c00; --warn-soft:#fbeccd; --bad:#b3261e;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --mono:ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#101417; --surface:#171d21; --fg:#e8edf0; --muted:#97a3ac; --line:#3a464e;
+  --accent:#4fd1c5; --accent-soft:#12302e; --warn:#e0a24a; --warn-soft:#3a2c10; --bad:#ff8a80; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--sans);padding:28px 16px 60px}
+main{max-width:1060px;margin:0 auto;display:grid;gap:34px}
+h1{font-size:clamp(1.6rem,4vw,2.3rem);margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:1.2rem;margin:0 0 6px}
+p{margin:0;color:var(--muted);max-width:70ch}
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px}
+svg{display:block;min-width:860px;width:100%;height:auto;color:var(--fg)}
+.box{fill:var(--surface);stroke:var(--line);stroke-width:1.3;transition:fill .15s,stroke .15s,stroke-width .15s}
+.task{stroke:var(--accent)}
+.ext{stroke-dasharray:5 4}
+.t{font-size:13px;font-weight:600;fill:var(--fg)} .s{font-size:11px;fill:var(--muted)}
+.ln{stroke:var(--fg);stroke-width:1.3;fill:none} .ac{stroke:var(--accent);stroke-width:2.2;fill:none}
+.dash{stroke:var(--muted);stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+.on .box,.box.on{fill:var(--accent-soft);stroke:var(--accent);stroke-width:3}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+button{font:inherit;font-size:13px;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);font-weight:600}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;align-items:start}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+ol{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+li{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:9px 11px;cursor:pointer;display:grid;gap:5px}
+li[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.who{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.who.you{color:var(--warn)} .who.robot{color:var(--accent)}
+.say{font-size:14px}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font:12px var(--mono);padding:1px 6px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
+.chip.k{border-color:var(--accent);color:var(--fg);background:var(--accent-soft)}
+.side{position:sticky;top:12px;display:grid;gap:10px}
+.note{border-left:3px solid var(--accent);padding:4px 0 4px 10px;font-size:14px;color:var(--fg)}
+.mem{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.mem div{border-top:2px solid var(--accent);padding-top:8px}.mem code{font:13px var(--mono);color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Sonic Voice Flow</h1>
+  <p>From “hi sonic” to a finished action: every stage, who decides what, and real events traced through it. Pick an example, then click a step to light up where it happens.</p>
+</header>
+
+<section>
+  <h2>The whole flow</h2>
+  <div class="scroll">
+  <svg id="map" viewBox="0 0 980 460" role="img" aria-label="Full voice pipeline: wake, greet, listen, understand, route, six action nodes returning to listen, with sleep, barge-in and admin controls.">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+    </defs>
+
+    <g id="n-wake"><rect class="box" x="20" y="30" width="120" height="56" rx="6"/><text class="t" x="80" y="55" text-anchor="middle">wake</text><text class="s" x="80" y="72" text-anchor="middle">“hi sonic” model</text></g>
+    <g id="n-greet"><rect class="box" x="180" y="30" width="110" height="56" rx="6"/><text class="t" x="235" y="55" text-anchor="middle">greet</text><text class="s" x="235" y="72" text-anchor="middle">cached audio</text></g>
+    <g id="n-listen"><rect class="box" x="330" y="30" width="130" height="56" rx="6"/><text class="t" x="395" y="55" text-anchor="middle">listen</text><text class="s" x="395" y="72" text-anchor="middle">Sarvam speech-to-text</text></g>
+    <line class="ln" x1="140" y1="58" x2="178" y2="58" marker-end="url(#a)"/>
+    <line class="ln" x1="290" y1="58" x2="328" y2="58" marker-end="url(#a)"/>
+    <line class="ln" x1="460" y1="58" x2="508" y2="58" marker-end="url(#a)"/>
+
+    <g id="n-understand"><rect class="box" x="510" y="14" width="230" height="100" rx="6"/>
+      <text class="t" x="525" y="35">understand</text>
+      <text class="s" x="525" y="55">1  fast path: regex, under 5 ms</text>
+      <text class="s" x="525" y="73">2  answer to the robot’s own question</text>
+      <text class="s" x="525" y="91">3  LLM → intent, entities, task (~1 s)</text>
+      <text class="s" x="525" y="106" style="fill:var(--accent)">tries 1, then 2, then 3</text></g>
+    <line class="ln" x1="740" y1="64" x2="808" y2="85" marker-end="url(#a)"/>
+    <g id="n-route"><path class="box" d="M870 45 L930 85 L870 125 L810 85 Z"/><text class="t" x="870" y="89" text-anchor="middle">route</text></g>
+    <text class="s" x="870" y="141" text-anchor="middle">by intent</text>
+
+    <line class="ln" x1="870" y1="150" x2="870" y2="200"/><line class="ln" x1="80" y1="200" x2="880" y2="200"/>
+    <g class="ln"><line x1="80" y1="200" x2="80" y2="238" marker-end="url(#a)"/><line x1="240" y1="200" x2="240" y2="238" marker-end="url(#a)"/><line x1="400" y1="200" x2="400" y2="238" marker-end="url(#a)"/><line x1="560" y1="200" x2="560" y2="238" marker-end="url(#a)"/><line x1="720" y1="200" x2="720" y2="238" marker-end="url(#a)"/><line x1="880" y1="200" x2="880" y2="238" marker-end="url(#a)"/></g>
+
+    <g id="n-movement"><rect class="box" x="20" y="240" width="120" height="52" rx="6"/><text class="t" x="80" y="262" text-anchor="middle">movement</text><text class="s" x="80" y="279" text-anchor="middle">1 m / turn + safety</text></g>
+    <g id="n-menu"><rect class="box" x="180" y="240" width="120" height="52" rx="6"/><text class="t" x="240" y="262" text-anchor="middle">menu</text><text class="s" x="240" y="279" text-anchor="middle">dishes, prices</text></g>
+    <g id="n-general"><rect class="box" x="340" y="240" width="120" height="52" rx="6"/><text class="t" x="400" y="262" text-anchor="middle">general</text><text class="s" x="400" y="279" text-anchor="middle">name, weather, jokes</text></g>
+    <g id="n-delivery"><rect class="box task" x="500" y="240" width="120" height="52" rx="6"/><text class="t" x="560" y="262" text-anchor="middle">delivery</text><text class="s" x="560" y="279" text-anchor="middle">announce, wait</text></g>
+    <g id="n-navigation"><rect class="box task" x="660" y="240" width="120" height="52" rx="6"/><text class="t" x="720" y="262" text-anchor="middle">navigation</text><text class="s" x="720" y="279" text-anchor="middle">waypoint → Nav2</text></g>
+    <g id="n-ordering"><rect class="box task" x="820" y="240" width="120" height="52" rx="6"/><text class="t" x="880" y="262" text-anchor="middle">ordering</text><text class="s" x="880" y="279" text-anchor="middle">slots → kitchen</text></g>
+    <line class="ac" x1="660" y1="266" x2="622" y2="266" marker-end="url(#ah)"/><line class="ac" x1="780" y1="266" x2="818" y2="266" marker-end="url(#ah)"/>
+    <text class="s" x="720" y="316" text-anchor="middle" style="fill:var(--accent)">arrived: hand over by task</text>
+
+    <g class="dash"><path d="M80 292 V345 H960 V8 H395 V28" marker-end="url(#a)"/><path d="M240 292 V345"/><path d="M400 292 V345"/><path d="M560 292 V345"/><path d="M720 292 V345"/><path d="M880 292 V345"/></g>
+    <text class="s" x="300" y="362">every node ends back at listen</text>
+
+    <g id="n-sleep"><rect class="box ext" x="20" y="390" width="270" height="52" rx="6"/><text class="t" x="35" y="412">sleep / farewell</text><text class="s" x="35" y="430">after “bye” or two silent turns → back to wake</text></g>
+    <path class="dash" d="M20 416 H8 V58 H18" marker-end="url(#a)"/>
+    <g id="n-admin"><rect class="box ext" x="320" y="390" width="290" height="52" rx="6"/><text class="t" x="335" y="412">settings page (admin)</text><text class="s" x="335" y="430">stop talking · stop / start / restart agent</text></g>
+    <g id="n-barge"><rect class="box ext" x="640" y="390" width="300" height="52" rx="6"/><text class="t" x="655" y="412">wake word while busy (barge-in)</text><text class="s" x="655" y="430">cancel current action, restart graph, keep cart</text></g>
+  </svg>
+  </div>
+  <p style="margin-top:8px">Teal-outlined nodes are the task path. Dashed boxes are things that sit outside the normal loop.</p>
+</section>
+
+<section>
+  <h2>Events, step by step</h2>
+  <div class="tabs" id="tabs" role="group" aria-label="Example events"></div>
+  <div class="grid">
+    <ol id="steps"></ol>
+    <div class="side">
+      <div class="note" id="why"></div>
+      <div class="chips" id="state"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>What the robot remembers between turns</h2>
+  <div class="mem">
+    <div><code>awaiting</code><p>What the robot just asked (<code>order_qty</code>, <code>deliver_done</code> …). A bare “two” or “yes” goes to the node that asked.</p></div>
+    <div><code>task</code><p>The job to do on arrival: <code>take_order</code> or <code>deliver</code>. Survives a “did you mean…?” question; dropped if you change topic.</p></div>
+    <div><code>table · location</code><p>Where the robot is. Ordering never asks the table again after navigation.</p></div>
+    <div><code>order · pending</code><p>The cart. Kept when a wake word interrupts, cleared for a new customer.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Who decides</h2>
+  <div class="scroll" style="padding:0"><table>
+    <tr><th>Stage</th><th>Decided by</th><th>Typical time</th></tr>
+    <tr><td>Wake word</td><td>Local model on the mic stream</td><td>~100 ms</td></tr>
+    <tr><td>Speech to text</td><td>Sarvam, streamed while you speak</td><td>~100 ms after you stop</td></tr>
+    <tr><td>Understand</td><td>Regex first, then slot match, then one LLM call</td><td>&lt;5 ms fast, ~1 s LLM</td></tr>
+    <tr><td>Navigation, ordering, delivery, menu</td><td>Deterministic code, no LLM</td><td>instant (driving takes as long as it takes)</td></tr>
+    <tr><td>General chat, jokes, restaurant facts</td><td>LLM answer, streamed to speech</td><td>first audio ~200 ms after text</td></tr>
+    <tr><td>Any movement</td><td>Safety shield + sensor clearance check</td><td>refuses if sensors are silent</td></tr>
+  </table></div>
+</section>
+</main>
+
+<script>
+var EX = [
+ {id:'take', name:'Take order at a table', steps:[
+  {w:'sys', t:'Someone says the wake word.', n:['n-wake'], why:'The wake model fires after 2 strong frames. The robot is now awake.', st:{}},
+  {w:'robot', t:'“Hi there!”', n:['n-greet'], why:'Greeting audio is pre-recorded, so it plays with ~0 latency.', st:{}},
+  {w:'you', t:'“go to table 1 and take order”', n:['n-listen','n-understand'], why:'Fast path regex matches the whole sentence. No LLM call.', st:{intent:'navigation',location:'table 1',task:'take_order'}},
+  {w:'robot', t:'“Going to Table 1.” (drives with Nav2)', n:['n-route','n-navigation'], why:'“table 1” resolves to a saved waypoint. Speech plays while the robot is already driving.', st:{task:'take_order'}},
+  {w:'robot', t:'“I’m at Table 1. What would you like to order?”', n:['n-navigation','n-ordering'], why:'On arrival navigation remembers the table and hands over to ordering, so the table is never asked.', st:{table:'1',intent:'ordering',awaiting:'order_item'}},
+  {w:'you', t:'“two butter chicken”', n:['n-listen','n-understand','n-ordering'], why:'One LLM call returns item and quantity. Ordering notices a spice level is missing.', st:{table:'1',awaiting:'order_variation'}},
+  {w:'robot', t:'“Which spice level? Mild or Medium or Spicy?”', n:['n-ordering'], why:'One question at a time, never re-asking what was already said.', st:{awaiting:'order_variation'}},
+  {w:'you', t:'“spicy”', n:['n-understand','n-ordering'], why:'Answered by the slot matcher locally, no LLM.', st:{awaiting:'order_more'}},
+  {w:'robot', t:'“Added 2 Butter Chicken (Spicy). Anything else?”', n:['n-ordering'], why:'', st:{awaiting:'order_more'}},
+  {w:'you', t:'“that’s all”', n:['n-understand','n-ordering'], why:'Mid-order “that’s all” means no more items, not goodbye.', st:{awaiting:'order_confirm'}},
+  {w:'robot', t:'“So that’s 2 Butter Chicken (Spicy) for table 1. Shall I place the order?” → “yes” → “Done! Your order has been sent to the kitchen.”', n:['n-ordering'], why:'The order goes to the POS ledger, then the database, then a local file, so it is never lost.', st:{awaiting:'none'}}
+ ]},
+ {id:'deliver', name:'Deliver order', steps:[
+  {w:'you', t:'“hi sonic … go to table 4 and deliver the order”', n:['n-wake','n-greet','n-listen','n-understand'], why:'Same fast path, task is deliver.', st:{intent:'navigation',location:'table 4',task:'deliver'}},
+  {w:'robot', t:'“Going to Table 4.”', n:['n-route','n-navigation'], why:'Drives to the waypoint through the safety shield.', st:{task:'deliver'}},
+  {w:'robot', t:'“Hello table 4, your order is here. Please take your items from the tray, and say done when you have them.”', n:['n-navigation','n-delivery'], why:'Navigation hands over to delivery.', st:{table:'4',intent:'delivery',awaiting:'deliver_done'}},
+  {w:'you', t:'“done” / “thanks”', n:['n-listen','n-understand','n-delivery'], why:'Matched locally. If nobody answers, silence is treated as taken.', st:{awaiting:'deliver_done'}},
+  {w:'robot', t:'“Enjoy your meal! Heading back to Docker.”', n:['n-delivery','n-navigation'], why:'Returns to the home waypoint (setting NLP_HOME_WAYPOINT).', st:{location:'Docker'}}
+ ]},
+ {id:'unknown', name:'Unknown place', steps:[
+  {w:'you', t:'“go to table 9 and deliver the order”', n:['n-understand'], why:'Task is stored in state before the place is checked.', st:{location:'table 9',task:'deliver'}},
+  {w:'robot', t:'“I’m sorry, I don’t know how to go to table 9. Do you want me to go to Table 2 instead?” (closest saved table, example)', n:['n-navigation'], why:'Digits must match exactly, so “table 9” never silently becomes a different table.', st:{awaiting:'nav_confirm',task:'deliver'}},
+  {w:'you', t:'“yes”', n:['n-understand','n-navigation'], why:'“yes” belongs to navigation because of awaiting. The task is still deliver.', st:{awaiting:'nav_confirm',task:'deliver'}},
+  {w:'robot', t:'Drives to the suggested table, then delivers as usual.', n:['n-navigation','n-delivery'], why:'', st:{task:'deliver'}},
+  {w:'sys', t:'Alternative: you say “tell me a joke” instead of yes.', n:['n-understand','n-general'], why:'Topic changed, so the pending task is dropped and “go to table 2” later will not start delivery.', st:{task:'none'}}
+ ]},
+ {id:'menu', name:'Menu question to order', steps:[
+  {w:'you', t:'“what is special today”', n:['n-understand','n-route','n-menu'], why:'LLM tags it as a menu question; the answer comes from the menu data, not the LLM.', st:{intent:'menu'}},
+  {w:'robot', t:'Reads today’s specials, then “Would you like to order it?”', n:['n-menu'], why:'', st:{awaiting:'menu_order'}},
+  {w:'you', t:'“yes”', n:['n-understand','n-menu','n-ordering'], why:'Menu hands the chosen dish to ordering, pre-filled.', st:{awaiting:'order_table'}},
+  {w:'robot', t:'“Which table is this for?”', n:['n-ordering'], why:'Table asked only because the robot did not navigate here first.', st:{awaiting:'order_table'}}
+ ]},
+ {id:'move', name:'Move command', steps:[
+  {w:'you', t:'“move forward”', n:['n-understand','n-route','n-movement'], why:'Fast path, no LLM.', st:{intent:'movement'}},
+  {w:'robot', t:'Checks lidar, depth and ultrasonic clearance (needs 1.5 m). “Moving forward.”', n:['n-movement'], why:'No fresh sensor data means refuse, not guess.', st:{}},
+  {w:'robot', t:'If something is in the way: “Sorry, I am blocked by something in that direction and cannot move.”', n:['n-movement'], why:'It also stops mid-move if clearance drops below 0.45 m.', st:{}}
+ ]},
+ {id:'stop', name:'Robot won’t stop talking', steps:[
+  {w:'sys', t:'Option 1: say the wake word while it is talking.', n:['n-barge'], why:'Needs a stronger match mid-conversation so the robot’s own voice does not trigger itself. Speech and the current action are cancelled; the cart is kept.', st:{}},
+  {w:'sys', t:'Option 2: Settings → Voice agent control → “Stop talking now”.', n:['n-admin'], why:'The agent cuts speech within about 0.3 s and keeps running.', st:{}},
+  {w:'sys', t:'Option 3: “Stop voice agent”.', n:['n-admin'], why:'Switches the whole agent off and keeps it off, even if navigation restarts, until you press Start.', st:{}}
+ ]},
+ {id:'silence', name:'Nobody speaks', steps:[
+  {w:'robot', t:'Robot is awake and listening. No speech for a few seconds.', n:['n-listen'], why:'', st:{silent_turns:'1'}},
+  {w:'robot', t:'Plays one beep.', n:['n-listen'], why:'A beep instead of words keeps it quiet in a busy restaurant.', st:{silent_turns:'1'}},
+  {w:'robot', t:'Still silent: “Okay, call me if you need anything.” and goes back to wake.', n:['n-sleep','n-wake'], why:'After two silent turns the session ends and the robot waits for the wake word again.', st:{silent_turns:'2'}}
+ ]}
+];
+var cur = null, idx = 0;
+function $(i){return document.getElementById(i)}
+function show(){
+  var ex = EX[cur], s = ex.steps[idx];
+  document.querySelectorAll('#map g[id^="n-"]').forEach(function(g){g.classList.remove('on')});
+  s.n.forEach(function(id){var g=$(id); if(g) g.classList.add('on')});
+  document.querySelectorAll('#steps li').forEach(function(li,i){ if(i===idx) li.setAttribute('aria-current','true'); else li.removeAttribute('aria-current') });
+  $('why').textContent = s.why || 'Continues the same flow.';
+  var c = $('state'); c.innerHTML='';
+  Object.keys(s.st).forEach(function(k){var e=document.createElement('span');e.className='chip k';e.textContent=k+' = '+s.st[k];c.appendChild(e)});
+  if(!Object.keys(s.st).length){var e=document.createElement('span');e.className='chip';e.textContent='state unchanged';c.appendChild(e)}
+}
+function pick(i){
+  cur=i; idx=0;
+  document.querySelectorAll('#tabs button').forEach(function(b,j){b.setAttribute('aria-pressed', j===i)});
+  var ol=$('steps'); ol.innerHTML='';
+  EX[i].steps.forEach(function(s,j){
+    var li=document.createElement('li'); li.tabIndex=0;
+    li.innerHTML='<span class="who '+s.w+'">'+({you:'You say',robot:'Robot',sys:'Event'})[s.w]+'</span><span class="say"></span>';
+    li.querySelector('.say').textContent=s.t;
+    li.onclick=function(){idx=j;show()}; li.onkeydown=function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();idx=j;show()}};
+    ol.appendChild(li);
+  });
+  show();
+}
+EX.forEach(function(e,i){var b=document.createElement('button');b.textContent=e.name;b.onclick=function(){pick(i)};$('tabs').appendChild(b)});
+pick(0);
+</script>
+</body>
+</html>

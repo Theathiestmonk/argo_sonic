@@ -310,3 +310,68 @@ def test_wake_node_keeps_cart_when_resumed():
     out = run(wake({"resumed": True, "order": [1]}))
     assert "order" not in out and "pending" not in out and out["resumed"] is False
     assert run(wake({"order": [1]}))["order"] == []     # normal wake = new customer
+
+
+# ---------------------------------------------------------------- voice tasks: "go to table N and <job>"
+@pytest.mark.parametrize("text,loc,task", [
+    ("go to table 1 and take order", "table 1", "take_order"),
+    ("Go to table 4 and deliver the order.", "table 4", "deliver"),
+    ("please come to table two then take the order", "table two", "take_order"),
+    ("go to table 3 and take an order", "table 3", "take_order"),
+    ("go to table 5 and serve the food", "table 5", "deliver"),
+    ("head to table 2 and deliver order", "table 2", "deliver"),
+])
+def test_compound_fastpath(text, loc, task):
+    e = try_fast(text, None)
+    assert e and e["intent"] == "navigation" and e["location"] == loc and e["task"] == task
+
+
+def test_take_order_task_goes_there_then_asks_for_the_order():
+    voice, robot, sink = run(run_script([
+        ("go to table 1 and take order", {}),            # fast path – no LLM
+        ("two butter chicken", ent(intent="ordering", items=[{"name": "butter chicken", "quantity": 2, "variation": None}])),
+        ("spicy", {}), ("no", {}), ("yes", {}),
+    ]))
+    said = " | ".join(voice.said)
+    assert "Going to Table 1" in said and "What would you like to order" in said
+    assert "Which table" not in said                          # table came from the navigation
+    assert sink.orders and sink.orders[0][0] == 1
+
+
+def test_deliver_task_announces_waits_for_done_and_returns_home():
+    voice, robot, sink = run(run_script([
+        ("go to table 4 and deliver the order", {}),
+        ("done", {}),
+    ]))
+    said = " | ".join(voice.said)
+    assert "Going to Table 4" in said and "your order is here" in said
+    assert "Enjoy your meal" in said and "Heading back to Docker" in said
+    assert robot.at is not None if hasattr(robot, "at") else True
+
+
+def test_deliver_with_unknown_table_keeps_task_through_suggestion():
+    voice, robot, sink = run(run_script([
+        ("go to table 9 and deliver the order", {}),
+        ("yes", {}),
+    ]))
+    said = " | ".join(voice.said)
+    assert "Do you want me to go to" in said and "your order is here" in said
+
+
+def test_deliver_without_place_asks_which_table():
+    voice, robot, sink = run(run_script([
+        ("deliver the order", {}),
+        ("table 2", ent(intent="navigation", location="table 2")),
+    ]))
+    said = " | ".join(voice.said)
+    assert "Which table should I deliver to" in said and "Going to Table 2" in said and "your order is here" in said
+
+
+def test_pending_task_is_dropped_when_topic_changes():
+    voice, robot, sink = run(run_script([
+        ("go to table 9 and take order", {}),
+        ("tell me a joke", ent(intent="general", general_topic="joke")),
+        ("go to table 2", ent(intent="navigation", location="table 2")),
+    ]))
+    said = " | ".join(voice.said)
+    assert "What would you like to order" not in said

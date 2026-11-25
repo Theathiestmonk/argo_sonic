@@ -9,6 +9,8 @@ from typing import Optional
 
 import sounddevice as sd
 
+from .. import prefs
+
 log = logging.getLogger("nlp.audio")
 
 MIC_RATE = 16000
@@ -32,7 +34,7 @@ class Mic:
         self._loop = loop
 
         def cb(indata, frames, t, status):
-            data = bytes(indata)
+            data = bytes(len(indata)) if prefs.get("mic_muted") else bytes(indata)   # UI mute → pure silence
             self._loop.call_soon_threadsafe(self._fan, data)
 
         self._stream = sd.RawInputStream(samplerate=MIC_RATE, blocksize=MIC_BLOCK, channels=1, dtype="int16",
@@ -79,6 +81,8 @@ class Player:
         with self._lock:
             chunk = bytes(self._buf[:n])
             del self._buf[:n]
+        if prefs.get("speaker_muted"):
+            chunk = b"\x00" * len(chunk)
         outdata[: len(chunk)] = chunk
         if len(chunk) < n:
             outdata[len(chunk):] = b"\x00" * (n - len(chunk))

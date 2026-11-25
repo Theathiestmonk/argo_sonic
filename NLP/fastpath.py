@@ -15,6 +15,15 @@ _NO = re.compile(r"^(?:no|nope|nah|nahi|not now|nothing|done|i'?m good|that'?s (
                  r"(?:[ ,]+(?:thanks|thank you|please|that'?s all|that'?s it|that is all|nothing else|for now|i'?m good|sir|madam))*\W*$")
 _BYE = re.compile(r"^(?:bye|goodbye|good bye|see you|that'?s all for now|go to sleep|stop listening)\W*$")
 
+# "go to table 1 and take order" / "come to table 4 then deliver the order" (zero-LLM, English)
+_TASK_TAKE = r"(?:take|taking|collect|get|note|record)(?: down)?(?: the| an| a| their| his| her| my| our)?(?: new)? ?orders?"
+_TASK_DELIVER = (r"(?:deliver|delivering|serve|bring|give|drop)(?: the| an| a| their| his| her| my| our)?"
+                 r"(?: food| order| orders| dishes| items| parcel| tray)?(?: order| food)?(?: over)?")
+_COMPOUND = re.compile(
+    rf"^{_P}(?:go|come|move|drive|head|navigate|walk|run|take me)(?: over)?(?: straight)? (?:to|at|towards) (?:the )?(?P<loc>.+?)"
+    rf"(?:,)? (?:and|then|and then|&)(?: then)? (?:{_P})(?:(?P<take>{_TASK_TAKE})|(?P<dlv>{_TASK_DELIVER}))(?: there| here| please)?$")
+_TASK_ONLY = re.compile(rf"^{_P}(?:(?P<take>{_TASK_TAKE})|(?P<dlv>(?:deliver|serve)(?: the| this| an| a)?(?: food| order| orders)?))(?: please)?$")
+
 _DIR = {"forward": "forward", "forwards": "forward", "ahead": "forward", "straight": "forward",
         "back": "backward", "backward": "backward", "backwards": "backward", "reverse": "backward",
         "left": "left", "right": "right"}
@@ -24,7 +33,7 @@ def blank_ent() -> dict:
     return {"intent": "unclear", "reply": "none", "location": None, "table_number": None, "items": [],
             "movement_direction": None, "menu_category": None, "menu_item": None, "menu_query": None,
             "diet": None, "wants_specials": False, "wants_famous": False, "general_topic": None,
-            "remove_items": [], "cancel_order": False}
+            "remove_items": [], "cancel_order": False, "task": None}
 
 
 def try_fast(text: str, awaiting: Optional[str]) -> Optional[dict]:
@@ -39,6 +48,14 @@ def try_fast(text: str, awaiting: Optional[str]) -> Optional[dict]:
         if _NO.match(t):
             return {**blank_ent(), "reply": "no"}
         return None
+    m = _COMPOUND.match(t)
+    if m:
+        return {**blank_ent(), "intent": "navigation", "location": m.group("loc").strip(),
+                "task": "take_order" if m.group("take") else "deliver"}
+    m = _TASK_ONLY.match(t)
+    if m:
+        task = "take_order" if m.group("take") else "deliver"
+        return {**blank_ent(), "intent": "ordering" if task == "take_order" else "delivery", "task": task}
     m = _MOVE.match(t)
     if m:
         w = m.group(1)

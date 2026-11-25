@@ -7,7 +7,7 @@ from typing import Any, Optional, TypedDict
 class State(TypedDict, total=False):
     # ---- per-turn
     utterance: str
-    intent: str                 # navigation | ordering | movement | menu | general | end | unclear
+    intent: str                 # navigation | delivery | ordering | movement | menu | general | end | unclear
     ent: dict[str, Any]         # all entities extracted in the single classification call
     # ---- dialogue memory (what the robot last asked -> disambiguates the next reply)
     awaiting: Optional[str]
@@ -16,6 +16,7 @@ class State(TypedDict, total=False):
     # ---- navigation
     location: Optional[str]     # waypoint the robot is currently at
     nav_suggestion: Optional[str]
+    task: Optional[str]         # take_order | deliver : what to do on arrival (survives clarification questions)
     # ---- ordering
     table: Optional[int]        # sticky: set by navigation to "Table N" or asked once
     order: list[dict]           # committed lines {name, qty, variation, kind, price, menu_id}
@@ -28,7 +29,7 @@ class State(TypedDict, total=False):
 
 # What each `awaiting` token belongs to, so a bare "yes"/"two"/"table 3" reaches the right node.
 AWAIT_OWNER = {
-    "nav_location": "navigation", "nav_confirm": "navigation",
+    "nav_location": "navigation", "nav_confirm": "navigation", "deliver_done": "delivery",
     "order_table": "ordering", "order_item": "ordering", "order_qty": "ordering",
     "order_variation": "ordering", "order_more": "ordering", "order_confirm": "ordering",
     "order_suggest": "ordering", "order_prompt": "ordering",

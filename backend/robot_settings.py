@@ -158,7 +158,7 @@ def get_settings():
 
 
 def snapshot():
-    return {**get_settings(), **{k: v for k, v in get_audio().items()}, 'ranges': RANGES}
+    return {**get_settings(), **{k: v for k, v in get_audio().items()}, 'voice': get_voice(), 'ranges': RANGES}
 
 
 def update_motion(max_linear=None, max_angular=None):
@@ -171,3 +171,80 @@ def update_motion(max_linear=None, max_angular=None):
             saved['max_angular'] = _clamp('max_angular', max_angular)
         _save(saved)
     return apply_motion()
+
+
+# ── Voice agent audio (read live by NLP/prefs.py) ────────────────────────────
+
+VOICE_PREFS_PATH = os.path.join(_HERE, 'voice_prefs.json')
+VOICE_KEYS = ('mic_device', 'speaker_device', 'mic_muted', 'speaker_muted', 'wake_threshold', 'voice_enabled')
+
+
+def _load_voice():
+    try:
+        with open(VOICE_PREFS_PATH) as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def get_voice():
+    d = _load_voice()
+    return {
+        'mic_device': d.get('mic_device', ''),
+        'speaker_device': d.get('speaker_device', ''),
+        'mic_muted': bool(d.get('mic_muted', False)),
+        'speaker_muted': bool(d.get('speaker_muted', False)),
+        'wake_threshold': float(d.get('wake_threshold', 0.5)),
+        'voice_enabled': bool(d.get('voice_enabled', True)),   # False = admin stopped the voice agent; the launcher keeps it off
+    }
+
+
+def update_voice(data):
+    """Persist voice prefs. Mute and wake sensitivity apply live; devices on the next agent start."""
+    with _lock:
+        cur = _load_voice()
+        for k in VOICE_KEYS:
+            if k not in data:
+                continue
+            v = data[k]
+            if k in ('mic_muted', 'speaker_muted', 'voice_enabled'):
+                v = bool(v)
+            elif k == 'wake_threshold':
+                v = max(0.2, min(0.95, float(v)))
+            else:
+                v = str(v)
+            cur[k] = v
+        tmp = VOICE_PREFS_PATH + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(cur, f, indent=2)
+        os.replace(tmp, VOICE_PREFS_PATH)
+    return get_voice()
+
+
+def silence_voice():
+    """Ask the running voice agent to stop talking right now (it watches this counter in voice_prefs.json)."""
+    with _lock:
+        cur = _load_voice()
+        cur['interrupt_nonce'] = time.time()
+        tmp = VOICE_PREFS_PATH + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(cur, f, indent=2)
+        os.replace(tmp, VOICE_PREFS_PATH)
+
+
+def list_audio_devices():
+    """Input/output devices as PortAudio (sounddevice) sees them – the same names the voice agent opens."""
+    try:
+        import sounddevice as sd
+        devs = sd.query_devices()
+    except Exception as e:  # sounddevice missing or no audio stack
+        return {'inputs': [], 'outputs': [], 'error': str(e)[:160]}
+    ins, outs = [], []
+    for i, d in enumerate(devs):
+        item = {'id': str(i), 'name': d['name']}
+        if d.get('max_input_channels', 0) > 0:
+            ins.append(item)
+        if d.get('max_output_channels', 0) > 0:
+            outs.append(item)
+    return {'inputs': ins, 'outputs': outs}

@@ -1323,7 +1323,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'maps_dir': MAPS_DIR})
 
         elif self.path == '/settings':
-            self._json(robot_settings.snapshot())
+            snap = robot_settings.snapshot()
+            snap['voice'].update(_voice_status())
+            self._json(snap)
+
+        elif self.path == '/audio/devices':
+            self._json(robot_settings.list_audio_devices())
 
         elif self.path == '/maps':
             names = sorted(
@@ -1734,6 +1739,35 @@ class Handler(BaseHTTPRequestHandler):
             print(f'[launcher] /maps/{name}/model/build')
             self._json({'ok': True, 'status': 'started', 'map': name})
 
+        elif self.path == '/settings/voice':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                data = json.loads(self.rfile.read(length)) if length else {}
+                if not isinstance(data, dict):
+                    raise ValueError
+                voice = robot_settings.update_voice(data)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                self._json({'error': 'invalid JSON body'}, 400)
+                return
+            print(f'[launcher] /settings/voice {voice}')
+            self._json({'ok': True, 'voice': voice})
+
+        elif self.path == '/settings/voice/control':
+            # Admin controls for the voice agent: start | stop | restart | silence (stop talking right now).
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                data = json.loads(self.rfile.read(length)) if length else {}
+                action = data.get('action') if isinstance(data, dict) else None
+            except (ValueError, TypeError, json.JSONDecodeError):
+                self._json({'error': 'invalid JSON body'}, 400)
+                return
+            if action not in ('start', 'stop', 'restart', 'silence'):
+                self._json({'ok': False, 'error': 'action must be start, stop, restart or silence'}, 400)
+                return
+            res = _voice_control(action)
+            print(f'[launcher] /settings/voice/control {action} -> {res}')
+            self._json({'ok': True, **res})
+
         elif self.path in ('/settings/motion', '/settings/audio'):
             try:
                 length = int(self.headers.get('Content-Length', 0))
@@ -1869,6 +1903,36 @@ def _voice_set(want):
         print(f'[launcher] voice agent gating failed: {e}')
 
 
+def _voice_status():
+    ready = _nav_ready_now()
+    try:
+        running = _voice_active()
+    except Exception:
+        running = False
+    return {'running': running, 'nav_ready': ready}
+
+
+def _voice_control(action):
+    """Manual control. stop/start persist `voice_enabled`, so the nav-follow loop cannot undo an admin's choice."""
+    try:
+        if action == 'silence':
+            robot_settings.silence_voice()
+        elif action == 'stop':
+            robot_settings.update_voice({'voice_enabled': False})
+            _voice_set(False)
+        elif action == 'start':
+            robot_settings.update_voice({'voice_enabled': True})
+            _voice_set(_nav_ready_now())
+        elif action == 'restart':
+            robot_settings.update_voice({'voice_enabled': True})
+            if _nav_ready_now():
+                subprocess.run(['systemctl', '--user', 'restart', VOICE_UNIT],
+                               capture_output=True, timeout=20, env=_voice_env)
+    except Exception as e:
+        return {'error': str(e)[:160], **_voice_status()}
+    return _voice_status()
+
+
 def _nav_ready_now():
     with _lock:
         up = _proc is not None and _proc.poll() is None
@@ -1883,7 +1947,7 @@ def _nav_ready_now():
 
 def _voice_follow_nav():
     while True:
-        _voice_set(_nav_ready_now())
+        _voice_set(_nav_ready_now() and robot_settings.get_voice()['voice_enabled'])
         time.sleep(2)
 
 if __name__ == '__main__':

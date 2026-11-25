@@ -15,7 +15,7 @@ log = logging.getLogger("nlp.core")
 
 
 def _substantive(e: dict) -> bool:
-    return bool(e.get("items") or e.get("location") or e.get("table_number") is not None or e.get("menu_category")
+    return bool(e.get("task") or e.get("items") or e.get("location") or e.get("table_number") is not None or e.get("menu_category")
                 or e.get("menu_item") or e.get("menu_query") or e.get("movement_direction") or e.get("wants_specials")
                 or e.get("wants_famous") or e.get("general_topic") or e.get("remove_items") or e.get("cancel_order"))
 
@@ -23,6 +23,10 @@ def _substantive(e: dict) -> bool:
 def _infer_intent(e: dict, awaiting: str | None) -> str:
     if e.get("movement_direction"):
         return "movement"
+    if e.get("location"):
+        return "navigation"             # a destination (even with a task) always means "go there first"
+    if e.get("task"):
+        return "ordering" if e["task"] == "take_order" else "delivery"
     if e.get("items") or e.get("cancel_order") or e.get("remove_items"):
         return "ordering"
     if e.get("table_number") is not None and awaiting and AWAIT_OWNER.get(awaiting) == "ordering":
@@ -37,6 +41,9 @@ def _infer_intent(e: dict, awaiting: str | None) -> str:
 
 
 _NUM = re.compile(r"^(?:table |number |no |for |i want |we want |make it |just |about |it is |its |we are at )*(\d{1,2})(?: please| only| each| of them| pieces| plates)?$")
+
+
+_TAKEN = re.compile(r"\b(done|taken|took|got (?:it|them)|received|collected|thank|thanks|thankyou|okay thanks|you can go|go back)\b")
 
 
 def make_core(c: Ctx):
@@ -60,6 +67,10 @@ def make_core(c: Ctx):
                     if similarity(t, o) >= 0.8 or o.lower() in t.split():
                         e.update(intent="ordering", items=[{"name": None, "quantity": None, "variation": o}])
                         return e
+        elif aw == "deliver_done":
+            if _TAKEN.search(t):
+                e.update(intent="delivery", reply="yes")
+                return e
         elif aw in ("nav_location", "nav_confirm"):
             name, _ = c.wps.resolve(text)
             if name:
@@ -136,11 +147,14 @@ def make_core(c: Ctx):
         log.info("understood [%s %.0f ms] %r → %s %s", src, (time.perf_counter() - t0) * 1000, text, intent,
                  {k: v for k, v in ent.items() if v not in (None, [], False, "none", "")})
         c.menu.maybe_refresh()
-        return {"intent": intent, "ent": ent}
+        out = {"intent": intent, "ent": ent}
+        if intent != "navigation":
+            out["task"] = None                       # a pending "…and take order" dies if the topic changed
+        return out
 
     def route(state: State) -> str:
         return {"navigation": "navigation", "ordering": "ordering", "movement": "movement", "menu": "menu",
-                "general": "general", "end": "farewell"}.get(state.get("intent", ""), "unclear")
+                "general": "general", "end": "farewell", "delivery": "delivery"}.get(state.get("intent", ""), "unclear")
 
     async def unclear(state: State):
         c.voice.say(P.pick(P.NOT_HEARD))
@@ -151,6 +165,11 @@ def make_core(c: Ctx):
         return {"awaiting": None}
 
     async def sleep(state: State):
+        if state.get("awaiting") == "deliver_done":          # nobody answered at the table → assume taken, go home
+            from .navigation import return_home
+            c.voice.say("Enjoy your meal!")
+            await return_home(c, state.get("location"))
+            return {"awaiting": None, "task": None}
         c.voice.say(P.pick(P.SLEEP))
         return {"awaiting": None}
 

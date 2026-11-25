@@ -20,6 +20,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .nodes.core import make_core
 from .nodes.ctx import Ctx
+from .nodes.delivery import make_delivery
 from .nodes.general import make_general
 from .nodes.menu import make_menu
 from .nodes.movement import make_movement
@@ -36,6 +37,8 @@ def build_graph(c: Ctx):
     g.add_node("navigation", make_navigation(c))
     g.add_node("ordering", make_ordering(c))
     g.add_node("movement", make_movement(c))
+    delivery, _ = make_delivery(c)
+    g.add_node("delivery", delivery)
     g.add_node("menu", make_menu(c))
     g.add_node("general", make_general(c))
 
@@ -45,9 +48,12 @@ def build_graph(c: Ctx):
     g.add_conditional_edges("listen", core["after_listen"], ["silence_prompt", "understand", "sleep"])
     g.add_edge("silence_prompt", "listen")
     g.add_conditional_edges("understand", core["route"],
-                            ["navigation", "ordering", "movement", "menu", "general", "farewell", "unclear"])
-    for n in ("navigation", "ordering", "movement", "general", "unclear"):
+                            ["navigation", "ordering", "delivery", "movement", "menu", "general", "farewell", "unclear"])
+    for n in ("ordering", "delivery", "movement", "general", "unclear"):
         g.add_edge(n, "listen")
+    # after arriving with a job ("go to table 1 and take order"), navigation hands over to that node
+    g.add_conditional_edges("navigation", lambda s: s["intent"] if s.get("intent") in ("ordering", "delivery") else "listen",
+                            ["ordering", "delivery", "listen"])
     g.add_conditional_edges("menu", lambda s: "ordering" if s.get("intent") == "ordering" else "listen",
                             ["ordering", "listen"])
     g.add_edge("farewell", "wake")

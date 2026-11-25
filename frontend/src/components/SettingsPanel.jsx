@@ -38,6 +38,97 @@ function RangeRow({ label, hint, value, range, onCommit, disabled }) {
   )
 }
 
+// Voice-agent audio: pick mic/speaker device, mute either, tune wake-word sensitivity.
+// Mute and sensitivity apply live; device changes apply the next time the voice agent starts.
+function VoiceAgentCard({ launcherUrl, showToast, card, title, sub }) {
+  const [voice, setVoice] = useState(null)
+  const [devs, setDevs] = useState({ inputs: [], outputs: [] })
+
+  useEffect(() => {
+    fetch(`${launcherUrl}/settings`).then(r => r.json()).then(d => setVoice(d.voice)).catch(() => {})
+    fetch(`${launcherUrl}/audio/devices`).then(r => r.json()).then(setDevs).catch(() => {})
+  }, [launcherUrl])
+
+  const save = (patch, msg) => {
+    setVoice(v => ({ ...v, ...patch }))
+    fetch(`${launcherUrl}/settings/voice`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+    }).then(r => r.json()).then(d => { if (d.voice) setVoice(d.voice); showToast?.(msg) })
+      .catch(() => showToast?.('Launcher not reachable'))
+  }
+
+  const sel = { width: '100%', marginTop: 6, padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.05)',
+    color: 'var(--text)', border: '1px solid var(--border-glass)' }
+  const label = { fontWeight: 700, fontSize: 14, display: 'block', marginTop: 14 }
+  const Mute = ({ k, text }) => (
+    <button className="btn-ghost" style={{ fontSize: 13, marginRight: 8, marginTop: 10,
+      borderColor: voice?.[k] ? '#ff9f43' : undefined, color: voice?.[k] ? '#ff9f43' : undefined }}
+      onClick={() => save({ [k]: !voice[k] }, `${text} ${!voice[k] ? 'muted' : 'on'}`)}>
+      {voice?.[k] ? `${text}: muted` : `${text}: on`}
+    </button>
+  )
+  const Device = ({ k, list, text }) => (
+    <label style={label}>{text}
+      <select style={sel} value={voice?.[k] ?? ''} onChange={e => save({ [k]: e.target.value }, `${text} saved – restart the voice agent to use it`)}>
+        <option value="">System default</option>
+        {list.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+      </select>
+    </label>
+  )
+
+  const control = (action, msg) =>
+    fetch(`${launcherUrl}/settings/voice/control`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+    }).then(r => r.json()).then(d => {
+      setVoice(v => ({ ...v, running: d.running, nav_ready: d.nav_ready,
+        voice_enabled: action === 'stop' ? false : action === 'silence' ? v.voice_enabled : true }))
+      showToast?.(d.error || msg)
+    }).catch(() => showToast?.('Launcher not reachable'))
+
+  // refresh the running/stopped badge while this page is open
+  useEffect(() => {
+    const t = setInterval(() => fetch(`${launcherUrl}/settings`).then(r => r.json())
+      .then(d => setVoice(v => v && d.voice ? { ...v, running: d.voice.running, nav_ready: d.voice.nav_ready } : v)).catch(() => {}), 5000)
+    return () => clearInterval(t)
+  }, [launcherUrl])
+
+  const state = !voice ? '' : voice.running ? 'Running' : !voice.voice_enabled ? 'Stopped by admin'
+    : !voice.nav_ready ? 'Waiting for navigation' : 'Starting…'
+
+  return (
+    <div className="glass-card" style={card}>
+      <div style={title}>Voice agent control</div>
+      <p style={sub}>Start, stop or restart "Hi Sonic". If it keeps talking or behaves unexpectedly, press Stop talking, or Stop to switch the whole agent off until you start it again.</p>
+      {voice && <>
+        <div style={{ fontSize: 14, marginBottom: 6 }}>Status: <b style={{ color: voice.running ? '#2ecc71' : '#ff9f43' }}>{state}</b></div>
+        <button className="btn-ghost" style={{ fontSize: 13, marginRight: 8, marginTop: 6, borderColor: '#ff6b6b', color: '#ff6b6b' }}
+          onClick={() => control('silence', 'Stopped talking')} disabled={!voice.running}>Stop talking now</button>
+        <button className="btn-ghost" style={{ fontSize: 13, marginRight: 8, marginTop: 6 }}
+          onClick={() => control('stop', 'Voice agent stopped')} disabled={!voice.voice_enabled && !voice.running}>Stop voice agent</button>
+        <button className="btn-ghost" style={{ fontSize: 13, marginRight: 8, marginTop: 6 }}
+          onClick={() => control('start', voice.nav_ready ? 'Voice agent starting' : 'Enabled – it starts when navigation is ready')} disabled={voice.running}>Start voice agent</button>
+        <button className="btn-ghost" style={{ fontSize: 13, marginTop: 6 }}
+          onClick={() => control('restart', 'Voice agent restarting')}>Restart</button>
+      </>}
+      <div style={{ ...title, marginTop: 26 }}>Voice agent audio</div>
+      <p style={sub}>Which microphone and speaker "Hi Sonic" uses. Mute and wake sensitivity apply instantly; device changes apply when the voice agent restarts.</p>
+      {devs.error && <div style={{ color: '#ff9f43', fontSize: 12 }}>No audio devices found ({devs.error})</div>}
+      {!voice && <div style={{ color: 'var(--muted)' }}>Loading…</div>}
+      {voice && <>
+        <Mute k="mic_muted" text="Microphone" />
+        <Mute k="speaker_muted" text="Speaker" />
+        <Device k="mic_device" list={devs.inputs || []} text="Microphone device" />
+        <Device k="speaker_device" list={devs.outputs || []} text="Speaker device" />
+        <div style={{ marginTop: 18 }}>
+          <RangeRow label="Wake-word sensitivity threshold" hint="lower = wakes easier" value={voice.wake_threshold}
+            range={{ min: 0.2, max: 0.95, step: 0.05, unit: '' }}
+            onCommit={n => save({ wake_threshold: n }, 'Wake sensitivity updated')} />
+        </div>
+      </>}
+    </div>
+  )
+}
+
 function RobotControls({ launcherUrl, showToast }) {
   const [cfg, setCfg] = useState(null)
   const [err, setErr] = useState(false)
@@ -86,6 +177,7 @@ function RobotControls({ launcherUrl, showToast }) {
             onCommit={n => post('/settings/audio', { mic: n }, 'Microphone volume updated')} />
         </>}
       </div>
+      <VoiceAgentCard launcherUrl={launcherUrl} showToast={showToast} card={card} title={title} sub={sub} />
     </div>
   )
 }

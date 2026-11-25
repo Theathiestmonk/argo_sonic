@@ -57,6 +57,7 @@ class SarvamVoice:
         self._prewarm = asyncio.create_task(self.speaker.prewarm(fixed_phrases))
         self._monitor_q = self.mic.subscribe()
         self._monitor = asyncio.create_task(self._watch_wake())
+        self._silencer = asyncio.create_task(self._watch_silence())
 
     async def _watch_wake(self) -> None:
         """While a session is active, keep listening for the wake word on a second mic queue. Idle sessions are
@@ -70,11 +71,22 @@ class SarvamVoice:
             if not armed:
                 self.wake.reset()                # frames were skipped while asleep – start from a clean model state
                 armed = True
-            if self.wake.score(frame) >= self.wake.threshold:
-                self.wake.reset()
+            if self.wake.detect(frame, boost=self.wake.BARGE_BOOST):
                 log.info("wake word mid-session – interrupting")
                 self._awake, self._rewoken = False, True
                 self._barge.set()
+
+    async def _watch_silence(self) -> None:
+        """Settings-page 'Stop talking' button: it bumps interrupt_nonce in voice_prefs.json; we cut speech at once."""
+        from .. import prefs
+        last = prefs.get("interrupt_nonce")
+        while True:
+            await asyncio.sleep(0.3)
+            cur = prefs.get("interrupt_nonce")
+            if cur != last:
+                last = cur
+                log.info("stop-talking requested from settings")
+                self.speaker.interrupt()
 
     async def barge_in(self) -> None:
         await self._barge.wait()
@@ -85,6 +97,7 @@ class SarvamVoice:
 
     async def close(self) -> None:
         self._monitor.cancel()
+        self._silencer.cancel()
         self._prewarm.cancel()
         await self.tts.close()
         self.mic.close()

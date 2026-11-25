@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from . import prefs
+
 NLP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = NLP_DIR.parent
 
@@ -44,9 +46,11 @@ class Settings:
 
     # --- Audio / wake word
     wake_model: str = field(default_factory=lambda: _s("NLP_WAKE_MODEL", str(REPO_ROOT / "sonic" / "Hi_Sonic.onnx")))
+    home_waypoint: str = field(default_factory=lambda: _s("NLP_HOME_WAYPOINT", "Docker"))   # where to return after a delivery ("" = stay)
+    deliver_wait_s: float = field(default_factory=lambda: _f("NLP_DELIVER_WAIT", 20.0))
     wake_threshold: float = field(default_factory=lambda: _f("NLP_WAKE_THRESHOLD", 0.5))
-    mic_device: str = field(default_factory=lambda: _s("NLP_MIC_DEVICE", ""))
-    speaker_device: str = field(default_factory=lambda: _s("NLP_SPEAKER_DEVICE", ""))
+    mic_device: str = field(default_factory=lambda: str(prefs.get("mic_device") or _s("NLP_MIC_DEVICE", "")))
+    speaker_device: str = field(default_factory=lambda: str(prefs.get("speaker_device") or _s("NLP_SPEAKER_DEVICE", "")))
     vad_aggressiveness: int = 2
     end_silence_ms: int = field(default_factory=lambda: int(_f("NLP_END_SILENCE_MS", 550)))
     listen_timeout_s: float = field(default_factory=lambda: _f("NLP_LISTEN_TIMEOUT", 15.0))
