@@ -31,26 +31,12 @@ Endpoints (CORS-open so the browser can call them directly):
                       after a map is saved (ExplorationPanel.jsx's saveMap()).
                       404 if that map hasn't been saved yet; 409
                       (ntfields_train_busy) if a training job is already
-                      running — no exclusion against
-                      /nav/goto, training never touches Nav2/serial.
+                      running — no exclusion against /voice/start or
+                      /nav/goto, training never touches Nav2/serial/the mic.
     GET  /maps/<name>/meta         →  {"resolution": float, "origin": [x,y,theta]}
                                        parsed from <name>.yaml — lets the frontend
                                        place waypoints on the map image correctly
     GET  /maps/<name>/preview      →  raw bytes of <name>.pgm
-    GET  /maps/<name>/model        →  {"available": bool, "exists": bool, "mtime": float|null,
-                                       "stale": bool, "building": bool, "phase": str|null,
-                                       "phase_text": str|null}  status of the 3D wall model
-                                       (MAP3D_DIR/<name>.glb, built by map_to_3d.py).
-                                       "available" is false when no Python with the converter's
-                                       dependencies was found (see _map3d_python()); "stale"
-                                       means the map was re-saved after the model was built.
-    GET  /maps/<name>/model.glb    →  raw GLB bytes (glTF Y-up, metres, map frame — a robot at
-                                       map (x, y, theta) sits at three.js (x, 0, -y), rotY = theta)
-    POST /maps/<name>/model/build  →  build/rebuild that model in a background thread. Called
-                                       automatically after a map is saved (ExplorationPanel.jsx's
-                                       saveMap()) and by the 3D viewer's "Generate" button.
-                                       404 unknown map; 409 (map3d_busy) if a build is running;
-                                       503 (map3d_unavailable) without a converter Python.
     GET  /waypoints/<map_name>     →  JSON content of waypoints/<map_name>.json
                                        (empty {} if that map has no waypoints yet)
     POST /waypoints/<map_name>     →  body is the full waypoints dict; overwrites
@@ -67,6 +53,8 @@ Endpoints (CORS-open so the browser can call them directly):
                       full-overwrite upsert into Postgres (deletions included —
                       an item missing from the body is removed). menu-data.js
                       POSTs here after every localStorage save in menu.html.
+                      sonic/main_agent.py reads the same tables directly at
+                      startup (load_menu_from_db()), not through this endpoint.
     GET  /orders/<map_name>            →  {table_id: {items, total, status,
                                            updatedAt}, ...} for every table with
                                            an active visit, from Postgres
@@ -76,11 +64,10 @@ Endpoints (CORS-open so the browser can call them directly):
                                            on — Postgres has one table set per
                                            location, not per map.
     GET  /orders/<map_name>/<table_id> →  just that table's order ({} if none)
-    POST /orders/<map_name>/<table_id> →  501 — order-taking moved to a separate,
-                                           dedicated desktop robot/station; orders
-                                           are written directly to Postgres from
-                                           there as the guest orders, not through
-                                           this endpoint.
+    POST /orders/<map_name>/<table_id> →  501 — orders are now written directly
+                                           by sonic/main_agent.py's
+                                           db_place_order() as the guest orders,
+                                           not through this endpoint.
     DELETE /orders/<map_name>/<table_id> → closes that table's active visit
                                            (Postgres equivalent of clearing a
                                            table's card); no-op (still 200) if
@@ -97,9 +84,15 @@ Endpoints (CORS-open so the browser can call them directly):
                       If something's already running under a different mode/map than
                       requested, it's stopped first so the new one always reflects what
                       was actually asked for (e.g. switching which map to navigate on).
-                      Also resumes the motors (e-stop) if they were engaged.
-    POST /stop    →  kills the entire process group cleanly and stops the motors
-                      (e-stop) — a full clean-slate teardown, nothing left running.
+                      main_agent.py's continuous wake-word loop ("Hi Sonic") is NOT
+                      tied to this at all — it's always live from the moment the
+                      launcher process itself starts (see the bootstrap at the bottom
+                      of this file), independent of whether/which nav mode is running.
+                      See GET /voice/status's wake_loop_* fields.
+    POST /stop    →  kills the entire process group cleanly. Does NOT touch the
+                      wake-word loop — it stays up regardless, so a guest can still
+                      be greeted (and told "having trouble getting to your table"
+                      if they ask to order) even while nav is stopped.
     GET  /nav_progress → {"status": "OK"|"ERROR"|"READY"|"STOPPED"|null,
                           "message": str|null, "timestamp": int|null} —
                           the current/last step NAV_SCRIPT reported
@@ -120,6 +113,77 @@ Endpoints (CORS-open so the browser can call them directly):
                      shows up over HTTP instead of requiring SSH + running
                      the script by hand to ever see it.
 
+    GET  /voice/status →  {"running": bool, "pid": int|null, "action": str|null,
+                           "map": str|null, "table": str|null,
+                           "wake_loop_running": bool, "wake_loop_pending": bool,
+                           "phase": str|null, "phase_text": str|null} —
+                           is Sonic currently mid-conversation at a table
+                           ("running"/action/map/table), and separately, is the
+                           continuous wake-word loop up ("wake_loop_running") or
+                           does it want to be but isn't right now
+                           ("wake_loop_pending" — paused for a table dispatch, or
+                           still starting up after nav just went READY)? "phase"/
+                           "phase_text" (e.g. "heading_to_table"/"Heading to
+                           Table 3") come from main_agent.py's own report_phase()
+                           via VOICE_PROGRESS_PATH — null once stale (see
+                           VOICE_PROGRESS_MAX_AGE_S) or if nothing's in progress.
+    GET  /voice/transcript →  {"session_id": str|null, "started_at": str|null,
+                           "turns": [{"role": "user"|"robot", "text": str,
+                           "created_at": str}]} — the most recent
+                           sonic_dialogue_session for this robot and its turns
+                           in order, straight from Postgres (main_agent.py's
+                           db_log_turn() already writes every turn there — this
+                           just reads it back). Empty turns, not an error, if
+                           there's no session yet.
+    POST /voice/start  →  body {"action": "order"|"deliver"|"bill"|"room_service",
+                           "map": str, "table": str}. Spawns sonic/main_agent.py
+                           as a subprocess scoped to that table — this is what a
+                           table's action buttons in the UI actually call. Pauses
+                           the wake-word loop for the dispatch's duration (shared
+                           mic/speaker, can't run both at once) and restarts it
+                           once the dispatch process exits, if it's still supposed
+                           to be running.
+                           main_agent.py is normally a continuous wake-word
+                           loop that discovers its table conversationally; a
+                           TABLE_NO env var (set here from "table") makes it
+                           skip that and run exactly one Kitchen->Table N->
+                           Kitchen round trip for this table instead (real
+                           Nav2 navigation, see sonic/nav_bridge.py), then
+                           exit — same click-to-dispatch lifecycle the old
+                           sonic/test_harness.py had. "action" is passed
+                           through as SONIC_ACTION_HINT: order and room_service
+                           both run the full humanized take-order conversation;
+                           bill and deliver currently get a brief spoken apology
+                           and a return to the kitchen (not yet rewired into
+                           main_agent.py — see its module docstring) rather than
+                           the dedicated bill/pickup-confirmation behavior the
+                           older sonic_agent.py had. SONIC_MAP_NAME
+                           (from "map") selects which
+                           src/argo_mini/waypoints/<map>.json to navigate
+                           against.
+                           Same action+map+table while already running → no-op
+                           "already_running". A DIFFERENT one while already
+                           running → REJECTED (409) rather than pre-empted —
+                           Sonic can only physically talk to one table at a
+                           time, and silently killing an in-progress
+                           conversation to start another would lose it.
+    POST /voice/stop   →  kills the current voice-session process group,
+                           independent of the SLAM/Nav2 stack above (separate
+                           state, separate lock — starting/stopping a voice
+                           session must never contend with or depend on
+                           whether the nav stack is running).
+    GET  /voice/nav_enabled  → {"enabled": bool} — staff-facing kill-switch
+                           (locations.voice_nav_enabled) that main_agent.py's
+                           navigate_and_wait() checks before every Kitchen<->
+                           Table trip (dispatched or voice-triggered take_order
+                           alike). Defaults true so a missing DB doesn't read
+                           as "disabled". A guest's own free-form "take me to
+                           X" request isn't a live intent yet (see n_stub) —
+                           this switch already covers it once that's rewired
+                           in, since it gates navigate_and_wait() itself.
+    POST /voice/nav_enabled → body {"enabled": bool}; toggled from the
+                           dashboard (see TablesPanel.jsx).
+
     GET  /nav/goto/status → {"running": bool, "destination": str|null,
                            "phase": "heading"|"arrived"|"failed"|null,
                            "phase_text": str|null} — status of the current/
@@ -128,9 +192,19 @@ Endpoints (CORS-open so the browser can call them directly):
                            conversation-free single-destination trip — e.g.
                            the "Go to kitchen" button — run in a background
                            thread inside this process (_nav_goto_worker),
-                           shelling out to sonic/nav_bridge.py. Rejected (409)
-                           while another /nav/goto trip is already running
-                           (nav_goto_busy).
+                           shelling out to sonic/nav_bridge.py exactly the
+                           way main_agent.py's own navigate_and_wait() does,
+                           gated by the same voice_nav_enabled() kill-switch.
+                           Rejected (409) while a table dispatch is active
+                           (voice_session_busy) or another /nav/goto trip is
+                           already running (nav_goto_busy) — same reasoning
+                           as /voice/start's own busy check, since a voice
+                           dispatch and a plain goto trip can likewise never
+                           run at once. This replaces the frontend's old
+                           direct rosbridge goal-sending for such buttons —
+                           the frontend now only ever triggers navigation
+                           through this endpoint or POST /voice/start, never
+                           by publishing a Nav2 goal itself.
 
     GET  /estop/status →  {"estopped": bool} — is serial_bridge currently
                            killed via /estop?
@@ -140,20 +214,6 @@ Endpoints (CORS-open so the browser can call them directly):
                            planner, etc. keep running) — for when the robot
                            is physically misbehaving and needs motors cut
                            right now, not a graceful stop of everything.
-    POST /teleop/start →  starts ONLY serial_bridge (no SLAM/Nav2) so the drive pad
-                           works immediately — called when the UI's joystick
-                           button is clicked. No-op if serial_bridge is already
-                           up (standalone or as part of the nav stack, or the nav
-                           stack is still booting and will launch it itself).
-                           Also recovers from the motors-cut state left by
-                           "Stop Argo", but NOT from an operator's explicit
-                           /estop (returns status "estopped" — use /estop/resume).
-                           Response: {"ok": bool, "status": "started"|"already_running"|
-                           "nav_starting"|"estopped"}.
-    POST /teleop/stop  →  called when the drive pad closes: zero-ramps and kills
-                           serial_bridge, unless the nav stack is running (then
-                           left alone, status "nav_running"). Not an e-stop —
-                           motors stay resumable. Status: "stopped"|"not_running"|"nav_running".
     POST /estop/resume →  relaunches serial_bridge directly to resume manual
                            control after an /estop, without restarting the
                            whole nav stack.
@@ -193,11 +253,11 @@ import subprocess
 import threading
 import time
 import uuid as uuid_lib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 
 import psycopg2
 import psycopg2.extras
-import robot_settings
 from dotenv import load_dotenv
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -219,8 +279,12 @@ NAV_SCRIPT     = os.path.join(_ROOT, 'argo_sonic_nav.py')
 MAPS_DIR       = os.path.join(_ROOT, 'src', 'argo_mini', 'maps')
 WAYPOINTS_DIR  = os.path.join(_ROOT, 'src', 'argo_mini', 'waypoints')
 SONIC_DIR      = os.path.join(_ROOT, 'sonic')
-# ROS-aware one-shot Nav2 bridge, run from a background thread for
-# single-destination trips (POST /nav/goto, e.g. the "Go to kitchen" button).
+SONIC_SCRIPT   = os.path.join(SONIC_DIR, 'main_agent.py')
+VOICE_LOG_PATH = os.path.join(SONIC_DIR, 'voice_session.log')
+# Same ROS-aware one-shot bridge main_agent.py's navigate_and_wait() shells
+# out to — used directly here (background thread, not a subprocess of
+# main_agent.py) for single-destination trips that have no conversation
+# attached (POST /nav/goto, e.g. the "Go to kitchen" button).
 NAV_BRIDGE_SCRIPT = os.path.join(SONIC_DIR, 'nav_bridge.py')
 # Offline NTFields training (POST /ntfields/train) — pure Python/torch, no
 # rclpy import at all (confirmed by reading the script), so unlike
@@ -230,13 +294,10 @@ NAV_BRIDGE_SCRIPT = os.path.join(SONIC_DIR, 'nav_bridge.py')
 # mode already use — a model is looked up by map name at <dir>/<map>.pt.
 NTFIELDS_TRAIN_SCRIPT = os.path.join(_ROOT, 'src', 'argo_mini', 'argo_mini', 'ntfields_offline_train.py')
 NTFIELDS_MODELS_DIR = os.path.expanduser('~/ntfields_models')
-# 3D wall models (GET /maps/<name>/model.glb) — generated from the saved map by map_to_3d.py.
-MAP3D_SCRIPT = os.path.join(_ROOT, 'map_to_3d.py')
-MAP3D_DIR    = os.path.join(MAPS_DIR, '3d')
 
 # Menu + orders now live in Postgres (see sonic/*.sql, sonic/seed_db.py)
 # instead of src/argo_mini/menu/menu.json + src/argo_mini/orders/*.json —
-# load sonic/.env so DATABASE_URL/ROBOT_UID agree.
+# load the same .env main_agent.py uses so DATABASE_URL/ROBOT_UID agree.
 load_dotenv(os.path.join(SONIC_DIR, '.env'))
 DATABASE_URL = os.environ.get('DATABASE_URL')
 ROBOT_UID    = os.environ.get('ROBOT_UID', 'SONIC-001')
@@ -245,11 +306,12 @@ ROBOT_UID    = os.environ.get('ROBOT_UID', 'SONIC-001')
 # repeated saves before a page refresh don't create duplicate rows — same
 # namespace/approach as sonic/seed_db.py's menu_item_uuid().
 MENU_UUID_NAMESPACE = uuid_lib.UUID('6f6a1e2e-4b8a-5e3a-9c2a-2f2f2f2f2f2f')
-NAV_STARTUP_STEPS = 15   # step_done() calls in argo_sonic_nav.py's main()
-NAV_PROGRESS_HISTORY_PATH = '/tmp/argo_nav_progress_history'  # every step, one kind|epoch|message per line
+_VOICE_ACTIONS = {'order', 'deliver', 'bill', 'room_service'}
 NAV_PROGRESS_PATH = '/tmp/argo_nav_progress'  # written by NAV_SCRIPT (whichever nav script is active)
 NAV_LOG_PATH       = '/tmp/argo_nav_output.log'  # full stdout+stderr of the current/last NAV_SCRIPT run
 NAV_LOG_TAIL_LINES = 300
+VOICE_PROGRESS_PATH = '/tmp/argo_voice_progress'  # written by main_agent.py's report_phase() — read by /voice/status
+VOICE_PROGRESS_MAX_AGE_S = 30  # ignore (and don't surface) a phase report older than this — self-heals a stale file
 PORT    = 8888
 
 
@@ -509,6 +571,21 @@ def run_bms_thread():
     loop.run_until_complete(_bms_telemetry_loop())
 
 
+def _sonic_python():
+    """Prefer the repo-root venv actually present on this checkout — 'venv/'
+    is what sonic/README.md's setup instructions actually produce (the name
+    'venv', not '.venv', despite what older docs said), check both anyway
+    in case a machine used the other name, else fall back to a bare
+    'python3' on PATH so a machine without either venv doesn't hard-fail
+    this whole file — the subprocess just fails its own import/API-key
+    checks fast instead, visible via a quick 'not running' flip in
+    GET /voice/status."""
+    for name in ('venv', '.venv'):
+        candidate = os.path.join(_ROOT, name, 'bin', 'python3')
+        if os.path.isfile(candidate):
+            return candidate
+    return 'python3'
+
 _NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 def _safe_name(name):
@@ -545,8 +622,8 @@ _location_id_cache = None
 
 def _menu_location_id():
     """Resolves the single location_id this deployment's menu/orders belong
-    to, via the ROBOT_UID -> robots -> location_id lookup
-    (see sonic/seed_db.py) — one robot, one venue, one menu/table set."""
+    to, via the same ROBOT_UID -> robots -> location_id lookup main_agent.py
+    uses (see sonic/seed_db.py) — one robot, one venue, one menu/table set."""
     global _location_id_cache
     if _location_id_cache is not None:
         return _location_id_cache
@@ -563,6 +640,64 @@ def _menu_location_id():
     except Exception as e:
         print(f'[launcher] location lookup failed: {e}')
         return None
+
+
+_robot_id_cache = None
+
+
+def _dialogue_robot_id():
+    """Resolves robots.robot_id (the PK sonic_dialogue_sessions.robot_id
+    references) from ROBOT_UID — same lookup shape as _menu_location_id()
+    above, just a different column off the same robots row."""
+    global _robot_id_cache
+    if _robot_id_cache is not None:
+        return _robot_id_cache
+    conn = _db()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT robot_id FROM robots WHERE robot_uid = %s', (ROBOT_UID,))
+            row = cur.fetchone()
+        if row:
+            _robot_id_cache = str(row[0])
+        return _robot_id_cache
+    except Exception as e:
+        print(f'[launcher] robot_id lookup failed: {e}')
+        return None
+
+
+def _get_voice_transcript():
+    """Most recent sonic_dialogue_session for this robot, with its turns —
+    {"session_id", "started_at", "turns": [{"role","text","created_at"}]}.
+    Empty turns (not an error) if there's no session yet, same degrade-to-
+    empty convention _get_menu_response() above uses when _db()/robot_id
+    lookup comes back empty."""
+    robot_id = _dialogue_robot_id()
+    conn = _db()
+    if conn is None or robot_id is None:
+        return {'session_id': None, 'started_at': None, 'turns': []}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT session_id, started_at FROM sonic_dialogue_sessions
+                   WHERE robot_id = %s ORDER BY started_at DESC LIMIT 1""",
+                (robot_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {'session_id': None, 'started_at': None, 'turns': []}
+            session_id, started_at = row
+            cur.execute(
+                """SELECT role, text, created_at FROM sonic_dialogue_turns
+                   WHERE session_id = %s ORDER BY created_at ASC""",
+                (session_id,),
+            )
+            turns = [{'role': r, 'text': t, 'created_at': c.isoformat()} for r, t, c in cur.fetchall()]
+        return {'session_id': str(session_id), 'started_at': started_at.isoformat(), 'turns': turns}
+    except Exception as e:
+        print(f'[launcher] voice transcript query failed: {e}')
+        return {'session_id': None, 'started_at': None, 'turns': []}
 
 
 def _resolve_menu_item_id(client_id):
@@ -713,8 +848,8 @@ def _read_orders_db():
     path segment callers still pass is accepted for URL compatibility with
     the frontend (which scopes by SLAM map) but not filtered on — Postgres
     models one menu/table-set per location, not per map (see seed_db.py).
-    Multiple `orders` rows can exist per active visit (the separate desktop
-    ordering robot/station writes one per confirm) — these are summed into a
+    Multiple `orders` rows can exist per active visit (main_agent.py's
+    db_place_order() writes one per confirm) — these are summed into a
     single per-table entry to match the old one-order-per-table file shape."""
     location_id = _menu_location_id()
     conn = _db()
@@ -787,8 +922,66 @@ def _clear_table_order(table_id):
         print(f'[launcher] order clear failed: {e}')
 
 
+def _get_voice_nav_enabled():
+    """Staff-facing kill-switch main_agent.py's navigate_and_wait() checks
+    before every Kitchen<->Table trip. Defaults to True (including when
+    DB is unset) so a missing DB doesn't read as 'disabled'."""
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return True
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT voice_nav_enabled FROM locations WHERE location_id = %s', (location_id,))
+            row = cur.fetchone()
+            return bool(row[0]) if row else True
+    except Exception as e:
+        print(f'[launcher] voice_nav_enabled read failed: {e}')
+        return True
+
+
+def _set_voice_nav_enabled(enabled):
+    location_id = _menu_location_id()
+    conn = _db()
+    if conn is None or location_id is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute('UPDATE locations SET voice_nav_enabled = %s WHERE location_id = %s',
+                        (bool(enabled), location_id))
+        return True
+    except Exception as e:
+        print(f'[launcher] voice_nav_enabled write failed: {e}')
+        return False
+
+
+def _read_voice_progress():
+    """Reads main_agent.py's report_phase() output — {phase, text, table,
+    updated_at} — same idea as /nav_progress reading NAV_PROGRESS_PATH.
+    Returns (None, None) if the file is missing, unparseable, or older than
+    VOICE_PROGRESS_MAX_AGE_S (a stale phase, e.g. from an uncleanly killed
+    session, must never be shown as current)."""
+    if not os.path.isfile(VOICE_PROGRESS_PATH):
+        return None, None
+    try:
+        with open(VOICE_PROGRESS_PATH, 'r') as f:
+            data = json.loads(f.read())
+        updated_at = datetime.datetime.fromisoformat(data['updated_at'])
+        age_s = (datetime.datetime.now() - updated_at).total_seconds()
+        if age_s > VOICE_PROGRESS_MAX_AGE_S:
+            return None, None
+        return data.get('phase'), data.get('text')
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+
+
 def _run_nav_bridge(destination, map_name, timeout_s=300.0):
-    """Sourced-ROS-env one-shot trip, used by the /nav/goto background worker below."""
+    """Same sourced-ROS-env one-shot trip as main_agent.py's
+    navigate_and_wait() — used directly by the /nav/goto background worker
+    below, gated by the same staff kill-switch."""
+    if not _get_voice_nav_enabled():
+        print(f'[launcher] voice_nav_enabled is off — skipping /nav/goto trip to {destination!r}')
+        return False
     cmd = (
         'source /opt/ros/humble/setup.bash && '
         f'source {_ROOT}/install/setup.bash && '
@@ -806,8 +999,12 @@ def _run_nav_bridge(destination, map_name, timeout_s=300.0):
     return ok
 
 
-# Independent from _proc above (SLAM/Nav2 stack) — a single-destination
-# trip, e.g. "Go to kitchen".
+# Independent from _voice_proc above (table dispatch / wake loop) and from
+# _proc above (SLAM/Nav2 stack) — a single-destination trip with no
+# conversation attached, e.g. "Go to kitchen". Mutual exclusion against
+# _voice_proc is enforced where each is started (POST /nav/goto and
+# POST /voice/start), since both ultimately drive the same Nav2 action
+# server and can never really run at once.
 _nav_goto_lock = threading.Lock()
 _nav_goto_status = {'running': False, 'destination': None, 'phase': None, 'phase_text': None}
 
@@ -827,8 +1024,8 @@ def _nav_goto_worker(destination, map_name):
 
 
 # Independent from everything above — a CPU/GPU-bound subprocess (torch),
-# never touches Nav2/serial, so it needs no mutual exclusion against
-# _nav_goto/_proc, only against a second training job stepping
+# never touches Nav2/serial/the mic, so it needs no mutual exclusion against
+# _voice_proc/_nav_goto/_proc, only against a second training job stepping
 # on the same GPU/output file at once (self-exclusion via _ntfields_train_lock).
 _ntfields_train_lock = threading.Lock()
 _ntfields_train_status = {'running': False, 'map': None, 'phase': None, 'phase_text': None}
@@ -857,171 +1054,6 @@ def _ntfields_train_worker(map_name):
             'phase': 'done' if ok else 'failed',
             'phase_text': f'NTFields model ready for "{map_name}"' if ok else f'Training failed for "{map_name}"',
         }
-
-def _map3d_python():
-    """Interpreter for map_to_3d.py, or None. It needs opencv/shapely>=2.1/trimesh/matplotlib
-    (requirements-map3d.txt), which the main venv deliberately doesn't carry — so look for a
-    dedicated env: $MAP3D_PYTHON, then <repo>/venv-map3d, then ~/.venvs/map3d."""
-    candidates = [
-        os.environ.get('MAP3D_PYTHON', ''),
-        os.path.join(_ROOT, 'venv-map3d', 'bin', 'python'),
-        os.path.expanduser('~/.venvs/map3d/bin/python'),
-    ]
-    for c in candidates:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    return None
-
-
-# Same shape as the NTFields job above: one CPU-only subprocess at a time, unrelated to
-# Nav2/serial, so it only excludes a second build (_map3d_lock), nothing else.
-_map3d_lock = threading.Lock()
-_map3d_status = {'running': False, 'map': None, 'phase': None, 'phase_text': None}
-
-
-def _map3d_paths(map_name):
-    return os.path.join(MAP3D_DIR, f'{map_name}.glb')
-
-
-def _map3d_worker(map_name, python):
-    global _map3d_status
-    with _map3d_lock:
-        _map3d_status = {'running': True, 'map': map_name, 'phase': 'building',
-                         'phase_text': f'Building 3D model for "{map_name}"…'}
-    os.makedirs(MAP3D_DIR, exist_ok=True)
-    map_yaml = os.path.join(MAPS_DIR, f'{map_name}.yaml')
-    # Build under a temp name, then rename — the viewer must never fetch a half-written GLB.
-    tmp_base = os.path.join(MAP3D_DIR, f'{map_name}.building')
-    cmd = [python, MAP3D_SCRIPT, '--map', map_yaml, '--output', tmp_base + '.glb',
-           '--formats', 'glb', '--no-preview']
-    ok = False
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        ok = result.returncode == 0 and os.path.isfile(tmp_base + '.glb')
-        if ok:
-            os.replace(tmp_base + '.glb', _map3d_paths(map_name))
-        else:
-            print(f'[launcher] 3D model build failed for {map_name!r}: {(result.stdout + result.stderr)[-1000:]}')
-    except subprocess.TimeoutExpired:
-        print(f'[launcher] 3D model build for {map_name!r} timed out after 10 min')
-    except OSError as e:
-        print(f'[launcher] 3D model build for {map_name!r} could not run: {e}')
-    for leftover in (tmp_base + '.glb', tmp_base + '_meta.json'):
-        try:
-            os.remove(leftover)
-        except OSError:
-            pass
-    with _map3d_lock:
-        _map3d_status = {
-            'running': False, 'map': map_name,
-            'phase': 'done' if ok else 'failed',
-            'phase_text': f'3D model ready for "{map_name}"' if ok else f'3D model build failed for "{map_name}"',
-        }
-
-
-# Same list argo_sonic_nav.py's own main() pkills defensively before ITS
-# startup (to clear stragglers from a previous unclean exit) — duplicated
-# here rather than imported since that file is a standalone script, not a
-# module. Used by POST /stop's full teardown (see the /stop handler below)
-# to catch anything that survives _stop_locked()'s process-group SIGTERM/
-# SIGKILL — e.g. a node that escaped its group, or was started by hand
-# outside this launcher entirely — so "Stop Argo" actually guarantees a
-# clean slate immediately, instead of only the NEXT nav start silently
-# sweeping up what the PREVIOUS stop left behind.
-ROS_NODE_PROCESS_NAMES = [
-    "slam_toolbox", "serial_bridge", "rplidar_composition", "rviz2",
-    "ntfields_planner_node", "planner_server", "controller_server",
-    "bt_navigator", "velocity_smoother", "scan_relay",
-    "robot_state_publisher", "depth_safety_shield", "ekf_node",
-    "ascamera_node", "pointcloud_restamper", "behavior_server", "safety_shield",
-]
-
-
-# Extra substrings (beyond ROS_NODE_PROCESS_NAMES) that identify anything the
-# nav/SLAM stack or its helpers spawn. Matched against the full cmdline, so the
-# `sh -c bash -c "... ros2 launch ascamera ..."` camera wrappers and
-# `ros2 run` wrappers are caught too — those never contain "ascamera_node" and
-# were the residue the old name-only pkill left behind.
-_NAV_EXTRA_PATTERNS = [
-    "ascamera", "ros2 launch argo_mini", "ros2 run argo_mini", "argo_sonic_nav",
-    "nav_lifecycle", "nav_bridge.py", "start_argo_nav", "start_ntfields",
-    "start_slam", "start_nav_stepwise", "static_transform_publisher",
-    "mppi_reverse_controller", "goal_approach_limiter", "map_server", "amcl",
-    "waypoint_follower", "smoother_server", "lifecycle_manager",
-    "frontier_explorer", "slam_teleop", "ekf_node", "rplidar", "nav2_",
-    "_ros2_daemon",
-]
-# Never touched: the UI's own transport and this launcher.
-_NAV_PROTECTED = ("rosbridge", "rosapi", "backend/launcher.py")
-
-
-def _ancestor_pids():
-    pids, pid = set(), os.getpid()
-    while pid > 1:
-        pids.add(pid)
-        try:
-            with open(f'/proc/{pid}/stat') as f:
-                pid = int(f.read().rsplit(')', 1)[1].split()[1])
-        except (OSError, ValueError, IndexError):
-            break
-    return pids
-
-
-def _nav_stack_pids():
-    """PIDs of every leftover nav-stack process, found by scanning /proc cmdlines
-    (pgrep/pkill -f would also match this launcher's own shell commands)."""
-    patterns = ROS_NODE_PROCESS_NAMES + _NAV_EXTRA_PATTERNS
-    skip = _ancestor_pids()
-    found = []
-    for entry in os.listdir('/proc'):
-        if not entry.isdigit() or int(entry) in skip:
-            continue
-        try:
-            with open(f'/proc/{entry}/cmdline', 'rb') as f:
-                cmd = f.read().replace(b'\0', b' ').decode(errors='ignore')
-        except OSError:
-            continue
-        if not cmd or any(x in cmd for x in _NAV_PROTECTED):
-            continue
-        if any(p in cmd for p in patterns):
-            found.append((int(entry), cmd[:120]))
-    return found
-
-
-def _kill_ros_stragglers():
-    """Final sweep for POST /stop: SIGKILL everything the nav stack left behind
-    (retrying until /proc is clean), free the motor/lidar ports, and reset the
-    ros2 CLI daemon — a clean slate equivalent to a reboot of the nav side.
-    rosbridge/rosapi are deliberately kept: the UI talks to the robot through
-    them. Returns the list of processes that could NOT be killed (normally [])."""
-    survivors = []
-    for _ in range(6):
-        survivors = _nav_stack_pids()
-        if not survivors:
-            break
-        for pid, _cmd in survivors:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        time.sleep(0.5)
-    else:
-        survivors = _nav_stack_pids()
-    for dev in ('/dev/esp32', '/dev/lidar'):
-        try:
-            subprocess.run(['fuser', '-k', '-9', dev], capture_output=True, timeout=5)
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-    for leftover in (NAV_PROGRESS_PATH,):
-        try:
-            with open(leftover, 'w'):
-                pass
-        except OSError:
-            pass
-    if survivors:
-        print(f'[launcher] stop: {len(survivors)} process(es) survived SIGKILL: {survivors}')
-    return survivors
-
 
 # ── State ────────────────────────────────────────────────────────────────────
 
@@ -1073,10 +1105,134 @@ def _stop_locked():
                 except subprocess.TimeoutExpired:
                     print(f'[launcher] pid={pid} did not die even after SIGKILL — giving up waiting')
     _proc, _mode, _map = None, None, None
+    # The wake-word loop is intentionally left running here — it's always
+    # live once the launcher itself is up (see the bootstrap at the bottom
+    # of this file), independent of whether the nav stack is running. A
+    # guest can still be greeted and told "having trouble getting to your
+    # table" (n_navigate_to_table's own graceful failure path) rather than
+    # Sonic being completely unreachable whenever nav happens to be down.
+
+
+# Independent from _proc/_mode/_map/_lock above on purpose — a voice session
+# starting/stopping must never contend with or depend on the SLAM/Nav2
+# stack's own state.
+_voice_proc: subprocess.Popen | None = None
+_voice_action: str | None = None
+_voice_map: str | None = None
+_voice_table: str | None = None
+_voice_lock = threading.Lock()
+
+
+def _voice_stop_locked():
+    """Kill the current voice-session process group, if any, and block
+    until it's genuinely gone before returning. Caller must hold
+    _voice_lock.
+
+    Previously this sent SIGTERM and cleared state immediately without
+    waiting — but main_agent.py can take a real second or two to tear
+    down (flushing DB writes, closing audio streams). A /voice/start
+    called right after that /voice/stop returned could then race the
+    still-dying previous session: same mic/speaker hardware, same
+    VOICE_PROGRESS_PATH — and the wake-loop resume thread
+    (_resume_wake_loop_after) could restart the wake loop while the new
+    dispatch was already trying to use the mic. Same wait-then-escalate
+    pattern as _stop_locked() above.
+    """
+    global _voice_proc, _voice_action, _voice_map, _voice_table
+    if _voice_proc and _voice_proc.poll() is None:
+        pid = _voice_proc.pid
+        try:
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            pgid = None
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                pgid = None
+        if pgid is not None:
+            try:
+                _voice_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print(f'[launcher] voice pid={pid} still alive 5s after SIGTERM — sending SIGKILL')
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    _voice_proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    print(f'[launcher] voice pid={pid} did not die even after SIGKILL — giving up waiting')
+    _voice_proc, _voice_action, _voice_map, _voice_table = None, None, None, None
+
+
+# Continuous wake-word loop ("Hi Sonic") — main_agent.py run with no
+# TABLE_NO. Always live: started once, unconditionally, in this file's own
+# __main__ bootstrap below, independent of the nav stack's state entirely
+# (main_agent.py itself is a plain non-ROS process — it only needs Nav2 for
+# the moment it actually shells out to nav_bridge.py to navigate a leg, and
+# fails that gracefully with an apology if Nav2 isn't up yet). It shares the
+# same mic/speaker as a table dispatch (_voice_proc above) and can't run
+# alongside one, so POST /voice/start pauses it for the dispatch's
+# duration and a background thread restarts it once that dispatch process
+# exits — see the pause/resume block there. _wake_should_run is separate
+# from "is _wake_proc alive right now": it's the standing intent (always
+# True after boot), independent of it being briefly paused for a dispatch.
+_wake_proc: subprocess.Popen | None = None
+_wake_should_run = False
+_wake_lock = threading.Lock()
+# Lock ordering: _lock/_voice_lock are always acquired BEFORE _wake_lock,
+# never the reverse, so pausing/resuming the wake loop from within either
+# of those sections can never deadlock against it.
+
+
+def _wake_start_locked():
+    """Start the continuous wake-word loop, if not already running. Caller
+    must hold _wake_lock."""
+    global _wake_proc
+    if _wake_proc and _wake_proc.poll() is None:
+        return
+    if not os.path.isfile(SONIC_SCRIPT):
+        print(f'[launcher] wake-word loop not started — script not found: {SONIC_SCRIPT}')
+        return
+    try:
+        with open(VOICE_LOG_PATH, 'a'):
+            pass
+        os.chmod(VOICE_LOG_PATH, 0o666)
+        log_f = open(VOICE_LOG_PATH, 'a')
+        log_f.write(f"\n{'='*70}\n[{datetime.datetime.now().isoformat()}] "
+                    f"wake-word loop starting\n{'='*70}\n")
+        log_f.flush()
+    except OSError:
+        log_f = subprocess.DEVNULL
+    _wake_proc = subprocess.Popen(
+        [_sonic_python(), SONIC_SCRIPT],   # no TABLE_NO -> continuous wake-word mode
+        cwd=SONIC_DIR,
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=log_f,
+        stderr=log_f,
+        env=os.environ.copy(),
+    )
+    if log_f is not subprocess.DEVNULL:
+        log_f.close()
+    print(f'[launcher] wake-word loop started  pid={_wake_proc.pid}')
+
+
+def _wake_stop_locked():
+    """Stop the wake-word loop, if running. Caller must hold _wake_lock."""
+    global _wake_proc
+    if _wake_proc and _wake_proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(_wake_proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    _wake_proc = None
 
 
 # Independent again, on purpose — an operator hitting emergency-stop on the
-# motor driver must work regardless of whatever state the nav stack is in, and must never be blocked waiting on either of their locks.
+# motor driver must work regardless of whatever state the nav stack or voice
+# session are in, and must never be blocked waiting on either of their locks.
 # serial_bridge isn't tracked as its own subprocess by this file under normal
 # operation (it's one of many children argo_sonic_nav.py itself launches and
 # tracks), so /estop can't just kill "the" tracked Popen — it kills by name,
@@ -1086,13 +1242,10 @@ def _stop_locked():
 # having to restart the whole stack (SLAM, planner, etc. all keep running).
 _serial_proc: subprocess.Popen | None = None
 _serial_estopped = False
-_serial_estop_manual = False   # True only for an operator's POST /estop, not /stop's teardown
 _serial_lock = threading.Lock()
-SERIAL_PORT = '/dev/esp32'
+SERIAL_PORT = '/dev/ttyUSB1'
 SERIAL_BAUD = 115200
-SERIAL_LEFT_TICK_SCALE = 0.51
-SERIAL_INVERT_LEFT = False
-SERIAL_INVERT_RIGHT = True  # right motor spins opposite to left after the Oct-2026 rebuild
+SERIAL_LEFT_TICK_SCALE = 0.66
 
 
 def _estop_locked():
@@ -1125,116 +1278,22 @@ def _estop_locked():
         subprocess.run(['bash', '-c', zero_cmd], capture_output=True, timeout=8)
     except subprocess.TimeoutExpired:
         pass  # still fall through to the kill below regardless
-    # Lights off BEFORE the bridge dies (it is the only path to the ESP32).
-    # The bridge applies its own relay inversion, so just publish false.
-    light_cmd = (
-        "source /opt/ros/humble/setup.bash && "
-        f"source {_ROOT}/install/setup.bash && "
-        "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
-        "ros2 topic pub -r 5 -t 5 /light/gpio17 std_msgs/msg/Bool '{data: false}'"
-    )
-    try:
-        subprocess.run(['bash', '-c', light_cmd], capture_output=True, timeout=8)
-    except subprocess.TimeoutExpired:
-        pass
-    # SIGTERM first: the bridge's handler also switches the light off and
-    # stops the motors on its way out. SIGKILL only if it doesn't exit.
-    subprocess.run(['pkill', '-TERM', '-f', 'serial_bridge'], capture_output=True)
-    deadline = time.time() + 3.0
-    while time.time() < deadline and _serial_bridge_pids():
-        time.sleep(0.1)
     subprocess.run(['pkill', '-9', '-f', 'serial_bridge'], capture_output=True)
     _serial_proc = None
     _serial_estopped = True
 
 
-# Everything that publishes velocity toward serial_bridge (directly or via the
-# shield). Killed FIRST on /stop so nothing can fight the zero-ramp below —
-# otherwise Nav2 keeps streaming cmd_vel at 20 Hz interleaved with our 10 Hz
-# zeros and the motors never actually ramp down while the stack tears down.
-CMD_VEL_SOURCES = (
-    "bt_navigator", "controller_server", "behavior_server", "velocity_smoother",
-    "safety_shield", "patrol_manager", "sonic_nlp",
-)
-
-
-def _halt_motors_locked():
-    """Motors first: silence every velocity source, then ramp to zero and kill
-    serial_bridge (_estop_locked). Only after this returns does /stop tear down
-    the rest of the stack. Caller must hold _serial_lock."""
-    for name in CMD_VEL_SOURCES:
-        subprocess.run(["pkill", "-9", "-f", name], capture_output=True)
-    _estop_locked()
-
-
-def _serial_bridge_pids():
-    """PIDs of real serial_bridge processes (ros2-run'd or `python3 serial_bridge.py`).
-    Scans /proc argv instead of `pgrep -f`, which also matches any shell whose
-    command line merely mentions the name (e.g. a `bash -c "... serial_bridge ..."`)."""
-    pids = []
-    for entry in os.listdir('/proc'):
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f'/proc/{entry}/cmdline', 'rb') as f:
-                argv = [a.decode(errors='ignore') for a in f.read().split(b'\0') if a]
-        except OSError:
-            continue
-        if not argv or os.path.basename(argv[0]) in ('bash', 'sh', 'timeout', 'pgrep', 'grep'):
-            continue
-        if any(os.path.basename(a) in ('serial_bridge', 'serial_bridge.py') for a in argv[:3]):
-            pids.append(int(entry))
-    return pids
-
-
-def _serial_bridge_running():
-    """serial_bridge process alive anywhere — standalone or as a child of the
-    nav stack."""
-    return bool(_serial_bridge_pids())
-
-
-def _teleop_start():
-    """Bring up just serial_bridge for manual driving. Returns a status string."""
-    with _serial_lock:
-        if _serial_estopped and _serial_estop_manual:
-            return 'estopped'
-        if _proc is not None and _proc.poll() is None:
-            return 'nav_starting' if not _serial_bridge_running() else 'already_running'
-        if _serial_bridge_running():
-            return 'already_running'
-        _estop_resume_locked()
-        return 'started'
-
-
-def _teleop_stop():
-    """Stop the motor driver when the drive pad closes: zero-ramp then kill,
-    like an e-stop, but NOT left in the estopped state. Never touches a driver
-    that belongs to a running nav stack."""
-    global _serial_estopped
-    with _serial_lock:
-        if _proc is not None and _proc.poll() is None:
-            return 'nav_running'
-        if not _serial_bridge_running():
-            return 'not_running'
-        _estop_locked()
-        _serial_estopped = False
-        return 'stopped'
-
-
 def _estop_resume_locked():
     """Relaunch serial_bridge directly, sourcing the same ROS environment
     argo_sonic_nav.py's own build_env() does. Caller must hold _serial_lock."""
-    global _serial_proc, _serial_estopped, _serial_estop_manual
-    _serial_estop_manual = False
+    global _serial_proc, _serial_estopped
     cmd = (
         "source /opt/ros/humble/setup.bash && "
         f"source {_ROOT}/install/setup.bash && "
         "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
         "ros2 run argo_mini serial_bridge --ros-args "
         f"-p port:={SERIAL_PORT} -p baud:={SERIAL_BAUD} "
-        f"-p left_tick_scale:={SERIAL_LEFT_TICK_SCALE} "
-        f"-p invert_left:={'true' if SERIAL_INVERT_LEFT else 'false'} "
-        f"-p invert_right:={'true' if SERIAL_INVERT_RIGHT else 'false'}"
+        f"-p left_tick_scale:={SERIAL_LEFT_TICK_SCALE}"
     )
     _serial_proc = subprocess.Popen(
         ['bash', '-c', cmd],
@@ -1244,6 +1303,98 @@ def _estop_resume_locked():
         stderr=subprocess.DEVNULL,
     )
     _serial_estopped = False
+
+
+# ── Standalone teleop (rosbridge + serial_bridge, no nav stack) ──────────────
+
+_teleop_serial_proc: subprocess.Popen | None = None
+_teleop_rosbridge_proc: subprocess.Popen | None = None
+_teleop_lock = threading.Lock()
+
+ROSBRIDGE_SCRIPT = os.path.join(_ROOT, 'sh', 'start-rosbridge.sh')
+
+
+def _rosbridge_already_running():
+    r = subprocess.run(['pgrep', '-f', 'rosbridge'], capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+def _teleop_start_locked():
+    global _teleop_serial_proc, _teleop_rosbridge_proc
+    _teleop_stop_locked()
+    subprocess.run(['pkill', '-9', '-f', 'serial_bridge'], capture_output=True)
+    time.sleep(1)
+    subprocess.run(
+        "chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || "
+        "sudo chmod 666 /dev/ttyUSB0 /dev/ttyUSB1 2>/dev/null || true",
+        shell=True,
+    )
+    if _rosbridge_already_running():
+        _teleop_rosbridge_proc = None
+    else:
+        _teleop_rosbridge_proc = subprocess.Popen(
+            ['bash', ROSBRIDGE_SCRIPT],
+            cwd=_ROOT,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(3)
+    serial_cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        f"source {_ROOT}/install/setup.bash && "
+        "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        "ros2 run argo_mini serial_bridge --ros-args "
+        f"-p port:={SERIAL_PORT} -p baud:={SERIAL_BAUD} "
+        f"-p left_tick_scale:={SERIAL_LEFT_TICK_SCALE}"
+    )
+    _teleop_serial_proc = subprocess.Popen(
+        ['bash', '-c', serial_cmd],
+        cwd=_ROOT,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _teleop_stop_locked():
+    global _teleop_serial_proc, _teleop_rosbridge_proc
+    if _teleop_serial_proc and _teleop_serial_proc.poll() is None:
+        zero_cmd = (
+            "source /opt/ros/humble/setup.bash && "
+            f"source {_ROOT}/install/setup.bash && "
+            "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+            "ros2 topic pub -r 10 -t 12 /cmd_vel geometry_msgs/msg/Twist "
+            "'{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'"
+        )
+        try:
+            subprocess.run(['bash', '-c', zero_cmd], capture_output=True, timeout=8)
+        except subprocess.TimeoutExpired:
+            pass
+    for proc in (_teleop_serial_proc, _teleop_rosbridge_proc):
+        if proc and proc.poll() is None:
+            pid = proc.pid
+            try:
+                pgid = os.getpgid(pid)
+            except ProcessLookupError:
+                continue
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+    _teleop_serial_proc = None
+    _teleop_rosbridge_proc = None
 
 
 # ── HTTP handler ─────────────────────────────────────────────────────────────
@@ -1279,37 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
                         timestamp = int(ts_str)
                     except ValueError:
                         timestamp = None
-            # Every startup step so far (oldest first) so the dashboard can
-            # list them all below the battery until Nav2 is ready.
-            steps = []
-            if os.path.isfile(NAV_PROGRESS_HISTORY_PATH):
-                try:
-                    with open(NAV_PROGRESS_HISTORY_PATH, 'r', errors='replace') as f:
-                        for line in f.read().splitlines()[-60:]:
-                            k, _, rest = line.partition('|')
-                            ts_, _, msg_ = rest.partition('|')
-                            if msg_:
-                                steps.append({'kind': k, 'time': int(ts_) if ts_.isdigit() else None, 'message': msg_})
-                except OSError:
-                    pass
-            # Launch progress 0-100, from the number of startup steps completed
-            # (argo_sonic_nav.py logs "Ready  >>  <step>" for each). 100 only on
-            # READY, which the script now reports after EVERY node is up.
-            done = 0
-            try:
-                with open(NAV_PROGRESS_HISTORY_PATH, 'r', errors='replace') as f:
-                    done = sum(1 for ln in f if '|Ready  >>  ' in ln)
-            except OSError:
-                pass
-            if status == 'READY':
-                percent = 100
-            elif status is None:
-                percent = 0
-            else:
-                percent = min(95, 5 + round(90 * done / NAV_STARTUP_STEPS))
-            self._json({'status': status, 'message': message, 'timestamp': timestamp,
-                        'age': (time.time() - timestamp) if timestamp else None,   # robot-clock age: browser clock may differ
-                        'steps': steps, 'percent': percent})
+            self._json({'status': status, 'message': message, 'timestamp': timestamp})
 
         elif self.path == '/nav_log':
             log = ''
@@ -1321,14 +1442,6 @@ class Handler(BaseHTTPRequestHandler):
 
         elif self.path == '/config':
             self._json({'maps_dir': MAPS_DIR})
-
-        elif self.path == '/settings':
-            snap = robot_settings.snapshot()
-            snap['voice'].update(_voice_status())
-            self._json(snap)
-
-        elif self.path == '/audio/devices':
-            self._json(robot_settings.list_audio_devices())
 
         elif self.path == '/maps':
             names = sorted(
@@ -1396,46 +1509,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self._write(data)
 
-        elif len(parts) == 3 and parts[0] == 'maps' and parts[2] == 'model':
-            name = _safe_name(parts[1])
-            if not name:
-                self._json({'error': 'invalid map name'}, 400)
-                return
-            glb = _map3d_paths(name)
-            exists = os.path.isfile(glb)
-            mtime = os.path.getmtime(glb) if exists else None
-            src_mtimes = [os.path.getmtime(p) for p in
-                          (os.path.join(MAPS_DIR, f'{name}.yaml'), os.path.join(MAPS_DIR, f'{name}.pgm'))
-                          if os.path.isfile(p)]
-            with _map3d_lock:
-                job = dict(_map3d_status)
-            building = job['running'] and job['map'] == name
-            self._json({
-                'available': _map3d_python() is not None and os.path.isfile(MAP3D_SCRIPT),
-                'exists': exists,
-                'mtime': mtime,
-                'stale': bool(exists and src_mtimes and max(src_mtimes) > mtime),
-                'building': building,
-                'phase': job['phase'] if job['map'] == name else None,
-                'phase_text': job['phase_text'] if job['map'] == name else None,
-            })
-
-        elif len(parts) == 3 and parts[0] == 'maps' and parts[2] == 'model.glb':
-            name = _safe_name(parts[1])
-            glb = _map3d_paths(name) if name else None
-            if not glb or not os.path.isfile(glb):
-                self._json({'error': 'not found'}, 404)
-                return
-            with open(glb, 'rb') as f:
-                data = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'model/gltf-binary')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Cache-Control', 'no-cache')
-            self.send_header('Content-Length', str(len(data)))
-            self.end_headers()
-            self._write(data)
-
         elif len(parts) == 2 and parts[0] == 'waypoints':
             name = _safe_name(parts[1])
             if not name:
@@ -1470,6 +1543,27 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(_read_orders_db().get(table_id, {}))
 
+        elif self.path == '/voice/status':
+            with _voice_lock:
+                running = _voice_proc is not None and _voice_proc.poll() is None
+                pid     = _voice_proc.pid if running else None
+                action  = _voice_action if running else None
+                map_    = _voice_map if running else None
+                table   = _voice_table if running else None
+            with _wake_lock:
+                wake_running = _wake_proc is not None and _wake_proc.poll() is None
+                wake_pending = _wake_should_run and not wake_running  # paused for a dispatch, or still starting up
+            phase, phase_text = _read_voice_progress()
+            self._json({'running': running, 'pid': pid, 'action': action, 'map': map_, 'table': table,
+                        'wake_loop_running': wake_running, 'wake_loop_pending': wake_pending,
+                        'phase': phase, 'phase_text': phase_text})
+
+        elif self.path == '/voice/transcript':
+            self._json(_get_voice_transcript())
+
+        elif self.path == '/voice/nav_enabled':
+            self._json({'enabled': _get_voice_nav_enabled()})
+
         elif self.path == '/nav/goto/status':
             with _nav_goto_lock:
                 self._json(dict(_nav_goto_status))
@@ -1478,6 +1572,11 @@ class Handler(BaseHTTPRequestHandler):
             with _ntfields_train_lock:
                 self._json(dict(_ntfields_train_status))
 
+        elif self.path == '/teleop/status':
+            with _teleop_lock:
+                running = _teleop_serial_proc is not None and _teleop_serial_proc.poll() is None
+            self._json({'running': running})
+
         elif self.path == '/estop/status':
             with _serial_lock:
                 self._json({'estopped': _serial_estopped})
@@ -1485,39 +1584,13 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/battery':
             self._json(dict(_latest_bms_data))
 
-        elif self.path == '/api/models':
-            try:
-                import glob
-                models_dir = os.path.join(os.path.dirname(__file__), '../frontend/public/models')
-                models_dir = os.path.abspath(models_dir)
-                if not os.path.exists(models_dir):
-                    print(f'[launcher] WARNING: models dir does not exist: {models_dir}')
-                    self._json([], 500)
-                    return
-                glb_files = glob.glob(os.path.join(models_dir, '*.glb')) + glob.glob(os.path.join(models_dir, '*.gltf'))
-                models = [
-                    {'name': os.path.splitext(os.path.basename(f))[0].title(), 'path': f'/models/{os.path.basename(f)}'}
-                    for f in sorted(glb_files)
-                ]
-                print(f'[launcher] models dir: {models_dir}, found: {len(models)} files: {[m["name"] for m in models]}')
-                self._json(models)
-            except Exception as e:
-                print(f'[launcher] ERROR fetching models: {e}')
-                self._json({'error': str(e)}, 500)
-
         else:
             self._json({'error': 'not found'}, 404)
 
     def do_POST(self):
-        global _proc, _mode, _map, _serial_estop_manual
+        global _proc, _mode, _map
 
         if self.path == '/start':
-            # "Start Argo" resumes the motors (e-stop, if it was engaged).
-            # Idempotent (_estop_resume_locked() only run if actually estopped).
-            with _serial_lock:
-                if _serial_estopped:
-                    _estop_resume_locked()
-
             mode = 'auto'
             map_name = None
             try:
@@ -1571,9 +1644,6 @@ class Handler(BaseHTTPRequestHandler):
                     with open(NAV_PROGRESS_PATH, 'w'):
                         pass
                     os.chmod(NAV_PROGRESS_PATH, 0o666)
-                    with open(NAV_PROGRESS_HISTORY_PATH, 'w'):
-                        pass
-                    os.chmod(NAV_PROGRESS_HISTORY_PATH, 0o666)
                 except OSError:
                     pass
                 # Fresh log file per run ('w', not 'a') — otherwise GET
@@ -1605,24 +1675,13 @@ class Handler(BaseHTTPRequestHandler):
                 _mode = mode
                 _map = map_name
             print(f'[launcher] stack started  mode={mode}  map={map_name}  pid={_proc.pid}')
-            robot_settings.apply_motion_after_start()
             self._json({'ok': True, 'status': 'started', 'pid': _proc.pid, 'mode': mode, 'map': map_name})
 
         elif self.path == '/stop':
-            # "Stop Argo" — nav/SLAM stack and motors stopped; clean idle state.
-            # Motors first (silence velocity sources, ramp to zero, kill
-            # serial_bridge), THEN tear down the rest of the stack — the
-            # teardown can take 10+ s and must not leave the wheels live.
-            _voice_set(False)   # silence the voice agent first
-            with _serial_lock:
-                _halt_motors_locked()
-                _serial_estop_manual = False   # full teardown, not an operator e-stop
             with _lock:
                 _stop_locked()
-            survivors = _kill_ros_stragglers()
-            print('[launcher] Stop Argo — motors stopped first, then nav stack; clean state until /start')
-            self._json({'ok': not survivors, 'status': 'stopped' if not survivors else 'stopped_with_survivors',
-                        'survivors': [c for _p, c in survivors]})
+            print('[launcher] stack stopped')
+            self._json({'ok': True, 'status': 'stopped'})
 
         elif self.path.startswith('/waypoints/'):
             name = _safe_name(self.path[len('/waypoints/'):])
@@ -1664,11 +1723,168 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'error': 'invalid map name or table id'}, 400)
                 return
             # No frontend caller writes here (orders are written directly by
-            # the separate desktop ordering robot/station as the guest
-            # orders) — kept as a 501 rather than silently dropped, in case
-            # something else starts depending on it.
-            self._json({'error': 'orders are now written by the dedicated ordering robot/station — '
+            # main_agent.py's db_place_order() as the guest orders) — kept
+            # as a 501 rather than silently dropped, in case something else
+            # starts depending on it.
+            self._json({'error': 'orders are now written by the voice agent (db_place_order) — '
                                   'POST /orders/<map>/<table> is not supported'}, 501)
+
+        elif self.path == '/voice/start':
+            global _voice_proc, _voice_action, _voice_map, _voice_table
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+            except (ValueError, json.JSONDecodeError):
+                self._json({'ok': False, 'error': 'invalid JSON body'}, 400)
+                return
+
+            action   = body.get('action')
+            map_name = _safe_name(body.get('map'))
+            # Not run through _safe_name — that's for names that get joined
+            # into filesystem paths (map/waypoint-set files). table_id here
+            # is only ever passed as an env var, compared in memory, and
+            # logged, so it's taken as-is from the waypoint's own name (e.g.
+            # "Table 3", "table 1") straight off the table card — no
+            # character restrictions needed, just non-empty.
+            table_id = str(body.get('table', '')).strip()
+
+            if action not in _VOICE_ACTIONS:
+                self._json({'ok': False, 'error': f'invalid action — must be one of {sorted(_VOICE_ACTIONS)}'}, 400)
+                return
+            if not map_name or not table_id:
+                self._json({'ok': False, 'error': 'invalid or missing "map"/"table"'}, 400)
+                return
+
+            with _nav_goto_lock:
+                if _nav_goto_status['running']:
+                    # Same physical robot, same Nav2 action server — a plain
+                    # /nav/goto trip (e.g. "Go to kitchen") and a table
+                    # dispatch can never run at once.
+                    self._json({'ok': False, 'error': 'nav_goto_busy',
+                                'active': {'destination': _nav_goto_status['destination']}}, 409)
+                    return
+
+            with _voice_lock:
+                already = _voice_proc and _voice_proc.poll() is None
+                if already and _voice_action == action and _voice_map == map_name and _voice_table == table_id:
+                    self._json({'ok': True, 'status': 'already_running', 'pid': _voice_proc.pid,
+                                'action': action, 'map': map_name, 'table': table_id})
+                    return
+                if already:
+                    # A DIFFERENT table/action is active — reject rather than
+                    # pre-empt (unlike /start's stop-then-restart): Sonic can
+                    # only physically speak with one table at a time, so
+                    # silently killing an in-progress order to start a new
+                    # one would lose that customer's conversation.
+                    self._json({
+                        'ok': False, 'error': 'voice_session_busy',
+                        'active': {'action': _voice_action, 'map': _voice_map,
+                                   'table': _voice_table, 'pid': _voice_proc.pid},
+                    }, 409)
+                    return
+                if not os.path.isfile(SONIC_SCRIPT):
+                    self._json({'ok': False, 'error': f'script not found: {SONIC_SCRIPT}'}, 500)
+                    return
+
+                # main_agent.py has no --table/--map/--action CLI flags (it's
+                # a continuous wake-word loop that discovers the table
+                # conversationally) — TABLE_NO tells it to skip that
+                # discovery and run one real Kitchen->Table->Kitchen round
+                # trip for this table (nav_bridge.py sends the actual Nav2
+                # goals), preserving the old click-to-dispatch UX.
+                # SONIC_ACTION_HINT selects order/room_service (round trip +
+                # full humanized take-order conversation) vs. bill/deliver,
+                # which currently just get a brief spoken apology and a
+                # return to the kitchen (n_stub — not yet rewired into
+                # main_agent.py). SONIC_MAP_NAME picks which waypoints file
+                # to navigate against.
+                args = [_sonic_python(), SONIC_SCRIPT]
+                # Appended, not overwritten — so a prior session's output is
+                # still there to compare against. A clear separator per
+                # session is enough to tell them apart without needing log
+                # rotation. DEVNULL previously swallowed this entirely, which
+                # made "why did the session end with no order?" undiagnosable
+                # from either side (crash? exception? no mic hardware?).
+                #
+                # Confirmed real bug on argo-desktop: this file was created
+                # back when argo-launcher ran as root (before the fix for the
+                # ntfields_models path issue switched it to User=argo), so it
+                # was root-owned and unwritable by 'argo' — open() raised an
+                # uncaught PermissionError here, which aborted this one
+                # request's connection ungracefully (the server itself kept
+                # running fine for everything else). The browser then saw a
+                # broken connection and reported "Could not reach launcher"
+                # for what was actually a file-permission problem several
+                # layers away. chmod after creating/opening it once (same
+                # pattern as NAV_PROGRESS_PATH/NAV_LOG_PATH above) fixes this
+                # from recurring; falling back to DEVNULL if that still fails
+                # means a logging permission hiccup can never block Sonic
+                # from actually starting.
+                try:
+                    with open(VOICE_LOG_PATH, 'a'):
+                        pass
+                    os.chmod(VOICE_LOG_PATH, 0o666)
+                    log_f = open(VOICE_LOG_PATH, 'a')
+                    log_f.write(f"\n{'='*70}\n[{datetime.datetime.now().isoformat()}] "
+                                f"action={action} map={map_name} table={table_id}\n{'='*70}\n")
+                    log_f.flush()
+                except OSError:
+                    log_f = subprocess.DEVNULL
+                # The wake-word loop and a table dispatch share the same
+                # mic/speaker and can't run at once — pause it for the
+                # dispatch's duration; a background thread below restarts
+                # it once this dispatch process exits (if it's still
+                # supposed to be running — i.e. nav hasn't been stopped
+                # meanwhile).
+                with _wake_lock:
+                    _wake_stop_locked()
+                _voice_proc = subprocess.Popen(
+                    args,
+                    cwd=SONIC_DIR,             # sonic/*.py use bare `import config` etc, not package-relative
+                    start_new_session=True,    # own process group → clean kill, mirrors SLAM stack
+                    stdin=subprocess.DEVNULL,  # no TTY
+                    stdout=log_f,
+                    stderr=log_f,
+                    env={**os.environ, 'TABLE_NO': table_id, 'SONIC_ACTION_HINT': action,
+                         'SONIC_MAP_NAME': map_name},
+                )
+                if log_f is not subprocess.DEVNULL:
+                    log_f.close()  # child has its own fd via dup2; safe to close our copy now
+                _voice_action, _voice_map, _voice_table = action, map_name, table_id
+
+                def _resume_wake_loop_after(dispatch_proc):
+                    dispatch_proc.wait()
+                    with _wake_lock:
+                        if _wake_should_run:
+                            _wake_start_locked()
+                threading.Thread(
+                    target=_resume_wake_loop_after, args=(_voice_proc,), daemon=True,
+                ).start()
+            print(f'[launcher] voice session started  action={action}  map={map_name}  table={table_id}  pid={_voice_proc.pid}')
+            self._json({'ok': True, 'status': 'started', 'pid': _voice_proc.pid,
+                        'action': action, 'map': map_name, 'table': table_id})
+
+        elif self.path == '/voice/stop':
+            with _voice_lock:
+                _voice_stop_locked()
+            print('[launcher] voice session stopped')
+            self._json({'ok': True, 'status': 'stopped'})
+
+        elif self.path == '/voice/nav_enabled':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length)) if length else {}
+            except (ValueError, json.JSONDecodeError):
+                self._json({'ok': False, 'error': 'invalid JSON body'}, 400)
+                return
+            if 'enabled' not in body:
+                self._json({'ok': False, 'error': 'missing "enabled"'}, 400)
+                return
+            if not _set_voice_nav_enabled(body['enabled']):
+                self._json({'ok': False, 'error': 'write failed — check DATABASE_URL / launcher logs'}, 500)
+                return
+            print(f"[launcher] voice-triggered navigation {'enabled' if body['enabled'] else 'disabled'}")
+            self._json({'ok': True, 'enabled': bool(body['enabled'])})
 
         elif self.path == '/nav/goto':
             try:
@@ -1682,6 +1898,15 @@ class Handler(BaseHTTPRequestHandler):
             map_name    = _safe_name(body.get('map'))
             if not destination or not map_name:
                 self._json({'ok': False, 'error': 'invalid or missing "destination"/"map"'}, 400)
+                return
+
+            with _voice_lock:
+                voice_busy = _voice_proc and _voice_proc.poll() is None
+            if voice_busy:
+                # Same reasoning as /voice/start's own busy check, the other
+                # way around — a table dispatch already owns the robot.
+                self._json({'ok': False, 'error': 'voice_session_busy',
+                            'active': {'action': _voice_action, 'table': _voice_table}}, 409)
                 return
 
             with _nav_goto_lock:
@@ -1718,97 +1943,32 @@ class Handler(BaseHTTPRequestHandler):
             print(f'[launcher] /ntfields/train -> {map_name!r}')
             self._json({'ok': True, 'status': 'started', 'map': map_name})
 
-        elif self.path.startswith('/maps/') and self.path.endswith('/model/build'):
-            name = _safe_name(self.path.split('/')[2])
-            if not name:
-                self._json({'ok': False, 'error': 'invalid map name'}, 400)
-                return
-            if not os.path.isfile(os.path.join(MAPS_DIR, f'{name}.yaml')):
-                self._json({'ok': False, 'error': f'no saved map named {name!r}'}, 404)
-                return
-            python = _map3d_python()
-            if python is None or not os.path.isfile(MAP3D_SCRIPT):
-                self._json({'ok': False, 'error': 'map3d_unavailable'}, 503)
-                return
-            with _map3d_lock:
-                if _map3d_status['running']:
-                    self._json({'ok': False, 'error': 'map3d_busy',
-                                'active': {'map': _map3d_status['map']}}, 409)
-                    return
-                threading.Thread(target=_map3d_worker, args=(name, python), daemon=True).start()
-            print(f'[launcher] /maps/{name}/model/build')
-            self._json({'ok': True, 'status': 'started', 'map': name})
-
-        elif self.path == '/settings/voice':
-            try:
-                length = int(self.headers.get('Content-Length', 0))
-                data = json.loads(self.rfile.read(length)) if length else {}
-                if not isinstance(data, dict):
-                    raise ValueError
-                voice = robot_settings.update_voice(data)
-            except (ValueError, TypeError, json.JSONDecodeError):
-                self._json({'error': 'invalid JSON body'}, 400)
-                return
-            print(f'[launcher] /settings/voice {voice}')
-            self._json({'ok': True, 'voice': voice})
-
-        elif self.path == '/settings/voice/control':
-            # Admin controls for the voice agent: start | stop | restart | silence (stop talking right now).
-            try:
-                length = int(self.headers.get('Content-Length', 0))
-                data = json.loads(self.rfile.read(length)) if length else {}
-                action = data.get('action') if isinstance(data, dict) else None
-            except (ValueError, TypeError, json.JSONDecodeError):
-                self._json({'error': 'invalid JSON body'}, 400)
-                return
-            if action not in ('start', 'stop', 'restart', 'silence'):
-                self._json({'ok': False, 'error': 'action must be start, stop, restart or silence'}, 400)
-                return
-            res = _voice_control(action)
-            print(f'[launcher] /settings/voice/control {action} -> {res}')
-            self._json({'ok': True, **res})
-
-        elif self.path in ('/settings/motion', '/settings/audio'):
-            try:
-                length = int(self.headers.get('Content-Length', 0))
-                data = json.loads(self.rfile.read(length)) if length else {}
-                if not isinstance(data, dict):
-                    raise ValueError
-                if self.path == '/settings/motion':
-                    lin, ang = data.get('max_linear'), data.get('max_angular')
-                    if lin is not None: lin = float(lin)
-                    if ang is not None: ang = float(ang)
-                else:
-                    spk, mic = data.get('speaker'), data.get('mic')
-                    if spk is not None: spk = float(spk)
-                    if mic is not None: mic = float(mic)
-            except (ValueError, TypeError, json.JSONDecodeError):
-                self._json({'error': 'invalid JSON body'}, 400)
-                return
-            if self.path == '/settings/motion':
-                live, msg = robot_settings.update_motion(lin, ang)
-                print(f'[launcher] /settings/motion lin={lin} ang={ang} live={live}')
-                self._json({'ok': True, 'applied_live': live, 'note': None if live else 'Saved; applies when the nav stack is running.',
-                            **robot_settings.snapshot()})
-            else:
-                errs = robot_settings.set_audio(spk, mic)
-                print(f'[launcher] /settings/audio speaker={spk} mic={mic} errors={errs}')
-                self._json({'ok': not errs, 'errors': errs, **robot_settings.snapshot()}, 200 if not errs else 500)
-
         elif self.path == '/teleop/start':
-            status = _teleop_start()
-            print(f'[launcher] /teleop/start -> {status}')
-            self._json({'ok': status != 'estopped', 'status': status}, 409 if status == 'estopped' else 200)
+            with _lock:
+                nav_running = _proc is not None and _proc.poll() is None
+            if nav_running:
+                self._json({'ok': False, 'error': 'nav_stack_running',
+                            'message': 'Stop the navigation stack before starting standalone teleop'}, 409)
+                return
+            with _teleop_lock:
+                already = _teleop_serial_proc is not None and _teleop_serial_proc.poll() is None
+                if already:
+                    self._json({'ok': True, 'status': 'already_running'})
+                    return
+                _teleop_start_locked()
+            rb_pid = _teleop_rosbridge_proc.pid if _teleop_rosbridge_proc else 'pre-existing'
+            print(f'[launcher] standalone teleop started  serial_pid={_teleop_serial_proc.pid}  rosbridge_pid={rb_pid}')
+            self._json({'ok': True, 'status': 'started'})
 
         elif self.path == '/teleop/stop':
-            status = _teleop_stop()
-            print(f'[launcher] /teleop/stop -> {status}')
-            self._json({'ok': True, 'status': status})
+            with _teleop_lock:
+                _teleop_stop_locked()
+            print('[launcher] standalone teleop stopped')
+            self._json({'ok': True, 'status': 'stopped'})
 
         elif self.path == '/estop':
             with _serial_lock:
                 _estop_locked()
-                _serial_estop_manual = True
             print('[launcher] EMERGENCY STOP — serial_bridge killed')
             self._json({'ok': True, 'status': 'estopped'})
 
@@ -1877,79 +2037,6 @@ class Handler(BaseHTTPRequestHandler):
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
-
-# ── Voice agent ("Hi Sonic") follows the nav stack ───────────────────────────
-# sonic-nlp is a user systemd service that used to run all the time, so the
-# robot answered "Hi Sonic" (and could try to drive) with navigation stopped.
-# Now it runs only while the stack reports READY and is stopped otherwise.
-VOICE_UNIT = 'sonic-nlp.service'
-_voice_env = dict(os.environ, XDG_RUNTIME_DIR=f'/run/user/{os.getuid()}')
-
-
-def _voice_active():
-    r = subprocess.run(['systemctl', '--user', 'is-active', VOICE_UNIT],
-                       capture_output=True, text=True, env=_voice_env)
-    return r.stdout.strip() in ('active', 'activating')
-
-
-def _voice_set(want):
-    try:
-        if want == _voice_active():
-            return
-        subprocess.run(['systemctl', '--user', 'start' if want else 'stop', VOICE_UNIT],
-                       capture_output=True, timeout=15, env=_voice_env)
-        print(f'[launcher] voice agent {"started" if want else "stopped"} (follows nav stack)')
-    except Exception as e:   # never let voice gating break the launcher
-        print(f'[launcher] voice agent gating failed: {e}')
-
-
-def _voice_status():
-    ready = _nav_ready_now()
-    try:
-        running = _voice_active()
-    except Exception:
-        running = False
-    return {'running': running, 'nav_ready': ready}
-
-
-def _voice_control(action):
-    """Manual control. stop/start persist `voice_enabled`, so the nav-follow loop cannot undo an admin's choice."""
-    try:
-        if action == 'silence':
-            robot_settings.silence_voice()
-        elif action == 'stop':
-            robot_settings.update_voice({'voice_enabled': False})
-            _voice_set(False)
-        elif action == 'start':
-            robot_settings.update_voice({'voice_enabled': True})
-            _voice_set(_nav_ready_now())
-        elif action == 'restart':
-            robot_settings.update_voice({'voice_enabled': True})
-            if _nav_ready_now():
-                subprocess.run(['systemctl', '--user', 'restart', VOICE_UNIT],
-                               capture_output=True, timeout=20, env=_voice_env)
-    except Exception as e:
-        return {'error': str(e)[:160], **_voice_status()}
-    return _voice_status()
-
-
-def _nav_ready_now():
-    with _lock:
-        up = _proc is not None and _proc.poll() is None
-    if not up:
-        return False
-    try:
-        with open(NAV_PROGRESS_PATH, 'r') as f:
-            return f.read().startswith('READY|')
-    except OSError:
-        return False
-
-
-def _voice_follow_nav():
-    while True:
-        _voice_set(_nav_ready_now() and robot_settings.get_voice()['voice_enabled'])
-        time.sleep(2)
-
 if __name__ == '__main__':
     print(f'[launcher] manual script   → {SLAM_SCRIPT}')
     print(f'[launcher] auto script     → {EXPLORE_SCRIPT}')
@@ -1966,10 +2053,19 @@ if __name__ == '__main__':
     os.makedirs(WAYPOINTS_DIR, exist_ok=True)
     if not DATABASE_URL:
         print('[launcher] WARNING: DATABASE_URL not set (sonic/.env) — /menu and /orders will return empty')
+    print(f'[launcher] sonic interpreter → {_sonic_python()}')
+    print(f'[launcher] voice session log → {VOICE_LOG_PATH}')
+    if not os.path.isfile(SONIC_SCRIPT):
+        print(f'[launcher] WARNING: main_agent.py not found — check path above')
+    # Always live from boot — independent of the nav stack, see the comment
+    # above _wake_proc/_wake_should_run for why that's safe.
+    with _wake_lock:
+        _wake_should_run = True
+        _wake_start_locked()
     threading.Thread(target=run_bms_thread, daemon=True).start()
-    threading.Thread(target=_voice_follow_nav, daemon=True).start()
-    server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
-    server.daemon_threads = True
+    class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+    server = ThreadedHTTPServer(('0.0.0.0', PORT), Handler)
     print(f'[launcher] listening on  http://0.0.0.0:{PORT}')
     try:
         server.serve_forever()

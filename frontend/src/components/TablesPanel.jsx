@@ -20,6 +20,9 @@ const ChevronDown = ({ open }) => (
 export default function TablesPanel({ mapData, robotPose, connected, showToast, launcherUrl, selectedMap, onNavigate }) {
   const [tables, setTables]       = useState({})
   const [orders, setOrders]       = useState({})
+  const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null })
+  const [navEnabled, setNavEnabled] = useState(true)
+  const [navToggling, setNavToggling] = useState(false)
   const [expanded, setExpanded]   = useState(() => new Set())
   const [pending, setPending]     = useState(null)
   const [name, setName]           = useState('')
@@ -36,7 +39,8 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
       .catch(() => setTables({}))
   }, [launcherUrl, selectedMap])
 
-  // Orders are written to Postgres elsewhere — poll for them.
+  // Orders come from Sonic (the voice agent) finishing a table's order — poll
+  // rather than push since there's no websocket channel to that process.
   useEffect(() => {
     let cancelled = false
     const load = () => {
@@ -49,6 +53,60 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
     const id = setInterval(load, 3000)
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl, selectedMap])
+
+  // Is Sonic currently mid-conversation at some table? Same poll cadence as
+  // orders above — used to show a busy banner and stop a second table's
+  // button from firing a session the backend would just 409 anyway.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/voice/status`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setVoiceStatus(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
+
+  // Staff kill-switch for voice-triggered navigation — sonic_agent.py checks
+  // this before acting on a guest's "take me to the kitchen"-style request.
+  // Nav wiring itself is still a stub, but the switch exists now so it's
+  // already in place once real Nav2 goals are sent.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/voice/nav_enabled`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setNavEnabled(!!d.enabled) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 5000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
+
+  const toggleVoiceNav = useCallback(() => {
+    const next = !navEnabled
+    setNavToggling(true)
+    fetch(`${launcherUrl}/voice/nav_enabled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setNavEnabled(!!d.enabled)
+          showToast(`Voice-triggered navigation ${d.enabled ? 'enabled' : 'disabled'}`, 'ok')
+        } else {
+          showToast('Could not update navigation switch', 'danger')
+        }
+      })
+      .catch(() => showToast('Could not reach robot', 'danger'))
+      .finally(() => setNavToggling(false))
+  }, [launcherUrl, navEnabled, showToast])
 
   const toggleExpanded = useCallback((key) => {
     setExpanded(prev => {
@@ -116,9 +174,37 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
   }
 
   const sendAction = (key, table, verb, toastMsg) => {
+    if (voiceStatus.running && voiceStatus.table !== key) {
+      showToast(`Sonic is busy with Table ${voiceStatus.table} — wait for that session to finish`, 'warn')
+      return
+    }
     setNavTarget(`${key}:${verb}`)
     onNavigate(table.x, table.y, table.qz ?? 0, table.qw ?? 1, toastMsg)
+    // verb ('order'|'deliver'|'bill') IS the action name already — no translation needed
+    fetch(`${launcherUrl}/voice/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: verb, map: selectedMap, table: key }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setVoiceStatus(prev => ({ ...prev, running: true, action: verb, map: selectedMap, table: key }))
+        } else {
+          showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger')
+        }
+      })
+      .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
     setTimeout(() => setNavTarget(null), 4000)
+  }
+
+  const stopVoice = () => {
+    fetch(`${launcherUrl}/voice/stop`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) setVoiceStatus({ running: false, action: null, map: null, table: null })
+      })
+      .catch(() => {})
   }
 
   const clearOrder = (key) => {
@@ -157,6 +243,45 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
           </p>
         </div>
 
+        {/* Staff switch: disable Sonic acting on spoken "take me to X"
+            navigation requests, independent of the rest of the voice agent
+            (ordering/bill/staff-calls keep working either way). */}
+        <div className="glass-dense" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 600 }}>Voice-triggered navigation</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              {navEnabled ? 'Guests can ask Sonic to move' : 'Sonic will decline movement requests'}
+            </div>
+          </div>
+          <button
+            onClick={toggleVoiceNav}
+            disabled={navToggling}
+            className="btn-ghost"
+            style={{
+              padding: '5px 12px', fontSize: 12,
+              color: navEnabled ? 'var(--gold-bright)' : 'var(--muted)',
+              opacity: navToggling ? 0.6 : 1,
+            }}
+          >
+            {navEnabled ? 'On' : 'Off'}
+          </button>
+        </div>
+
+        {/* Voice-session busy banner — Sonic can only physically talk to
+            one table at a time, so make that visible instead of letting a
+            second click silently 409 against the backend. */}
+        {voiceStatus.running && (
+          <div className="glass-dense" style={{
+            padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 10, borderColor: 'rgba(226,179,92,0.3)', animation: 'slideUp 0.2s ease',
+          }}>
+            <div style={{ fontSize: 12.5, color: 'var(--gold-bright)', fontWeight: 600 }}>
+              🎙️ Sonic is talking with {tables[voiceStatus.table]?.name || `Table ${voiceStatus.table}`} ({voiceStatus.action})
+            </div>
+            <button onClick={stopVoice} className="btn-ghost" style={{ padding: '5px 12px', fontSize: 12 }}>Stop</button>
+          </div>
+        )}
+
         {/* Pending table from map click */}
         {pending && (
           <div className="glass-dense" style={{ padding: 22, borderColor: 'rgba(226,179,92,0.3)', animation: 'slideUp 0.2s ease' }}>
@@ -172,7 +297,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
               style={{
                 width: '100%', padding: '11px 14px', borderRadius: 12,
                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(226,179,92,0.3)',
-                color: 'var(--text)', outline: 'none', marginBottom: 12, boxSizing: 'border-box',
+                color: '#fff', outline: 'none', marginBottom: 12, boxSizing: 'border-box',
               }}
             />
             <div style={{ display: 'flex', gap: 8 }}>
@@ -195,7 +320,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
             }}
           >
             <div style={{ textAlign: 'left' }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: showDrive ? 'var(--blue)' : 'var(--text)' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: showDrive ? 'var(--blue)' : '#fff' }}>
                 Drive Argo to a spot
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 3 }}>
@@ -228,7 +353,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
                   style={{
                     width: '100%', padding: '11px 14px', borderRadius: 12, fontSize: 13,
                     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(127,168,232,0.25)',
-                    color: 'var(--text)', outline: 'none', marginBottom: 10, boxSizing: 'border-box',
+                    color: '#fff', outline: 'none', marginBottom: 10, boxSizing: 'border-box',
                   }}
                 />
                 <button
@@ -303,7 +428,7 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
                         style={{
                           flex: 1, padding: '8px 11px', borderRadius: 9, fontSize: 13,
                           background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-glass)',
-                          color: 'var(--text)', outline: 'none',
+                          color: '#fff', outline: 'none',
                         }}
                       />
                       <button onClick={() => renameTable(key)} style={{ color: 'var(--ok)', fontWeight: 700, padding: '0 8px', fontSize: 14 }}>✓</button>
@@ -312,7 +437,8 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
                   ) : (
                     <>
                       {/* Collapsed by default — just enough to glance at; click to expand
-                          full details + the bill, if this table has an order. */}
+                          full details + the bill, if this table has an order (Sonic, the
+                          voice agent, posts orders here once a table's order is finalized). */}
                       <div onClick={() => toggleExpanded(key)} style={{ cursor: 'pointer' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
@@ -364,10 +490,12 @@ export default function TablesPanel({ mapData, robotPose, connected, showToast, 
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {[
-                              ['navigate', 'Navigate', `Argo heading to ${label}`],
+                              ['order',   'Take Order',    `Argo heading to ${label} to take the order`],
+                              ['deliver', 'Deliver Order', `Argo heading to ${label} to deliver the order`],
+                              ['bill',    'Give Bill',      `Argo heading to ${label} to give the bill`],
                             ].map(([verb, btnLabel, toastMsg]) => {
                               const active = navTarget === `${key}:${verb}`
-                              const blocked = false
+                              const blocked = voiceStatus.running && voiceStatus.table !== key
                               return (
                                 <button
                                   key={verb}

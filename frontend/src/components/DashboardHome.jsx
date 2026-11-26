@@ -1,27 +1,25 @@
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import { ros } from '../ros'
-import LiveMap from './LiveMap'
+import RadialNav from './RadialNav'
+import MapCanvas from './MapCanvas'
 import TeleopPad from './TeleopPad'
-import { friendlyNavMessage, TELEOP_BADGE } from '../friendlyNames'
-import { Hero, TableCards, TelemetryStrip, RobotStatusCard, ActiveOrdersCard, PosMenuCard, normalizeOrders, usePosMenu } from '../ui/cards'
-import * as Ic from '../ui/icons'
-import { money } from '../ui/format'
-import FreeRoamPanel from './FreeRoamPanel'
-import { DashBoard, useDashLayout } from '../ui/DashBoard'
+import TelemetryCard from './TelemetryCard'
 
 // React port of frontend/public/dashboard.html's layout and copy — same
 // stats row, same "Saved Places" grid, same Recent Activity / Alerts
 // panels. Places come from GET /waypoints/<selectedMap> (live, per-map)
 // instead of localStorage. Navigation itself is never triggered from here
-// directly — trips are started via POST /nav/goto or /goal_pose, and this
-// component only displays status polled back from those. Same plain
+// directly — every trip is either a table action (below, backend-managed by
+// main_agent.py via POST /voice/start) or the "Go to kitchen" button
+// (backend-managed by POST /nav/goto) — this component only displays status
+// polled back from those, it never publishes a Nav2 goal itself. Same plain
 // '$'-prefixed formatting TablesPanel.jsx uses for the same reason — no
 // shared access to menu-data.js's currency/tax settings here.
-
+const money = (n) => '$' + Number(n || 0).toFixed(2)
 
 // A waypoint's JSON key (e.g. "3") is just its arbitrary position in the
 // waypoints/<map>.json file — it has NO guaranteed relationship to the
-// table's actual number. nav_bridge's lookup ("Table {N}")
+// table's actual number. main_agent.py's nav_bridge lookup ("Table {N}")
 // and Postgres's service_points.label both expect the real number embedded
 // in the waypoint's own name ("Table 3" -> "3"). Sending the raw key
 // instead (as this used to) silently routed to whichever OTHER table
@@ -34,58 +32,44 @@ function tableNumberFromName(name, fallbackKey) {
   return m ? m[0] : fallbackKey
 }
 
-const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, poseStale, plannedPath, driveTelemetry, sensorDistances, shieldStatus, battery, onAddMap, onFreeRoam, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, onNavRunning, onNavStopping, customizing, onCustomizeStart, onCustomizeDone, onViewOrders, onSelectMap, menuApi }, ref) => {
+// Maps a table-card task to the voice action backend/launcher.py's
+// POST /voice/start expects.
+const TASK_TO_ACTION = {
+  'Take order':   'order',
+  'Deliver':      'deliver',
+  'Billing':      'bill',
+  'Room service': 'room_service',
+}
+
+// Direct per-card buttons on a Saved Place — [task, button label].
+const TABLE_ACTIONS = [
+  ['Take order',   'Take Order'],
+  ['Deliver',      'Deliver'],
+  ['Billing',      'Send Bill'],
+]
+
+const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected, showToast, onSetInitialPose, mapData, robotPose, plannedPath, driveTelemetry, sensorDistances, onAddMap, onOpenSettings, onActivityToggle, onNavInitializing, onNavReady, onNavPoseSet, onNavProgress, teleopDirect }, ref) => {
   const [tables, setTables]         = useState({})
-  const lay = useDashLayout()   // card order + sizes (per device)
-  useEffect(() => {             // one-time hint: customizing has no button, it is a gesture
-    try {
-      if (localStorage.getItem('argo_layout_tip')) return
-      localStorage.setItem('argo_layout_tip', '1')
-      const touch = window.matchMedia?.('(pointer: coarse)').matches
-      const id = setTimeout(() => showToast?.(touch ? 'Tip: press and hold a card for 3 seconds to rearrange the dashboard' : 'Tip: double-click a card to rearrange or resize the dashboard', 'info'), 2500)
-      return () => clearTimeout(id)
-    } catch { /* storage blocked — skip the tip */ }
-  }, [])
   const [poseMode, setPoseMode]     = useState(false)   // pose-estimate drag mode on the always-visible map card
-  const [goalSetMode, setGoalSetMode] = useState(false)
-  const [patrolSetMode, setPatrolSetMode] = useState(false)
   const [curPos, setCurPos]         = useState('Home')
   const [curStatus, setCurStatus]   = useState('Idle')
   // Blue goal marker on the map — set whenever a table action, "Navigate",
-  // or "Go to kitchen" is clicked (see goToDestination
+  // or "Go to kitchen" is clicked (see dispatchVoiceAction/goToDestination
   // below), cleared once that trip is no longer running (below).
   const [goalMarker, setGoalMarker] = useState(null)
   const [taskLabel, setTaskLabel]   = useState('—')
   const [activity, setActivity]     = useState([])
   const [greeting, setGreeting]     = useState('Good day')
   const [time, setTime]             = useState('—')
+  const [voiceStatus, setVoiceStatus] = useState({ running: false, action: null, map: null, table: null, phase: null, phase_text: null })
   const [navGotoStatus, setNavGotoStatus] = useState({ running: false, destination: null, phase: null, phase_text: null })
   const [orders, setOrders]         = useState({})
+  const [expandedBills, setExpandedBills] = useState(() => new Set())
   const [showTeleopPad, setShowTeleopPad] = useState(false)
   const [showActivityPanel, setShowActivityPanel] = useState(false)
-  const [selectedTable, setSelectedTable] = useState(null)  // {key, name, x, y} when a table is clicked on map
-  const [modelLoading, setModelLoading] = useState(false)
-  const [freeRoamActive, setFreeRoamActive] = useState(false)
-  const [freeRoamStats, setFreeRoamStats] = useState({ goalsReached: 0, goalsFailed: 0 })
-  const [availableMaps, setAvailableMaps] = useState([])
-
-  // Fetch available maps from launcher
-  useEffect(() => {
-    let cancelled = false
-    const loadMaps = async () => {
-      try {
-        const response = await fetch(`${launcherUrl}/maps`)
-        if (!cancelled) {
-          const data = await response.json()
-          setAvailableMaps(data.maps || [])
-        }
-      } catch (err) {
-        console.error('Failed to load maps:', err)
-      }
-    }
-    loadMaps()
-    return () => { cancelled = true }
-  }, [launcherUrl])
+  const [showTranscript, setShowTranscript] = useState(false)
+  const [transcript, setTranscript] = useState({ session_id: null, started_at: null, turns: [] })
+  const transcriptBottomRef = useRef(null)
 
   useImperativeHandle(ref, () => ({
     toggleActivityPanel: () => setShowActivityPanel(prev => !prev),
@@ -93,7 +77,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     stopNav: stopNav,
     estop: estop,
     setPoseMode: setPoseMode,
-    scrollToOrders: () => document.getElementById('a-orders')?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
   }))
 
   // Nav2 + SLAM-localization stack — this is what actually lets a goal reach
@@ -127,13 +110,6 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const [navMap, setNavMap]     = useState(() => readNavStateCache().navMap)
   const navPollRef = useRef(null)
   const navFailRef = useRef(0)
-  // Start/Stop race guard. Every Start/Stop bumps the epoch; a /status reply
-  // that was requested before the latest transition (or arrives while a stop is
-  // in flight) is discarded, so a late "running" can't undo a Stop or a late
-  // "stopped" can't undo a Start.
-  const navEpochRef = useRef(0)
-  const navStoppingRef = useRef(false)
-  const [stopping, setStopping] = useState(false)   // Stop in flight (takes 10+ s): hide the startup loader, show "Stopping…"
 
   // Keep the cache in sync with every state change, live-poll-driven or
   // user-triggered alike — write-through, not a separate save step.
@@ -186,44 +162,7 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     return () => { cancelled = true; clearInterval(id) }
   }, [navState, navMap, selectedMap, connected])
 
-  // The map navigation is actually running is the source of truth: waypoints, orders and the table layout
-  // must all come from it (a stale selection in localStorage would show another map's tables on this map).
-  useEffect(() => {
-    if (navState === 'running' && navMap && navMap !== selectedMap) onSelectMap?.(navMap)
-  }, [navState, navMap, selectedMap, onSelectMap])
-
-  // READY only once the launch script itself reports every node up (/nav_progress
-  // status READY). The /navigate_to_pose action server alone appears long before
-  // the camera, safety shield and patrol manager are launched.
-  const [navProgress, setNavProgress] = useState({ status: null, message: null, percent: 0 })
-  // App passes an inline arrow (new identity every render); keep it in a ref so the
-  // polling effect below isn't torn down and restarted on every progress update.
-  const onNavProgressRef = useRef(onNavProgress)
-  useEffect(() => { onNavProgressRef.current = onNavProgress })
-  const navReady = navState === 'running' && navMap === selectedMap && navActionReady && navProgress.status === 'READY'
-
-  // Show "Getting ready" only while a start is genuinely in flight: the launcher
-  // reports status OK (in progress) with a recent update. A leftover OK from a
-  // run that was stopped/killed outside the UI goes stale and must not show.
-  // Age comes from the robot's own clock (the browser clock may differ and made the
-  // panel vanish). Between steps the progress file can briefly be empty (status null),
-  // so treat null like "in progress" while the stack process is up — otherwise the
-  // panel hides after a step and reappears on the next one.
-  const progAgeS = navProgress.age ?? 0
-  const startupBusy = navProgress.status === 'OK' || navProgress.status === null
-  const showStartup = !navReady && !stopping && (
-    navState === 'starting' ||
-    (navState === 'running' && navMap === selectedMap && startupBusy && progAgeS < 180))
-
-  // One "ready" toast when navigation comes up, for anyone who looked away during startup.
-  const wasReadyRef = useRef(false)
-  useEffect(() => {
-    if (navReady && !wasReadyRef.current) showToast?.('Argo is ready — you can send goals now', 'ok')
-    wasReadyRef.current = navReady
-  }, [navReady, showToast])
-
-  // Tell the parent whether a stack exists at all, so Stop Argo is only clickable when there is something to stop.
-  useEffect(() => { onNavRunning?.(navState !== 'stopped') }, [navState, onNavRunning])
+  const navReady = navState === 'running' && navMap === selectedMap && navActionReady
 
   // Update parent about nav readiness state
   useEffect(() => {
@@ -240,53 +179,48 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     // Treating 'unknown'/'starting'/'running'-but-not-yet-ready as
     // "initializing" closes that gap: the button shows the real
     // in-progress state instead of inviting a redundant Start click.
-    if (navState === 'stopped' || stopping) {
+    if (navState === 'stopped') {
       onNavInitializing?.(false)
-    } else if (navReady || navProgress.status === 'ERROR') {
-      // ERROR: the launch script gave up — release the Start button so the
-      // user can retry instead of staring at a disabled "Starting…" forever.
+    } else if (navReady) {
       onNavInitializing?.(false)
     } else {
       onNavInitializing?.(true)
     }
-  }, [navReady, onNavReady, navState, navProgress.status, onNavInitializing, stopping])
+  }, [navReady, onNavReady, navState, onNavInitializing])
 
   // Real step-by-step progress from sh/start_argo_nav_ui.sh itself (see
   // backend/launcher.py's GET /nav_progress) — without this, a failure
   // partway through the ~90s+ startup looked identical to it just still
   // being slow: an indefinite "Waiting for Nav2" spinner with no way to
   // tell which node broke or that it broke at all, short of SSHing in.
+  const [navProgress, setNavProgress] = useState({ status: null, message: null })
   useEffect(() => {
-    if (navState !== 'running' || navMap !== selectedMap || stopping) {
-      setNavProgress({ status: null, message: null, percent: 0 })
-      onNavProgressRef.current?.(null, 0)
+    if (navState !== 'running' || navMap !== selectedMap) {
+      setNavProgress({ status: null, message: null })
+      onNavProgress?.(null)
       return
     }
     let cancelled = false
     const check = () => {
       fetch(`${launcherUrl}/nav_progress`)
         .then(r => r.json())
-        .then(d => { if (!cancelled) { setNavProgress({ ...d, message: friendlyNavMessage(d.message) }); onNavProgressRef.current?.(friendlyNavMessage(d.message) || null, d.percent || 0) } })
+        .then(d => { if (!cancelled) { setNavProgress(d); onNavProgress?.(d.message || null) } })
         .catch(() => {})
     }
     check()
     const id = setInterval(check, 2000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [navState, navMap, selectedMap, launcherUrl, stopping])
+  }, [navState, navMap, selectedMap, launcherUrl, onNavProgress])
 
   const checkNav = useCallback(() => {
-    const epoch = navEpochRef.current
-    const stale = () => epoch !== navEpochRef.current || navStoppingRef.current
     fetch(`${launcherUrl}/status`)
       .then(r => r.json())
       .then(d => {
-        if (stale()) return
         navFailRef.current = 0
         setNavState(d.running ? 'running' : 'stopped')
         setNavMap(d.running ? d.map : null)
       })
       .catch(() => {
-        if (stale()) return
         // Same debounce as ExplorationPanel's polling — one dropped request
         // shouldn't flip a genuinely-running stack to "stopped".
         navFailRef.current += 1
@@ -308,27 +242,18 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   }, [navState])
 
   const startNav = async () => {
-    if (navStoppingRef.current) { showToast('Still stopping — try again in a moment', 'info'); onNavInitializing?.(false); return false }
-    navEpochRef.current += 1
-    const myEpoch = navEpochRef.current
     setNavState('starting')
     showToast(`Starting navigation on ${selectedMap}…`, 'info')
     try {
-      const r = await fetch(`${launcherUrl}/start`, {
+      await fetch(`${launcherUrl}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'navigate', map: selectedMap }),
       })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      if (myEpoch !== navEpochRef.current || navStoppingRef.current) return false   // Stop was pressed while /start was in flight
-      if (navPollRef.current) clearInterval(navPollRef.current)
       navPollRef.current = setInterval(checkNav, 3000)
-      return true
-    } catch (e) {
+    } catch {
       setNavState('stopped')
-      onNavInitializing?.(false)
-      showToast(e?.message?.startsWith('HTTP') ? `Launcher refused to start (${e.message})` : 'Could not reach launcher — is launcher.py running on the robot?', 'danger')
-      return false
+      showToast('Could not reach launcher — is launcher.py running on the robot?', 'danger')
     }
   }
 
@@ -339,42 +264,21 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     // button — so a single misclick (e.g. tapping the "waiting for
     // Nav2" spinner out of impatience) used to kill the stack instantly,
     // including mid-startup before it ever had a chance to finish.
-    if (!window.confirm('Stop Argo now? Motors and navigation will be switched off.')) return false
-    // Freeze status polling and drop any in-flight replies until the stop settles.
-    navStoppingRef.current = true
-    navEpochRef.current += 1
-    // Immediately leave the startup UI: no more loader/progress while the (slow) teardown runs.
-    setStopping(true); onNavStopping?.(true); onNavInitializing?.(false)
-    setNavProgress({ status: null, message: null, percent: 0 }); onNavProgressRef.current?.(null, 0)
-    if (navPollRef.current) { clearInterval(navPollRef.current); navPollRef.current = null }
+    if (!window.confirm('Stop the navigation stack now?')) return
     try {
-      const r = await fetch(`${launcherUrl}/stop`, { method: 'POST' })
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setNavState('stopped'); setNavMap(null); setEstopped(false)
-      setNavProgress({ status: null, message: null, percent: 0 })
-      onNavInitializing?.(false); onNavReady?.(false); onNavPoseSet?.(false); onNavProgress?.(null, 0)
-      showToast('Argo stopped', 'info')
-      return true
-    } catch (e) {
-      showToast(e?.message?.startsWith('HTTP') ? `Stop failed (${e.message})` : 'Could not reach launcher', 'danger')
-      return false
-    } finally {
-      navStoppingRef.current = false
-      setStopping(false); onNavStopping?.(false)
-      navEpochRef.current += 1
-      checkNav()   // resync with what the launcher really reports
+      await fetch(`${launcherUrl}/stop`, { method: 'POST' })
+      setNavState('stopped'); setNavMap(null)
+      showToast('Navigation stopped', 'info')
+    } catch {
+      showToast('Could not reach launcher', 'danger')
     }
   }
 
   useEffect(() => {
-    // A slow response for a map we've already switched away from must never overwrite the current one.
-    let stale = false
-    setTables({})
     fetch(`${launcherUrl}/waypoints/${selectedMap}`)
       .then(r => r.json())
-      .then(d => { if (!stale) setTables(d || {}) })
-      .catch(() => { if (!stale) setTables({}) })
-    return () => { stale = true }
+      .then(d => setTables(d || {}))
+      .catch(() => setTables({}))
   }, [launcherUrl, selectedMap])
 
   // Full-overwrite save, same semantics as TablesPanel.jsx's own persist()
@@ -389,8 +293,50 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     }).catch(() => showToast('Could not save to robot', 'danger'))
   }, [launcherUrl, selectedMap, showToast])
 
+  // Is Sonic currently mid-conversation at some table? Same poll pattern as
+  // TablesPanel.jsx's identical hook — used to show a busy banner and avoid
+  // firing a second voice session the backend would just 409 anyway. Also
+  // carries main_agent.py's own real phase/phase_text now (see
+  // report_phase() in sonic/main_agent.py) — this is the sole source of
+  // truth for "moving/arrived/taking order" status, not anything simulated
+  // locally.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/voice/status`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setVoiceStatus(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl])
+
+  // Voice transcript (GET /voice/transcript) — only polled while the panel
+  // is actually open, unlike voiceStatus above which other UI state depends
+  // on regardless of visibility.
+  useEffect(() => {
+    if (!showTranscript) return
+    let cancelled = false
+    const load = () => {
+      fetch(`${launcherUrl}/voice/transcript`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setTranscript(d) })
+        .catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [launcherUrl, showTranscript])
+
+  // Auto-scroll to the latest turn whenever the transcript updates.
+  useEffect(() => {
+    transcriptBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [transcript])
+
   // Status of the current/last plain single-destination trip (POST
-  // /nav/goto — e.g. "Go to kitchen"), polled.
+  // /nav/goto — e.g. "Go to kitchen"), same poll pattern as voiceStatus.
   useEffect(() => {
     let cancelled = false
     const load = () => {
@@ -406,19 +352,24 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
 
 
   // Left rail's Status stat card, driven entirely by real backend state now
-  // (no more local nav simulation): the plain /nav/goto trip's phase, else Idle.
+  // (no more local nav simulation): prefer main_agent.py's own phase while a
+  // voice session is active, else the plain /nav/goto trip's phase, else Idle.
   useEffect(() => {
-    if (navGotoStatus.running && navGotoStatus.phase_text) {
+    if (voiceStatus.running && voiceStatus.phase_text) {
+      setCurStatus(voiceStatus.phase_text)
+      setCurPos(voiceStatus.table || curPos)   // already the full waypoint name, e.g. "Table 3" or "table 1"
+      setTaskLabel(voiceStatus.action || taskLabel)
+    } else if (navGotoStatus.running && navGotoStatus.phase_text) {
       setCurStatus(navGotoStatus.phase_text)
       setCurPos(navGotoStatus.destination || curPos)
-    } else if (!navGotoStatus.running) {
+    } else if (!voiceStatus.running && !navGotoStatus.running) {
       setCurStatus('Idle')
       setGoalMarker(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navGotoStatus])
+  }, [voiceStatus, navGotoStatus])
 
-  // Same polling pattern — independent state, own endpoint,
+  // Mirrors voiceStatus's polling pattern — independent state, own endpoint,
   // so the E-Stop button's label always reflects the actual backend state
   // rather than an optimistic local guess (e.g. after a page refresh, or if
   // another operator on a different device already hit it).
@@ -436,48 +387,48 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     return () => { cancelled = true; clearInterval(id) }
   }, [launcherUrl])
 
-  // Open orders per table + today's totals come from the POS order ledger (backend/pos_api.py); when that service
-  // isn't running, fall back to the launcher's database-backed /orders so the card still works.
-  const [today, setToday] = useState(null)
+  // Orders Sonic has taken — same poll TablesPanel.jsx uses, so a finished
+  // order shows up here on the Dashboard too, not only on the Tables page.
   useEffect(() => {
     let cancelled = false
-    const day0 = new Date(); day0.setHours(0, 0, 0, 0)
-    const load = async () => {
-      try {
-        const [bt, sm] = await Promise.all([
-          fetch(`${menuApi}/orders/by-table`, { cache: 'no-store' }).then(r => r.json()),
-          fetch(`${menuApi}/orders/summary?from=${encodeURIComponent(day0.toISOString())}&to=${encodeURIComponent(new Date(day0.getTime() + 86400000).toISOString())}`, { cache: 'no-store' }).then(r => r.json()),
-        ])
-        if (!cancelled) { setOrders(bt || {}); setToday(sm) }
-      } catch {
-        try { const d = await fetch(`${launcherUrl}/orders/${selectedMap}`).then(r => r.json()); if (!cancelled) { setOrders(d || {}); setToday(null) } } catch { /* offline */ }
-      }
+    const load = () => {
+      fetch(`${launcherUrl}/orders/${selectedMap}`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled) setOrders(d || {}) })
+        .catch(() => {})
     }
     load()
     const id = setInterval(load, 3000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [launcherUrl, selectedMap, menuApi])
+  }, [launcherUrl, selectedMap])
 
-  const clearOrder = (key) => {
-    setOrders(prev => { const next = { ...prev }; delete next[key]; return next })            // optimistic
-    fetch(`${menuApi}/orders/clear-table`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ table: String(key), actor: 'staff' }) })
-      .then(r => { if (!r.ok) throw new Error(); return r.json() })
-      .catch(() => fetch(`${launcherUrl}/orders/${selectedMap}/${key}`, { method: 'DELETE' }).then(r => r.json()).then(d => { if (!d.ok) throw new Error() }).catch(() => showToast('Could not clear order', 'danger')))
+  const toggleBill = (key) => {
+    setExpandedBills(prev => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
   }
 
-  // "Dispatch": mark the table's ready order as out for delivery in the ledger, then send the robot there.
-  const dispatchOrder = (tableName) => {
-    const num = String(parseInt((tableName.match(/\d+/) || [''])[0], 10))
-    const ids = orders[num]?.ids
-    if (ids?.length) fetch(`${menuApi}/orders/${ids[ids.length - 1]}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'out_for_delivery', actor: 'staff' }) }).catch(() => {})
-    goToDestination(tableName)
+  const clearOrder = (key) => {
+    // Optimistic — drop it locally right away rather than waiting on the
+    // next poll tick, then confirm against the backend's per-table delete.
+    setOrders(prev => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    fetch(`${launcherUrl}/orders/${selectedMap}/${key}`, { method: 'DELETE' })
+      .then(r => r.json())
+      .then(d => { if (!d.ok) showToast('Could not clear order', 'danger') })
+      .catch(() => showToast('Could not reach launcher to clear order', 'danger'))
   }
 
   useEffect(() => {
     const tick = () => {
       const now = new Date()
       const h = now.getHours()
-      setGreeting(h >= 5 && h < 12 ? 'Good Morning' : h >= 12 && h < 17 ? 'Good Afternoon' : h >= 17 && h < 21 ? 'Good Evening' : 'Good Night')
+      setGreeting(h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening')
       setTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
     }
     tick()
@@ -489,6 +440,12 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     .filter(([key]) => key !== '0')
     .sort((a, b) => Number(a[0]) - Number(b[0]))
 
+  // Kitchen is reachable via the Home card's own "Go to kitchen" button, so
+  // hide its duplicate card from the grid. Docker has no UI trigger at all
+  // right now (not needed) but stays hidden the same way in case it's
+  // wired back in later.
+  const HIDDEN_CARD_NAMES = ['Kitchen', 'Docker']
+  const visibleEntries = entries.filter(([, t]) => !HIDDEN_CARD_NAMES.includes(t.name))
 
   // Key "0" is always the dock/home position (waypoint_manager.py's own
   // convention) — use its real saved pose instead of hardcoding (0,0), and
@@ -504,26 +461,98 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
     setActivity(prev => [{ dest, task, time }, ...prev].slice(0, 6))
   }, [])
 
+  // Starts a table's voice action. This is now the ONLY thing this call
+  // does — main_agent.py owns the entire physical trip (Kitchen -> table ->
+  // conversation -> Kitchen) once POST /voice/start spawns it, and reports
+  // real status back via /voice/status's phase/phase_text (see the useEffect
+  // above). No direct Nav2 goal, no local arrival simulation, no auto-return
+  // timer here anymore — those were racing main_agent.py's own navigation,
+  // which is what caused the double-navigation seen in testing.
+  const dispatchVoiceAction = useCallback((tableLabel, task) => {
+    const dest = destinations.find(d => d.name === tableLabel)
+    if (!dest || !dest.key || dest.key === '0') return   // '0' = Home — no table context
+    const action = TASK_TO_ACTION[task]
+    if (!action) return
+
+    // dest.name (the waypoint's own name, e.g. "Table 3"/"table 1") is what
+    // gets sent, searched for, and echoed back — never dest.key, which is
+    // just this waypoint's arbitrary position in the waypoints JSON and has
+    // no guaranteed relationship to which table it actually is. See
+    // table_ref_for_nav() in main_agent.py, which searches for this exact
+    // name too, instead of reconstructing a guess from a number.
+    if (voiceStatus.running && voiceStatus.table !== dest.name) {
+      showToast('Sonic is busy with another table — wait for that session to finish', 'warn')
+      return
+    }
+    if (navGotoStatus.running) {
+      showToast('Argo is on a trip right now — wait for it to finish', 'warn')
+      return
+    }
+
+    setGoalMarker({ x: dest.x, y: dest.y })
+
+    fetch(`${launcherUrl}/voice/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, map: selectedMap, table: dest.name }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setVoiceStatus(prev => ({ ...prev, running: true, action, map: selectedMap, table: dest.name, phase: null, phase_text: null }))
+        } else {
+          showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with another table' : 'Could not start Sonic', 'danger')
+        }
+      })
+      .catch(() => showToast('Could not reach launcher for the voice session', 'danger'))
+
+    addActivity(tableLabel, task)
+  }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
+
   // Plain, conversation-free trip to any named waypoint, backend-managed
-  // via POST /nav/goto (shells out to nav_bridge.py directly). Status polled via navGotoStatus above.
+  // via POST /nav/goto (shells out to nav_bridge.py directly, same as
+  // main_agent.py's own navigate_and_wait() — no NLP, no order flow, just
+  // the raw NavigateToPose goal). Status polled via navGotoStatus above.
   // Used both by "Go to kitchen" and each table card's own "Navigate"
   // button (a pure nav-stack smoke test, deliberately bypassing Sonic).
   const goToDestination = useCallback((name) => {
-    if (navGotoStatus.running) return
-    const dest = destinations.find(d => d.name === name)
-    if (!dest) {
-      showToast(`${name} not found`, 'danger')
+    if (voiceStatus.running) {
+      showToast('Sonic is busy with a table — wait for that session to finish', 'warn')
       return
     }
-    setGoalMarker({ x: dest.x, y: dest.y })
-    // Publish goal to /goal_pose topic
-    ros.publish('/goal_pose', 'geometry_msgs/PoseStamped', {
-      header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
-      pose: { position: { x: dest.x, y: dest.y, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
+    if (navGotoStatus.running) return
+    const dest = destinations.find(d => d.name === name)
+    if (dest) setGoalMarker({ x: dest.x, y: dest.y })
+    fetch(`${launcherUrl}/nav/goto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination: name, map: selectedMap }),
     })
-    showToast(`Navigating to ${name}`, 'ok')
+      .then(r => r.json())
+      .then(d => { if (!d.ok) showToast(d.error === 'voice_session_busy' ? 'Sonic is busy with a table' : 'Could not start the trip', 'danger') })
+      .catch(() => showToast('Could not reach launcher', 'danger'))
     addActivity(name, 'Navigate')
-  }, [destinations, showToast, addActivity, ros])
+  }, [destinations, showToast, addActivity, selectedMap, launcherUrl, voiceStatus, navGotoStatus])
+
+  // Cancels whichever table's order-processing session is currently
+  // running and frees that table's lock. Only one voice session runs at a
+  // time system-wide, so /voice/stop always targets the right one — no
+  // table param needed. Used by the per-card Cancel button, which only
+  // renders on the table that's actually locked (voiceStatus.table === label).
+  const cancelVoice = useCallback((label) => {
+    fetch(`${launcherUrl}/voice/stop`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setVoiceStatus({ running: false, action: null, map: null, table: null, phase: null, phase_text: null })
+          showToast(`Cancelled — ${label} is free again`, 'warn')
+          addActivity(label, 'Cancelled')
+        } else {
+          showToast('Could not cancel — try again', 'danger')
+        }
+      })
+      .catch(() => showToast('Could not reach launcher', 'danger'))
+  }, [launcherUrl, showToast, addActivity])
 
   // No confirm() dialog here on purpose, unlike stopNav() — this is a real
   // emergency stop (cuts motor commands immediately if the robot is
@@ -544,286 +573,489 @@ const DashboardHomeComponent = forwardRef(({ launcherUrl, selectedMap, connected
   const estop = () => {
     sendZeroVelocity()
     fetch(`${launcherUrl}/estop`, { method: 'POST' })
-      .then(r => { if (!r.ok) throw new Error(r.status); setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
+      .then(() => { setEstopped(true); showToast('E-STOP: motors cut', 'danger') })
       .catch(() => showToast('Could not reach launcher for E-STOP', 'danger'))
-  }
-
-  // Joystick button: bring up serial_bridge alone so manual driving works
-  // without waiting for SLAM/Nav2. Fire-and-forget — the pad opens immediately.
-  const [teleopStatus, setTeleopStatus] = useState(null) // null|'starting'|'started'|'already_running'|'nav_starting'|'estopped'|'error'
-  const startTeleop = () => {
-    setShowTeleopPad(true)
-    setTeleopStatus('starting')
-    fetch(`${launcherUrl}/teleop/start`, { method: 'POST' })
-      .then(async r => {
-        const d = await r.json().catch(() => ({}))
-        setTeleopStatus(d.status || 'error')
-        if (d.status === 'estopped') showToast('Emergency stop is active — resume the motors to drive', 'danger')
-        else if (d.status === 'started') showToast('Drive controls ready', 'ok')
-        else if (d.status === 'already_running') showToast('Drive controls ready', 'ok')
-        else if (d.status === 'nav_starting') showToast('Argo is still starting up — driving will be available shortly', 'ok')
-      })
-      .catch(() => { setTeleopStatus('error'); showToast('Could not reach the robot to enable driving', 'danger') })
-  }
-
-  const stopTeleop = () => {
-    setShowTeleopPad(false)
-    setTeleopStatus(null)
-    fetch(`${launcherUrl}/teleop/stop`, { method: 'POST' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.status === 'stopped') showToast('Drive controls closed — motors switched off', 'ok')
-        else if (d.status === 'nav_running') showToast('Drive controls closed', 'ok')
-        else showToast('Drive controls closed', 'ok')
-      })
-      .catch(() => showToast('Could not reach the robot to switch motors off', 'danger'))
   }
 
   const estopResume = () => {
     fetch(`${launcherUrl}/estop/resume`, { method: 'POST' })
-      .then(r => { if (!r.ok) throw new Error(r.status); setEstopped(false); showToast('Motors resumed', 'ok') })
+      .then(() => { setEstopped(false); showToast('Motors resumed', 'ok') })
       .catch(() => showToast('Could not reach launcher to resume motors', 'danger'))
   }
 
-  // Shared by the 2D canvas and the 3D viewer.
-  const tableMarkerList = Object.entries(tables)
-    .filter(([key]) => key !== '0')
-    .map(([key, t]) => ({ key, name: t.name || `Table ${key}`, x: t.x, y: t.y }))
-  // Goal/Patrol/Pose are click-on-the-2D-canvas tools.
-  const canvasTools = connected
-
-  // ───────────────────────── live data for the cards ─────────────────────────
-  const menu = usePosMenu(launcherUrl, menuApi)
-  const orderList = normalizeOrders(orders)
-  const tableCount = tableMarkerList.filter(m => /table/i.test(m.name)).length
-  const busyTables = new Set(orderList.map(o => String(parseInt(o.table, 10))))
-  const orderTables = [...busyTables]
-  const orderValue = orderList.reduce((sum, o) => sum + Number(o.total || 0), 0)
-  const itemCount = orderList.reduce((n, o) => n + o.items.reduce((s, i) => s + (i.qty || 1), 0), 0)
-  const delivering = orderList.filter(o => o.meta.tab === 'delivering').length
-
-  const trip = navGotoStatus.running
-    ? { title: 'Navigating', sub: navGotoStatus.destination ? `To ${navGotoStatus.destination}` : (navGotoStatus.phase_text || 'On a trip'), busy: true }
-    : goalMarker || (plannedPath && plannedPath.length > 1)
-      ? { title: 'Navigating', sub: 'To the selected goal', busy: true }
-      : { title: 'Idle', sub: navReady ? 'Ready for a task' : 'Start Argo to begin', busy: false }
-
-  const hour = new Date().getHours()
-  const subtitle = !connected ? 'Not connected to Argo — live data is unavailable.'
-    : estopped ? 'Emergency stop is active — motors are cut.'
-    : orderList.length === 0 ? 'No active orders right now.'
-    : `${orderList.length} active order${orderList.length === 1 ? '' : 's'}${delivering ? ` · ${delivering} delivering` : ''}.`
-  const kpis = today ? [
-    { label: "Today's Revenue", icon: <Ic.Cutlery />, value: money(today.sales, menu.currency), note: today.open ? `${money(today.open_value, menu.currency)} open` : null },
-    { label: 'Total Orders', icon: <Ic.Doc />, value: today.orders, note: today.cancelled ? `${today.cancelled} cancelled` : null },
-    { label: 'Active Tables', icon: <Ic.TableIc />, value: tableCount ? `${busyTables.size} / ${tableCount}` : `${busyTables.size}`, bar: tableCount ? busyTables.size / tableCount : null },
-  ] : [
-    { label: 'Open Orders Value', icon: <Ic.Cutlery />, value: money(orderValue, menu.currency), note: itemCount ? `${itemCount} item${itemCount === 1 ? '' : 's'}` : null },
-    { label: 'Active Orders', icon: <Ic.Doc />, value: orderList.length },
-    { label: 'Active Tables', icon: <Ic.TableIc />, value: tableCount ? `${busyTables.size} / ${tableCount}` : `${busyTables.size}`, bar: tableCount ? busyTables.size / tableCount : null },
+  const radialPages = [
+    { id: 'overview', label: 'Overview', action: () => document.getElementById('dash-overview')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg> },
+    { id: 'places', label: 'Places', action: () => document.getElementById('dash-places')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg> },
+    { id: 'activity', label: 'Activity', action: () => document.getElementById('dash-activity')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2 8 4-16 2 8h6"/></svg> },
+    { id: 'order', label: 'Order', href: '/order.html',
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18M16 10a4 4 0 0 1-8 0"/></svg> },
+    { id: 'menu', label: 'Menu', href: '/menu.html',
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg> },
+    { id: 'settings', label: 'Settings', action: onOpenSettings,
+      icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg> },
   ]
 
-  // Per-map furniture layout (tables / serve table / printer / …): /layouts/<map>.json, optional.
-  const [layout, setLayout] = useState(null)
-  useEffect(() => {
-    let stale = false
-    setLayout(null)
-    fetch(`/layouts/${selectedMap}.json`).then(r => (r.ok ? r.json() : null)).then(d => { if (!stale) setLayout(d?.objects ? d : null) }).catch(() => {})
-    return () => { stale = true }
-  }, [selectedMap])
-  const mapWrapRef = useRef(null)
-  const [panel, setPanel] = useState(() => { try { return localStorage.getItem('argo_live_panel') === 'tables' ? 'tables' : 'map' } catch { return 'map' } })
-  const choosePanel = (p) => { setPanel(p); try { localStorage.setItem('argo_live_panel', p) } catch { /* private mode */ } }
-  const goalTableName = goalMarker ? (tableMarkerList.find(m => Math.hypot(m.x - goalMarker.x, m.y - goalMarker.y) < 0.7)?.name ?? null) : null
-  const [mapKey, setMapKey] = useState(0)
-  const [actionsOpen, setActionsOpen] = useState(false)
-  const modeHint = goalSetMode ? { text: 'Click the map where Argo should go (drag to set facing)', cancel: () => setGoalSetMode(false) }
-    : patrolSetMode ? { text: 'Click the map to set the patrol route', cancel: () => setPatrolSetMode(false) }
-    : poseMode ? { text: 'Click where Argo is standing, then drag toward where it faces', cancel: () => setPoseMode(false) }
-    : null
-  // Nav went down: leave no half-active mode behind
-  useEffect(() => { if (!navReady) { setGoalSetMode(false); setPatrolSetMode(false); setPoseMode(false); setFreeRoamActive(false) } }, [navReady])
-  // Esc cancels whichever map mode is active
-  useEffect(() => {
-    const onKey = e => { if (e.key === 'Escape') { setActionsOpen(false); modeHint?.cancel() } }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
-  const fullscreen = () => { const el = mapWrapRef.current; if (!el) return; document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.() }
-
-  const toolBtn = (label, on, onClick, { disabled = !canvasTools, title, cls = '' } = {}) => (
-    <button className={`a-btn ${cls} ${on ? 'on' : ''}`} onClick={onClick} disabled={disabled} title={title}>{label}</button>
-  )
-
   return (
-    <div className="a-content fit" >
-      {customizing && (
-        <div className="a-custombar" role="status">
-          <b>Customize layout</b>
-          <span>Drag a card’s gold handle to move it · drag its corner to resize · Esc or Done to finish · saved on this device</span>
-          <button className="a-btn" onClick={lay.reset}>Reset layout</button>
-          <button className="a-btn gold" onClick={onCustomizeDone}>Done</button>
+    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 0, animation: 'slideUp 0.35s ease' }}>
+
+      {/* ── Left rail: Argo control ── */}
+      <aside style={{ padding: '4px 20px 24px 0', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: 20, fontWeight: 800, letterSpacing: '-0.5px', marginBottom: 4 }}>{greeting}</h2>
+          <p style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 16 }}>Here's what's happening right now.</p>
         </div>
-      )}
-      <DashBoard lay={lay} editing={!!customizing} onRequestEdit={onCustomizeStart} onRequestExit={onCustomizeDone} items={{
-        overview: { title: 'Overview', node: <Hero greeting={greeting} night={hour >= 19 || hour < 5} subtitle={subtitle} kpis={kpis} /> },
-        map: { title: 'Live map', node: (
-      <section className="a-card a-mapcard" id="dash-activity">
-        <div className="a-maphead">
-          <h3>{panel === 'map' ? 'Live Map' : 'Tables'}</h3>
-          <div className="a-seg">
-            {[['map', 'Map'], ['tables', 'Tables']].map(([id, label]) => (
-              <button key={id} className={panel === id ? 'on' : ''} onClick={() => choosePanel(id)} title={id === 'map' ? 'Floor plan with the robot' : 'One card per table with its live order'}>{label}</button>
+
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {[
+              ['Location', curPos, '', '#fff', false, 13],
+              ['Status', curStatus, '', curStatus === 'Moving' ? 'var(--gold)' : 'var(--ok)', false, 13],
+              ['Task', taskLabel, '', 'var(--gold-bright)', true, 13],
+            ].map(([k, v, s, color, wide, valueSize]) => (
+              <div key={k} className="glass-card" style={{ padding: 12, gridColumn: wide ? '1 / -1' : undefined }}>
+                <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{k}</div>
+                <div style={{ fontSize: valueSize, fontWeight: 700, marginTop: 5, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>{s}</div>
+              </div>
             ))}
           </div>
-          <div className="a-tools">
-            <select className="a-select" value={selectedMap} disabled={navReady || availableMaps.length === 0}
-              title={navReady ? 'Locked — stop navigation to switch maps' : 'Select the map to load'}
-              onChange={(e) => { if (!navReady) { localStorage.setItem('argo_selected_map', e.target.value); window.location.reload() } }}>
-              {availableMaps.length === 0 ? <option>{selectedMap}</option> : availableMaps.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <div className="a-actwrap">
-              <button className={`a-btn ${actionsOpen || goalSetMode || patrolSetMode || poseMode || freeRoamActive || showTeleopPad ? 'on' : ''}`}
-                onClick={() => setActionsOpen(v => !v)} aria-expanded={actionsOpen} title="Map actions">Actions ▾</button>
-              {actionsOpen && <>
-                <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 58 }} />
-                <div className="a-actpop" role="menu" onClick={() => setActionsOpen(false)}>
-                  {panel === 'map' && <>
-                    {toolBtn('Goal', goalSetMode, () => setGoalSetMode(v => !v), { disabled: !canvasTools || !navReady, title: navReady ? 'Click the map to send Argo somewhere' : 'Start Argo first — this needs navigation running' })}
-                    {toolBtn('Patrol', patrolSetMode, () => setPatrolSetMode(v => !v), { disabled: !canvasTools || !navReady, title: navReady ? 'Set a patrol route' : 'Start Argo first — this needs navigation running' })}
-                    {toolBtn('Stop patrol', false, () => { if (connected) { ros.publish('/patrol/stop', 'std_msgs/Empty', {}); showToast?.('Patrol stopped', 'ok') } }, { disabled: !connected || !navReady, cls: 'danger', title: navReady ? 'Stop the patrol route' : 'Start Argo first — this needs navigation running' })}
-                    {toolBtn('Free Roam', freeRoamActive, () => { if (connected) { setFreeRoamActive(v => !v) } }, { disabled: !connected || !navReady, title: navReady ? 'Autonomous free-roam exploration' : 'Start Argo first — this needs navigation running' })}
-                    {toolBtn(poseMode ? 'Cancel Pose' : 'Pose', poseMode, () => setPoseMode(v => !v), { disabled: !canvasTools || !navReady, title: !connected ? "Can't set pose — not connected" : !navReady ? 'Start Argo first — this needs navigation running' : 'Click where Argo is standing, then drag toward where it faces' })}
-                  </>}
-                  {toolBtn('Drive', showTeleopPad, () => (showTeleopPad ? stopTeleop() : startTeleop()), { disabled: false, title: 'Open the manual drive pad' })}
-                  {panel === 'map' && <>
-                    {toolBtn('Full screen', false, fullscreen, { disabled: false, title: 'Full screen' })}
-                    {toolBtn('Reset view', false, () => { setMapKey(k => k + 1); showToast?.('Map view reset', 'info') }, { disabled: false, title: 'Reset the map zoom and position' })}
-                  </>}
-                </div>
-              </>}
-            </div>
-          </div>
         </div>
-        <div className="a-mapwrap" ref={mapWrapRef}>
-          {panel === 'map' && modeHint && (
-            <div className="a-modehint" role="status">
-              <span>{modeHint.text}</span>
-              <button className="a-btn" onClick={modeHint.cancel}>Cancel</button>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
+          {[
+            { k: "Today's Revenue", v: '₹18,240', d: '+12.5% vs yesterday', pos: true },
+            { k: 'Total Orders', v: '56', d: '+8 new today' },
+          ].map(({ k, v, d, pos }) => (
+            <div key={k} className="glass-card" style={{ padding: 12 }}>
+              <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>{k}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 5, color: 'var(--gold-bright)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v}</div>
+              <div style={{ fontSize: 10.5, color: pos ? 'var(--ok)' : 'var(--muted)', marginTop: 2 }}>{d}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Live map — always visible here (not tucked behind a modal),
+            so it's obvious at a glance whether map data is actually
+            arriving. Pose-setting now happens right on this same card
+            instead of a separate popup: the previous "📍 Pose" button
+            opened a modal that read the exact same mapData prop, so a
+            missing map looked identical either way — the modal added an
+            extra click without adding any real information, and (being
+            gated only on navState, not on `connected`) could be opened
+            while rosbridge itself was down, in which case mapData/robotPose
+            can never arrive no matter how long you wait. ── */}
+        <div className="glass-card" style={{ padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 9.5, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+              Live Map
+            </div>
+            {navState === 'running' && navActionReady && (
+              <button
+                onClick={() => connected && setPoseMode(v => !v)}
+                disabled={!connected}
+                title={!connected
+                  ? "Can't set pose — not connected to Argo"
+                  : (poseMode ? 'Cancel' : "Click where Argo is standing, then drag toward where it's facing")}
+                style={{
+                  padding: '4px 10px', borderRadius: 8, fontSize: 10.5, fontWeight: 700,
+                  background: poseMode ? 'rgba(255,65,65,0.12)' : 'rgba(59,240,155,0.12)',
+                  border: `1px solid ${poseMode ? 'rgba(255,65,65,0.3)' : 'rgba(59,240,155,0.3)'}`,
+                  color: poseMode ? 'var(--danger)' : 'var(--ok)',
+                  cursor: connected ? 'pointer' : 'not-allowed',
+                  opacity: connected ? 1 : 0.5,
+                }}
+              >
+                {poseMode ? '✕ Cancel' : '📍 Set Pose'}
+              </button>
+            )}
+          </div>
+          <div style={{ height: 260, borderRadius: 12, overflow: 'hidden' }}>
+            <MapCanvas
+              mapData={mapData}
+              robotPose={robotPose}
+              goalPose={goalMarker}
+              plannedPath={plannedPath}
+              poseEstimateMode={poseMode}
+              onPoseEstimate={({ wx, wy, theta }) => {
+                onSetInitialPose?.(wx, wy, theta)
+                onNavPoseSet?.(true)
+                setPoseMode(false)
+                showToast?.('Pose set', 'ok')
+              }}
+            />
+          </div>
+          {!mapData && (
+            <div style={{ fontSize: 10.5, color: connected ? 'var(--muted)' : 'var(--danger)', marginTop: 8, lineHeight: 1.5 }}>
+              {connected
+                ? 'Waiting for map data from Argo…'
+                : "Not connected to Argo — the map can't load until the connection is back."}
             </div>
           )}
-          {panel === 'tables' ? (
-            <TableCards tables={tableMarkerList} orders={orders} currency={menu.currency} goalTable={goalTableName}
-              onSend={goToDestination} onClear={clearOrder} />
-          ) :
-            <LiveMap key={mapKey}
-              mapData={mapData} robotPose={robotPose} robotStale={poseStale} goalPose={goalMarker} plannedPath={plannedPath}
-              tableMarkers={tableMarkerList} orderTables={orderTables} layout={layout} connected={connected}
-              poseEstimateMode={poseMode} goalSetMode={goalSetMode} patrolSetMode={patrolSetMode}
-              onPoseEstimate={({ wx, wy, theta }) => { onSetInitialPose?.(wx, wy, theta); onNavPoseSet?.(true); setPoseMode(false); showToast?.('Pose set', 'ok') }}
-              onGoalSet={({ wx, wy, theta }) => {
-                setGoalMarker({ x: wx, y: wy }); setGoalSetMode(false)
-                ros.publish('/goal_pose', 'geometry_msgs/PoseStamped', {
-                  header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
-                  pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: Math.sin((theta ?? 0) / 2), w: Math.cos((theta ?? 0) / 2) } },
-                })
-                showToast?.('Navigating to goal', 'ok')
-              }}
-              onPatrolSet={({ wx, wy, theta }) => {
-                setPatrolSetMode(false)
-                ros.publish('/patrol/start', 'geometry_msgs/PoseStamped', {
-                  header: { frame_id: 'map', stamp: { sec: 0, nanosec: 0 } },
-                  pose: { position: { x: wx, y: wy, z: 0 }, orientation: { x: 0, y: 0, z: Math.sin(theta / 2), w: Math.cos(theta / 2) } },
-                })
-                showToast?.('Patrol route set', 'ok')
-              }}
-              onTableMarkerClick={(t, at) => setSelectedTable({ ...t, at })}
-            />
-          }
         </div>
-        <TelemetryStrip drive={driveTelemetry} sensors={sensorDistances} shield={shieldStatus} />
-      </section>
-        ) },
-        robot: { title: 'Robot status', node: (
-          <RobotStatusCard connected={connected} battery={battery} task={trip} estopped={estopped} onResume={estopResume}
-          navSteps={showStartup ? (navProgress.steps || []) : null} navPercent={showStartup ? (navProgress.percent || 0) : 0}
-          navError={navState === 'running' && navProgress.status === 'ERROR' ? (navProgress.message || 'Startup failed') : null} onRetry={startNav} navStopping={stopping} />
-        ) },
-        orders: { title: 'Active orders', node: <ActiveOrdersCard list={orderList} currency={menu.currency} onDispatch={dispatchOrder} onClear={clearOrder} onViewAll={onViewOrders} /> },
-        menu: { title: 'POS menu', node: <PosMenuCard menu={menu} /> },
-      }} />
 
-      {freeRoamActive && (
-        <div className="argo-legacy" style={{ position: 'fixed', top: 70, right: 24, zIndex: 70, width: 400, maxHeight: '78vh', overflowY: 'auto', margin: 0, minHeight: 0, padding: 16, boxShadow: '0 20px 60px rgba(0,0,0,.35)' }}>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}><button onClick={() => setFreeRoamActive(false)} style={{ color: 'var(--muted)', fontSize: 18 }}>✕</button></div>
-          <FreeRoamPanel mapData={mapData} robotPose={robotPose} connected={connected} showToast={showToast}
-            launcherUrl={launcherUrl} mapName={selectedMap || 'office_map'} />
-        </div>
-      )}
+      </aside>
 
-      {/* Activity / alerts popover (bell in the top bar) */}
-      {showActivityPanel && (
-        <div className="a-float" style={{ top: 70, right: 28, width: 340, padding: 18 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <b style={{ fontFamily: 'var(--font-heading)', fontSize: 16 }}>Recent Activity</b>
-            <button onClick={() => setShowActivityPanel(false)} style={{ color: 'var(--a-muted)', fontSize: 18 }}>✕</button>
-          </div>
-          {activity.length === 0
-            ? <div style={{ color: 'var(--a-muted)', fontSize: 13 }}>No dashboard-initiated trips yet.</div>
-            : activity.map((a, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: i ? '1px solid var(--a-line)' : 'none', fontSize: 13 }}>
-                <span>{a.task} → <b>{a.dest}</b></span><span style={{ color: 'var(--a-muted)' }}>{a.time}</span>
-              </div>))}
-          <div style={{ borderTop: '1px solid var(--a-line)', marginTop: 10, paddingTop: 10, fontSize: 13, color: estopped || !connected ? 'var(--a-danger)' : 'var(--a-ok)', fontWeight: 600 }}>
-            {!connected ? 'Not connected to Argo' : estopped ? 'Emergency stop active' : 'Argo is online'}
-          </div>
-        </div>
-      )}
-
-      {/* Drive pad — floats bottom-right while open (opened from the Drive button in the map toolbar) */}
-      {showTeleopPad && (
-        <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 60, background: '#17140f', color: '#fff', borderRadius: 18, padding: 20, minWidth: 220, boxShadow: '0 16px 48px rgba(0,0,0,.35)' }}>
+      {/* ── Main ── */}
+      <main style={{ paddingLeft: 20, borderLeft: '1px solid var(--border-glass)' }}>
+        {/* Saved places grid */}
+        <section id="dash-places">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div className="label-xs">Drive Controls</div>
-              {teleopStatus && (() => { const m = TELEOP_BADGE[teleopStatus] || [teleopStatus, 'var(--muted)']; return <span style={{ fontSize: 9.5, fontWeight: 700, color: m[1] }}>● {m[0]}</span> })()}
+            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 19, fontWeight: 700 }}>Locations</div>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+              <button onClick={onAddMap} style={{ color: 'var(--muted)', fontSize: 13, fontWeight: 600 }} title="Full setup wizard — remap the space, build a new map, etc.">Setup wizard →</button>
             </div>
-            <button onClick={stopTeleop} title="Close drive controls" style={{ color: 'var(--muted)', padding: 4, fontSize: 16 }}>✕</button>
           </div>
-          <TeleopPad connected={connected} compact />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 36 }}>
+            {/* Home Card */}
+            <div
+              className="glass-card"
+              style={{
+                padding: '18px 20px',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
+                minHeight: '280px',
+              }}
+            >
+              <div style={{
+                width: '56px', height: '56px', borderRadius: '50%',
+                border: '2px solid var(--gold-bright)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--gold-bright)' }}>
+                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                  <polyline points="9 22 9 12 15 12 15 22"/>
+                </svg>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6, width: '100%' }}>
+                {(() => {
+                  // Real, backend-sourced status for a kitchen trip, whether
+                  // it was this button that started it or main_agent.py's
+                  // own automatic return trip at the end of an order.
+                  const kitchenBusy = (navGotoStatus.running && navGotoStatus.destination === 'Kitchen')
+                    || voiceStatus.phase === 'heading_to_kitchen'
+                  const kitchenText = voiceStatus.phase === 'heading_to_kitchen'
+                    ? voiceStatus.phase_text
+                    : (navGotoStatus.destination === 'Kitchen' ? navGotoStatus.phase_text : null)
+                  return (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); goToDestination('Kitchen') }}
+                      disabled={kitchenBusy}
+                      style={{
+                        padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
+                        background: kitchenBusy ? 'rgba(59,240,155,0.15)' : 'rgba(226,179,92,0.08)',
+                        border: `1px solid ${kitchenBusy ? 'rgba(59,240,155,0.35)' : 'rgba(226,179,92,0.22)'}`,
+                        color: kitchenBusy ? 'var(--ok)' : 'var(--gold-bright)',
+                        opacity: kitchenBusy ? 0.85 : 1,
+                        cursor: kitchenBusy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {kitchenBusy ? (kitchenText || 'Heading to Kitchen…') : 'Go to kitchen'}
+                    </button>
+                  )
+                })()}
+              </div>
+            </div>
+
+            {visibleEntries.length === 0 ? (
+              <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '56px 20px', color: 'var(--muted)', fontSize: 14, lineHeight: 1.8 }}>
+                No places saved yet.<br/>
+                <button onClick={onAddMap} style={{ color: 'var(--gold-bright)', fontWeight: 700 }}>Run the setup flow</button> to map your space and label locations — then they'll appear here.
+              </div>
+            ) : visibleEntries.map(([key, t]) => {
+              const label = t.name || `Table ${key}`
+              // Postgres/orders is a separate, numbered system (service_points.label
+              // is always "Table N") independent of whatever this waypoint is
+              // actually named — orders stays keyed by that extracted number,
+              // same as backend/launcher.py's _read_orders_db() already does.
+              const orderTableNo = tableNumberFromName(label, key)
+              const orderRaw = orders[orderTableNo]
+              const order = orderRaw && orderRaw.items && orderRaw.items.length ? orderRaw : null
+              const billOpen = expandedBills.has(key)
+              return (
+                <div
+                  key={key}
+                  className="glass-card"
+                  style={{ padding: '18px 20px' }}
+                >
+                  <div style={{ fontFamily: 'var(--font-heading)', fontSize: 16, fontWeight: 800 }}>{label}</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>{Number(t.x).toFixed(1)} m, {Number(t.y).toFixed(1)} m</div>
+
+                  {order && (
+                    <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed rgba(226,179,92,0.3)' }} onClick={e => e.stopPropagation()}>
+                        {order.items.map((it, i) => (
+                          <div key={it.id || i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                            <span>{it.qty} × {it.name}</span>
+                            <span style={{ fontFamily: 'monospace' }}>{money(it.qty * it.price)}</span>
+                          </div>
+                        ))}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.08)', fontWeight: 700, fontSize: 12.5 }}>
+                          <span>Total</span>
+                          <span style={{ fontFamily: 'monospace' }}>{money(order.total)}</span>
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); clearOrder(orderTableNo) }}
+                          title="Clear this table's order history"
+                          style={{ marginTop: 8, fontSize: 10.5, fontWeight: 600, color: 'var(--danger)', opacity: 0.75, padding: '2px 6px' }}
+                        >
+                          Clear
+                        </button>
+                    </div>
+                  )}
+
+                  {/* Direct action buttons — fire immediately with this table
+                      as destination. main_agent.py owns the whole trip once
+                      this click starts it; the label reflects its real
+                      reported phase (voiceStatus.phase_text) while active. */}
+                  <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                    {TABLE_ACTIONS.map(([task, actLabel]) => {
+                      const blocked = voiceStatus.running && voiceStatus.table !== label
+                      const active = voiceStatus.running && voiceStatus.table === label && voiceStatus.action === TASK_TO_ACTION[task]
+                      return (
+                        <button
+                          key={task}
+                          disabled={blocked}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            dispatchVoiceAction(label, task)
+                          }}
+                          style={{
+                            padding: '9px 8px', borderRadius: 10, fontSize: 11.5, fontWeight: 700,
+                            background: active ? 'rgba(59,240,155,0.15)' : 'rgba(226,179,92,0.08)',
+                            border: `1px solid ${active ? 'rgba(59,240,155,0.35)' : 'rgba(226,179,92,0.22)'}`,
+                            color: active ? 'var(--ok)' : 'var(--gold-bright)',
+                            opacity: blocked ? 0.4 : 1,
+                            cursor: blocked ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {active ? (voiceStatus.phase_text || 'On the way…') : actLabel}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Navigate — a pure nav-stack smoke test. Sends this
+                      table's coordinates straight to Nav2 via /nav/goto,
+                      the same plain trip "Go to kitchen" uses: no NLP, no
+                      order flow, no main_agent.py session at all. Exists
+                      so navigation itself can be verified working in
+                      isolation from Sonic's conversation layer. */}
+                  {(() => {
+                    const navBusy = navGotoStatus.running && navGotoStatus.destination === label
+                    const navBlocked = voiceStatus.running || (navGotoStatus.running && !navBusy)
+                    return (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); goToDestination(label) }}
+                        disabled={navBlocked}
+                        title="Send Argo straight to this table's coordinates — no conversation, just navigation"
+                        style={{
+                          marginTop: 6, width: '100%', padding: '7px 8px', borderRadius: 10,
+                          fontSize: 11, fontWeight: 700,
+                          background: navBusy ? 'rgba(59,240,155,0.15)' : 'rgba(255,255,255,0.05)',
+                          border: `1px solid ${navBusy ? 'rgba(59,240,155,0.35)' : 'rgba(255,255,255,0.14)'}`,
+                          color: navBusy ? 'var(--ok)' : 'rgba(255,255,255,0.75)',
+                          opacity: navBlocked ? 0.4 : 1,
+                          cursor: navBlocked ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {navBusy ? (navGotoStatus.phase_text || 'Heading over…') : 'Navigate'}
+                      </button>
+                    )
+                  })()}
+
+                  {/* Cancel — only shown on the table that's actually
+                      locked right now (this session's own table). Kills the
+                      running main_agent.py session via /voice/stop, which
+                      frees the lock immediately (voiceStatus.running goes
+                      false on the next poll) instead of waiting for the
+                      order flow to finish or time out on its own. */}
+                  {voiceStatus.running && voiceStatus.table === label && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); cancelVoice(label) }}
+                      title="Cancel order processing and free this table"
+                      style={{
+                        marginTop: 6, width: '100%', padding: '7px 8px', borderRadius: 10,
+                        fontSize: 11, fontWeight: 700, color: 'var(--danger)',
+                        background: 'rgba(224,90,90,0.08)', border: '1px solid rgba(224,90,90,0.25)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+      </main>
+
+      <RadialNav pages={radialPages} activePage="overview" />
+
+      {/* Floating Activity/Alerts Panel — top right corner */}
+      {showActivityPanel && (
+        <div style={{ position: 'fixed', top: 80, right: 24, zIndex: 100 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, maxWidth: 640 }}>
+            <div className="glass-card" style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Recent Activity</div>
+              <div style={{ color: 'var(--muted)', fontSize: 11, margin: '0 0 12px' }}>What Argo has done today.</div>
+              <ul style={{ listStyle: 'none' }}>
+                {activity.length === 0 ? (
+                  <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+                    <div style={{ fontSize: 12 }}>No activity yet<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 2 }}>Argo is ready to start</small></div>
+                  </li>
+                ) : activity.map((a, i) => (
+                  <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: i < activity.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(255,255,255,0.03)', color: 'var(--gold-bright)', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 10, flexShrink: 0 }}>{a.dest.slice(0, 3)}</div>
+                    <div style={{ fontSize: 12 }}>{a.task} → {a.dest}<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>{a.time}</small></div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="glass-card" style={{ padding: 20 }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Alerts</div>
+              <div style={{ color: 'var(--muted)', fontSize: 11, margin: '0 0 12px' }}>Things that may need attention.</div>
+              <ul style={{ listStyle: 'none' }}>
+                <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }} />
+                  <div style={{ fontSize: 12 }}>All systems normal<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>Argo is online and ready</small></div>
+                </li>
+                <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--gold)', flexShrink: 0 }} />
+                  <div style={{ fontSize: 12 }}>No pending tasks<small style={{ display: 'block', color: 'var(--muted)', fontSize: 10, marginTop: 1 }}>Choose a destination and confirm</small></div>
+                </li>
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Table popover — opens where the table was clicked on the map */}
-      {selectedTable && (() => {
-        const orderTableNo = tableNumberFromName(selectedTable.name, selectedTable.key)
-        const raw = orders[orderTableNo]
-        const order = raw && raw.items && raw.items.length ? raw : null
-        const x = Math.min((selectedTable.at?.x ?? 300) + 18, window.innerWidth - 330)
-        const y = Math.min((selectedTable.at?.y ?? 200) + 12, window.innerHeight - 260)
-        return (
-          <>
-            <div onClick={() => setSelectedTable(null)} style={{ position: 'fixed', inset: 0, zIndex: 59 }} />
-            <div className="a-float" style={{ left: Math.max(12, x), top: Math.max(12, y), width: 300, padding: 18, zIndex: 60 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <b style={{ fontFamily: 'var(--font-heading)', fontSize: 18 }}>{selectedTable.name}</b>
-                <button onClick={() => setSelectedTable(null)} style={{ color: 'var(--a-muted)', fontSize: 18 }}>✕</button>
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--a-muted)', marginBottom: 12 }}>📍 {Number(selectedTable.x).toFixed(1)} m, {Number(selectedTable.y).toFixed(1)} m</div>
-              {order ? (
-                <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px dashed var(--a-line-strong)' }}>
-                  {order.items.slice(0, 4).map((it, i) => (
-                    <div key={it.id || i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 3 }}>
-                      <span>{it.qty}× {it.name}</span><span>{money(it.qty * it.price, menu.currency)}</span>
-                    </div>))}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontWeight: 700, fontSize: 13.5 }}><span>Total</span><span>{money(order.total, menu.currency)}</span></div>
-                </div>
-              ) : <div style={{ fontSize: 13, color: 'var(--a-muted)', marginBottom: 12 }}>No open order.</div>}
-              <button className="a-btn gold" style={{ width: '100%', justifyContent: 'center' }} onClick={() => { goToDestination(selectedTable.name); setSelectedTable(null) }}>Navigate here</button>
+      {/* Floating voice transcript — sits directly above the Teleop Pad's
+          own floating icon, same corner/collapse pattern. Shows the live
+          STT/TTS turns between Sonic and the guest, read from Postgres via
+          GET /voice/transcript (main_agent.py's db_log_turn() already
+          writes every turn there — this only displays it). */}
+      <div style={{ position: 'fixed', bottom: 84, right: 24, zIndex: 100 }}>
+        {!showTranscript && (
+        <button
+          onClick={() => setShowTranscript(!showTranscript)}
+          title="Toggle conversation transcript"
+          style={{
+            padding: '12px 14px', borderRadius: 12, fontSize: 16,
+            background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)',
+            color: 'var(--gold-bright)', cursor: 'pointer', fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.2s',
+          }}
+        >
+          {/* Speech-bubble icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+          </svg>
+        </button>
+        )}
+        {showTranscript && (
+          <div className="glass-card" style={{ padding: 20, marginTop: 12, width: 300 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div className="label-xs">Conversation</div>
+              <button
+                onClick={() => setShowTranscript(false)}
+                title="Minimize transcript"
+                style={{
+                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
+                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
             </div>
-          </>
-        )
-      })()}
+            <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {transcript.turns.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--muted)', textAlign: 'center', padding: '12px 0' }}>
+                  No conversation yet
+                </div>
+              ) : transcript.turns.map((t, i) => {
+                const isRobot = t.role === 'robot'
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: isRobot ? 'flex-start' : 'flex-end' }}>
+                    <div style={{
+                      maxWidth: '85%', padding: '7px 10px', borderRadius: 10, fontSize: 12.5, lineHeight: 1.4,
+                      background: isRobot ? 'rgba(226,179,92,0.12)' : 'rgba(59,240,155,0.12)',
+                      border: `1px solid ${isRobot ? 'rgba(226,179,92,0.3)' : 'rgba(59,240,155,0.3)'}`,
+                      color: isRobot ? 'var(--gold-bright)' : 'var(--ok)',
+                    }}>
+                      {t.text}
+                    </div>
+                  </div>
+                )
+              })}
+              <div ref={transcriptBottomRef} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Floating Teleop Pad — bottom right corner */}
+      <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 100 }}>
+        {!(showTeleopPad || teleopDirect) && (
+        <button
+          onClick={() => setShowTeleopPad(!showTeleopPad)}
+          title="Toggle drive controls"
+          style={{
+            padding: '12px 14px', borderRadius: 12, fontSize: 16,
+            background: 'rgba(226,179,92,0.14)', border: '1px solid rgba(226,179,92,0.4)',
+            color: 'var(--gold-bright)', cursor: 'pointer', fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.2s',
+          }}
+        >
+          {/* Joystick icon */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="6" cy="6" r="4"/>
+            <path d="M6 10v8"/>
+            <path d="M2 6h8"/>
+            <circle cx="18" cy="18" r="3"/>
+            <path d="M18 21v2"/>
+            <path d="M15 18h6"/>
+          </svg>
+        </button>
+        )}
+        {(showTeleopPad || teleopDirect) && (
+          <div className="glass-card" style={{ padding: 20, marginTop: 12, minWidth: 220 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div className="label-xs">{teleopDirect ? 'Manual Drive' : 'Drive Controls'}</div>
+              {!teleopDirect && (
+              <button
+                onClick={() => setShowTeleopPad(false)}
+                title="Minimize drive controls"
+                style={{
+                  background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer',
+                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              )}
+            </div>
+            {teleopDirect && (
+              <div style={{ fontSize: 10.5, color: '#5bb8ff', marginBottom: 12, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                Teleop Mode Active
+              </div>
+            )}
+            <TeleopPad connected={connected} compact />
+          </div>
+        )}
+      </div>
+
+      <TelemetryCard driveTelemetry={driveTelemetry} sensorDistances={sensorDistances} />
+
     </div>
   )
 })
